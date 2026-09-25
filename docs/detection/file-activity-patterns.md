@@ -164,7 +164,7 @@ fn check_log_destruction(event: FileDeleteEvent) -> Option<Alert> {
 
     Some(Alert {
         severity,
-        technique: "T1070.001", // Indicator Removal: Clear Linux Logs
+        technique: "T1070.002", // Indicator Removal: Clear Linux or Mac System Logs
         title: "Log file deletion",
         context: format!(
             "{} (uid={}) deleted {}",
@@ -338,5 +338,5 @@ See `crates/store` for `BoundedMap` implementation details.
 - `crates/store`: bounded state containers
 - MITRE ATT&CK:
   - T1486: Data Encrypted for Impact (ransomware)
-  - T1070.001: Indicator Removal: Clear Linux Logs
+  - T1070.002: Indicator Removal: Clear Linux or Mac System Logs
   - T1098: Account Manipulation (sensitive file tampering)
