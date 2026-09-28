@@ -28,7 +28,7 @@ dedicated content · 📋 waits on a filed issue (telemetry or content) ·
 Engine tags as of this assessment (from `rules`/`correlator` source):
 T1021.002, T1036.005, T1037.004, T1041, T1048.003, T1053.003/.005, T1055,
 T1059 (+.001/.004), T1070.001/.002, T1071 (+.004), T1105, T1110, T1127, T1136.001,
-T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
+T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1546.004, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
 own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 
 ## Initial Access (TA0001)
@@ -47,18 +47,18 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | T1059 Command & Scripting Interpreter | 🟢 | 🟢 | 🟢 | Encoded-PowerShell (.001), base64-shell (.004), interpreter lineage; script blocks post-decode on W |
 | T1204 User Execution | 🟢 | 🟢 | 🟢 | Download-then-exec chain tagged (L); T1204.002 provenance→exec join on `FileQuarantine` — Windows MotW (#365) and macOS quarantine xattr (#96) share one rule |
 | T1047 WMI | — | 🟢 | — | `WmiActivity` events + tags live |
-| T1053 Scheduled Task/Job | 🟢 | 🟢 | 🟡 | cron/systemd paths (L), 4698 + 4702 task hijack (W); macOS cron/launchd paths covered via persistence patterns |
+| T1053 Scheduled Task/Job | 🟢 | 🟢 | 🟡 | `/etc/cron.d/` writes (.003, L), 4698 + 4702 task hijack (W); macOS cron/launchd paths covered via persistence patterns (technique mapping pending, #495) |
 | T1620 Reflective Code Loading | — | 🟢 | 📋 | Dynamic .NET loads tagged (W); macOS sibling in #355's set |
 
 ## Persistence (TA0003)
 
 | Technique | L | W | M | Status |
 | --- | --- | --- | --- | --- |
-| T1543 Create/Modify System Process | 🟢 | 🟢 | 🟢 | systemd (.002), Windows service (.003), launchd (.001/.004 via BTM) — all flag-gated deterministic events |
+| T1543 Create/Modify System Process | 🟢 | 🟢 | 🟢 | systemd (.002, plus `/etc/systemd/system/` unit writes), Windows service (.003), launchd (.001/.004 via BTM) — all flag-gated deterministic events |
 | T1547 Boot/Logon Autostart | 🟡 | 🟢 | 🟢 | Run-key writes visible+rule'd (W), login items (.015, M); Linux rc-path patterns |
 | T1053 Scheduled Task | 🟢 | 🟢 | 🟡 | as above |
 | T1136 Create Account | 📋 | 🟢 | 📋 | 4720 (W) live; Linux useradd content work; macOS OD events #356 |
-| T1546 Event-Triggered Execution | 🟡 | 🟡 | 🟡 | WMI subscriptions (W, via inventory #286-adjacent), shell-rc writes (L/M patterns partial) — pack below |
+| T1546 Event-Triggered Execution | 🟡 | 🟡 | 🟡 | WMI subscriptions (W, via inventory #286-adjacent), shell-rc writes: `.bashrc`/`/etc/profile.d/` tagged .004 (L, lab: `persistence-write.sh`), `.zshrc` mapping pending #495 (M) — pack below |
 | T1574 Hijack Execution Flow | 🟢 | 🟡 | 🟡 | LD_PRELOAD/LD_AUDIT capture + trust-set rule #363 (L, lab: `ld-preload-hijack.sh`); DLL side-load visible via image loads (W); dylib content work (M) |
 
 ## Privilege Escalation (TA0004)
