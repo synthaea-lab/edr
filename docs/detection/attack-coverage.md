@@ -88,6 +88,8 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
+| T1046 | 3 | `rules:crates/rules/src/state.rs` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
+| T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
 
