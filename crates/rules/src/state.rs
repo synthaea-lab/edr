@@ -811,11 +811,21 @@ impl RuleState {
     /// instead of dropping it outright; this method checks for one on every
     /// creation and fires retroactively if it's still within
     /// [`MEMFD_EXEC_WINDOW_NS`].
+    ///
+    /// The kernel always creates the memfd before the exec, so a creation
+    /// timestamped *after* the pending exec can only mean the process made an
+    /// unrelated `memfd_create` call later — not proof of anything (#503
+    /// review, Jihair, caught live: an on-disk `/proc/self/fd` exec followed
+    /// 8s later, same pid, by an unrelated `memfd_create` wrongly fired).
+    /// `saturating_sub` alone can't tell the two orderings apart (a
+    /// too-late creation saturates to a delta of 0, which trivially passes
+    /// the window check), so the ordering itself is checked first.
     pub fn on_memfd_create(&mut self, event: &MemfdCreateEvent) -> Vec<Alert> {
         self.recent_memfd_creates
             .insert(event.meta.pid, event.meta.timestamp_ns);
         if let Some(pending) = self.pending_proc_fd_exec.peek(&event.meta.pid)
-            && pending.timestamp_ns.saturating_sub(event.meta.timestamp_ns) <= MEMFD_EXEC_WINDOW_NS
+            && event.meta.timestamp_ns <= pending.timestamp_ns
+            && pending.timestamp_ns - event.meta.timestamp_ns <= MEMFD_EXEC_WINDOW_NS
         {
             let alert = memfd_proc_fd_exec_alert(event.meta.pid, &pending.comm, &pending.path);
             self.pending_proc_fd_exec.remove(&event.meta.pid);
@@ -892,7 +902,8 @@ impl RuleState {
                 self.recent_memfd_creates
                     .peek(&event.meta.pid)
                     .is_some_and(|&created_ts| {
-                        event.meta.timestamp_ns.saturating_sub(created_ts) <= MEMFD_EXEC_WINDOW_NS
+                        created_ts <= event.meta.timestamp_ns
+                            && event.meta.timestamp_ns - created_ts <= MEMFD_EXEC_WINDOW_NS
                     });
             if created {
                 return Some(memfd_proc_fd_exec_alert(

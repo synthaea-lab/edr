@@ -1230,6 +1230,43 @@ fn pending_proc_fd_exec_is_consumed_and_does_not_double_alert() {
 }
 
 #[test]
+fn a_memfd_created_after_the_exec_does_not_corroborate_it_via_the_retroactive_path() {
+    // Regression (#503 review, Jihair, caught live on the lab VM): the kernel
+    // always creates the memfd before the exec, so a memfd_create timestamped
+    // *after* the held exec is a different, unrelated call — not late
+    // evidence for it. `saturating_sub` alone can't distinguish "arrived
+    // late but really was earlier" from "really did happen later": both
+    // directions produce a small delta once one timestamp exceeds the other,
+    // so the ordering itself must be checked, not just the window.
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "3", "/proc/self/fd/3", 0);
+    assert!(state.on_exec(&exec).is_empty());
+    // This memfd_create is stamped 8s *after* the held exec — same shape as
+    // the live false positive (an unrelated memfd_create long after an
+    // on-disk /proc/self/fd re-exec, e.g. a payload using memfd for IPC).
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 8_000_000_000));
+    assert!(
+        alerts.is_empty(),
+        "a memfd created after the held exec must not retroactively corroborate it"
+    );
+}
+
+#[test]
+fn a_memfd_created_after_the_exec_does_not_corroborate_it_via_the_forward_path() {
+    // Same bug, other delivery order: the memfd_create is seen first (and
+    // recorded), then an unrelated /proc/fd exec for the same pid arrives
+    // stamped *before* that creation. The creation cannot be evidence for an
+    // exec that (by wall-clock/kernel time) happened first.
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 8_000_000_000));
+    let event = memfd_exec_event(100, "3", "/proc/self/fd/3", 0);
+    assert!(
+        state.on_exec(&event).is_empty(),
+        "a memfd created after this exec must not corroborate it"
+    );
+}
+
+#[test]
 fn proc_fd_shape_alert_does_not_overclaim_the_dev_fd_shapes_disk_free_evidence() {
     // #503 review: the /proc/fd shape is pid+time correlation, not proof the
     // executed fd is the created memfd — the message must not claim more
