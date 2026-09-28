@@ -25,7 +25,7 @@ use crate::{
         process_provider, registry_provider, smb_provider, wmi_provider,
     },
     winapi,
-    zone_identifier::QuarantineDedup,
+    zone_identifier::{self, MarkQueue, QuarantineDedup},
 };
 
 /// Cap for the pid cache. A live host rarely runs more than a few hundred
@@ -41,17 +41,15 @@ const QUARANTINE_DEDUP_WINDOW_NS: u64 = 5_000_000_000;
 /// Distinct files marked within one window — a download burst, not a steady
 /// state; past it a mark is reported without being deduplicated.
 const QUARANTINE_DEDUP_CAP: usize = 1_024;
+/// Marks waiting for the read-back worker (#439). A write yields 2-3 records
+/// and downloads come at human or script rate, so 256 absorbs a burst of ~100
+/// downloads behind one slow read; past it a mark is dropped and counted.
+const MARK_QUEUE_CAPACITY: usize = 256;
 
-/// Where the previous session's randomized name is persisted, so orphan cleanup
-/// after a crash still works despite F-2's name randomization.
-fn session_state_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("synthaea-etw-session")
-}
-
-/// Stops an orphaned ETW session, if one exists. Named sessions are kernel objects
-/// that outlive the creating process: after a `taskkill /f` or crash the session
-/// stays Running and any restart fails with `AlreadyExist` — without this cleanup the
-/// agent could never restart after an unclean shutdown, defeating the watchdog.
+/// Stops an orphaned ETW session. Named sessions are kernel objects that outlive
+/// the creating process: after a `taskkill /f` or crash the session stays Running
+/// and any restart fails with `AlreadyExist` — without this cleanup the agent
+/// could never restart after an unclean shutdown, defeating the watchdog.
 fn stop_orphaned_session(name: &str) {
     let out = std::process::Command::new("logman")
         .args(["stop", name, "-ets"])
@@ -68,6 +66,61 @@ fn stop_orphaned_session(name: &str) {
     }
 }
 
+/// Stops every ETW session we could have orphaned (issue #408), not just the
+/// one from the most recent unclean shutdown. The previous mechanism persisted
+/// a single session name to a state file and only ever cleaned that one up — a
+/// *second* consecutive unclean shutdown overwrote the file before the first
+/// orphan was ever stopped, and it accumulated forever (each one a kernel
+/// session that keeps costing ETW resources and, per #408's lab observation,
+/// may leave a freshly started session receiving zero events).
+///
+/// Enumerates `logman query -ets` and stops every session matching our fixed
+/// `wtrace-` prefix (`normalize::random_session_name`) — no persisted state
+/// needed, and it catches every orphan regardless of how many unclean shutdowns
+/// preceded this start. See `normalize::parse_orphaned_sessions` for the pure,
+/// tested parsing logic.
+///
+/// Single-instance assumption (Jean's #408 review, non-blocking): this stops
+/// every live `wtrace-` session, not just ones this install actually orphaned
+/// — correct only as long as at most one agent runs per host. Two instances
+/// overlapping even briefly (a watchdog restart racing a slow shutdown, a
+/// future Windows self-update swap, a manual `agent run` while the service is
+/// up) would have the new instance silently blind the old one's still-live
+/// session, which then trips the old instance's own silence watchdog
+/// ([`liveness_watch`]). `sensor-windows-etw` depends only on `schema`
+/// (workspace dependency rules), so it has no way to ask the agent/watchdog
+/// whether another instance is already running — that check, if ever needed,
+/// belongs a layer up, not here.
+///
+/// Also best-effort removes the pre-#408 state file (`synthaea-etw-session`,
+/// see the old `session_state_path`) so a host upgraded from that version
+/// doesn't keep it around forever — the new mechanism doesn't use it.
+fn stop_all_orphaned_sessions() {
+    let _ = std::fs::remove_file(std::env::temp_dir().join("synthaea-etw-session"));
+
+    let out = std::process::Command::new("logman")
+        .args(["query", "-ets"])
+        .output();
+    // A failed `logman` (access denied, ETW service trouble) prints no session
+    // table, so without the status check it parses as "no orphans" and cleanup is
+    // silently skipped — orphans accumulate, which is exactly #408 (same class as
+    // the failed-`wevtutil`-reads-as-empty bug in #391).
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            for name in normalize::parse_orphaned_sessions(&stdout) {
+                stop_orphaned_session(&name);
+            }
+        }
+        Ok(o) => tracing::warn!(
+            status = %o.status,
+            stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+            "logman query -ets failed — ETW orphan enumeration skipped"
+        ),
+        Err(e) => tracing::warn!(error = %e, "logman unavailable — ETW orphan enumeration skipped"),
+    }
+}
+
 // ── Shared state between provider callbacks ──────────────────────────────────
 
 pub(crate) struct SharedState {
@@ -78,8 +131,9 @@ pub(crate) struct SharedState {
     pub(crate) volumes: Mutex<HashMap<String, String>>,
     /// F-7: Connect/Send dedup.
     pub(crate) dedup: Mutex<normalize::ConnectDedup>,
-    /// #365: one `FileQuarantine` per `Zone.Identifier` write.
-    pub(crate) quarantine_dedup: Mutex<QuarantineDedup>,
+    /// #365/#439: `Zone.Identifier` writes, queued for the read-back worker
+    /// (which owns the one-`FileQuarantine`-per-write dedup).
+    pub(crate) marks: MarkQueue,
     /// F-2: events observed — the silence watchdog reads this.
     pub(crate) events_seen: AtomicU64,
     /// The liveness canary file: the run loop touches it every heartbeat, which
@@ -125,6 +179,27 @@ pub(crate) fn basename(path: &str) -> String {
     path.rsplit('\\').next().unwrap_or(path).to_string()
 }
 
+/// Starts the `Zone.Identifier` read-back worker (#439). It exits by itself
+/// once every [`MarkQueue`] sender is gone, i.e. when the trace's callbacks and
+/// this run's [`SharedState`] are dropped, so it is not joined.
+fn spawn_mark_reader(
+    marks: std::sync::mpsc::Receiver<zone_identifier::MarkWrite>,
+    sink: Arc<dyn EventSink>,
+) -> Result<(), SensorError> {
+    std::thread::Builder::new()
+        .name("zone-identifier-reader".into())
+        .spawn(move || {
+            zone_identifier::run_mark_reader(
+                &marks,
+                zone_identifier::read_stream,
+                QuarantineDedup::new(QUARANTINE_DEDUP_WINDOW_NS, QUARANTINE_DEDUP_CAP),
+                |event| sink.on_event(event),
+            );
+        })
+        .map(drop)
+        .map_err(|e| -> SensorError { format!("Zone.Identifier reader thread: {e}").into() })
+}
+
 pub(crate) fn meta(pid: u32, ppid: u32, comm: String, timestamp_ns: u64) -> EventMeta {
     EventMeta {
         pid,
@@ -147,24 +222,18 @@ fn seed_pid_store(state: &SharedState) {
     tracing::info!(processes = pids.len(), "pid store seeded");
 }
 
-/// F-2: randomized session name; the previous name is persisted so orphan cleanup
-/// survives both crashes AND the randomization.
-fn rotate_session_name(state_path: &std::path::Path) -> String {
-    if let Ok(previous) = std::fs::read_to_string(state_path) {
-        let previous = previous.trim();
-        if !previous.is_empty() {
-            stop_orphaned_session(previous);
-        }
-    }
-    let session = normalize::random_session_name(
+/// F-2: a freshly randomized session name for this run — anti-fingerprinting of
+/// the session *name*, see `normalize::random_session_name`. Caller is
+/// responsible for orphan cleanup first (`stop_all_orphaned_sessions`); no state
+/// is persisted between runs, unlike the old per-name file (issue #408).
+fn new_session_name() -> String {
+    normalize::random_session_name(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
         std::process::id(),
-    );
-    let _ = std::fs::write(state_path, &session);
-    session
+    )
 }
 
 /// F-2: the silence watchdog, made deterministic by a canary: every heartbeat the
@@ -257,14 +326,13 @@ impl Sensor for WindowsSensor {
 
         let canary_file =
             std::env::temp_dir().join(format!("synthaea-canary-{}", std::process::id()));
+        let (marks, mark_rx) = MarkQueue::bounded(MARK_QUEUE_CAPACITY);
+        spawn_mark_reader(mark_rx, Arc::clone(&sink))?;
         let state = Arc::new(SharedState {
             pids: Mutex::new(PidCache::new(PID_CACHE_CAP)),
             volumes: Mutex::new(winapi::build_volume_map()),
             dedup: Mutex::new(normalize::ConnectDedup::new(60_000_000_000)),
-            quarantine_dedup: Mutex::new(QuarantineDedup::new(
-                QUARANTINE_DEDUP_WINDOW_NS,
-                QUARANTINE_DEDUP_CAP,
-            )),
+            marks,
             events_seen: AtomicU64::new(0),
             canary_path: canary_file
                 .file_name()
@@ -274,8 +342,8 @@ impl Sensor for WindowsSensor {
 
         seed_pid_store(&state);
 
-        let state_path = session_state_path();
-        let session = rotate_session_name(&state_path);
+        stop_all_orphaned_sessions();
+        let session = new_session_name();
 
         let trace = UserTrace::new()
             .named(session.clone())
@@ -295,9 +363,6 @@ impl Sensor for WindowsSensor {
 
         let _ = trace.stop();
         let _ = std::fs::remove_file(&canary_file);
-        if result.is_ok() {
-            let _ = std::fs::remove_file(&state_path);
-        }
         result
     }
 

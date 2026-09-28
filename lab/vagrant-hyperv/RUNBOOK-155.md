@@ -94,8 +94,8 @@ Classic eBPF build failures (see `../provisioning/linux-toolchain.sh`):
 | Symptom | Fix |
 | --- | --- |
 | `built without embedded eBPF probes` — bpf-linker missing (download failed at provisioning, script continued with `[warn]`) | `vagrant provision MACHINE` (retries 3x now, and busts the stale build) |
-| `rust-src` missing from nightly | `vssh MACHINE 'rustup component add rust-src --toolchain nightly'` |
-| `Unknown attribute kind … Producer LLVM NN … Reader LLVM MM` | bump `BPF_LINKER_VERSION` in the provisioner, or pin an older nightly |
+| `rust-src` missing from the probe toolchain | `vssh MACHINE 'rustup component add rust-src --toolchain "$(cat /synthaea/ebpf-toolchain.txt)"'` |
+| `Unknown attribute kind … Producer LLVM NN … Reader LLVM MM` | bump `BPF_LINKER_VERSION` in the provisioner, or pin an older nightly in `ebpf-toolchain.txt` |
 
 ---
 

@@ -4,7 +4,18 @@
 //! exclusions only apply through `policy::name_exclusion_applies` (a rename in
 //! %TEMP% must not inherit them).
 
-pub(crate) const DOWNLOADER_COMMS: &[&str] = &["curl", "wget"];
+/// Processes whose file writes feed the T1105 download-then-exec join: tools that
+/// write the downloaded file themselves. Windows names carry `.exe` (the ETW
+/// `comm` is the image's file name); the first cut listed only `curl`/`wget`, so
+/// the rule never saw a Windows download (#442).
+///
+/// Not listed, on purpose: `bitsadmin`/BITS jobs (the BITS service, a
+/// `svchost.exe`, writes the file, not `bitsadmin.exe`; BITS telemetry is #284),
+/// and `PowerShell` `Invoke-WebRequest` (`powershell.exe` writes far too many files
+/// for one of its writes to mean "download"). Browsers and mail clients are
+/// covered by the mark-of-the-web join (T1204.002) instead.
+pub(crate) const DOWNLOADER_COMMS: &[&str] =
+    &["curl", "wget", "curl.exe", "wget.exe", "certutil.exe"];
 pub(crate) const WEB_SERVER_COMMS: &[&str] = &["nginx", "apache2", "httpd"];
 pub(crate) const SHELL_COMMS: &[&str] = &["sh", "bash", "dash", "zsh", "ash"];
 
@@ -114,12 +125,14 @@ pub(crate) const SELF_SPAWN_PARENT_EXCLUSIONS: &[&str] = &["RuntimeBroker.exe"];
 /// 2s per enabled channel — ~60 spawns/30s across the default four channels, well
 /// past `SELF_SPAWN_THRESHOLD`. `auditpol.exe`: run once at startup per channel
 /// needing an audit subcategory enabled. Both false-positived on the agent itself
-/// in the 2026-09-23 live lab validation of #391. Never a blanket "ignore every
+/// in the 2026-09-23 live lab validation of #391. `logman.exe`: the ETW sensor's
+/// startup orphan sweep (#408) — one `logman query -ets` plus one `logman stop` per
+/// orphan, so two orphans already reach `SELF_SPAWN_THRESHOLD`. Never a blanket "ignore every
 /// child of the agent": `ppid` alone is spoofable
 /// (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), so `check_self_spawn` also requires
 /// the image to live at a trusted system path (`policy::name_exclusion_applies`),
 /// same pairing as `SELF_SPAWN_EXCLUSIONS`.
-pub(crate) const AGENT_CHILD_EXCLUSIONS: &[&str] = &["wevtutil.exe", "auditpol.exe"];
+pub(crate) const AGENT_CHILD_EXCLUSIONS: &[&str] = &["wevtutil.exe", "auditpol.exe", "logman.exe"];
 
 /// `LOLBins` abused for shellcode injection or executing unsigned code (T1218/T1127).
 pub(crate) const LOLBINS: &[&str] = &[

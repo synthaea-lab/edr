@@ -20,11 +20,14 @@ echo
 echo "=== /usr/local/bin symlinks (sudo's PATH) ==="
 ls -la /usr/local/bin/ | grep -E 'bpf|aya|bindgen' || echo "  none"
 echo
-echo "=== nightly rustc LLVM major ==="
-rustup run nightly rustc -Vv 2>&1 | grep -i llvm || echo "  no nightly toolchain?"
+echo "=== eBPF probe toolchain (LLVM major) ==="
+_ebpf_tc=$(tr -d '[:space:]' 2>/dev/null < "${SYNTHAEA_SRC:-/synthaea}/ebpf-toolchain.txt" || echo nightly)
+echo "  (ebpf-toolchain.txt: $_ebpf_tc)"
+rustup toolchain list | grep -q "^$_ebpf_tc" || echo "  $_ebpf_tc not installed — rustup toolchain install $_ebpf_tc --profile minimal --component rust-src"
+rustup toolchain list | grep -q "^$_ebpf_tc" && { rustup run "$_ebpf_tc" rustc -Vv 2>&1 | grep -i llvm; }
 echo
-echo "=== nightly rust-src component ==="
-rustup component list --toolchain nightly 2>/dev/null | grep rust-src || echo "  rust-src missing — rustup component add rust-src --toolchain nightly"
+echo "=== probe toolchain rust-src component ==="
+rustup toolchain list | grep -q "^$_ebpf_tc" && { rustup component list --installed --toolchain "$_ebpf_tc" 2>/dev/null | grep rust-src || echo "  rust-src missing — rustup component add rust-src --toolchain $_ebpf_tc"; }
 echo
 echo "=== system LLVM ==="
 llvm-config --version 2>&1 || echo "  no llvm-config"

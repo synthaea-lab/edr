@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { buildIdentityHeaders, stripIdentityHeaders } from "@/lib/tenant";
 
 export async function middleware(req: NextRequest) {
-  // Public routes - no authentication required
+  // Public routes - no authentication required, and no identity either: the
+  // client's own identity headers are dropped here too, not just on protected
+  // routes.
   if (
     req.nextUrl.pathname.startsWith("/api/ingest") ||
     req.nextUrl.pathname.startsWith("/api/auth") ||
@@ -10,7 +13,9 @@ export async function middleware(req: NextRequest) {
     req.nextUrl.pathname === "/login" ||
     req.nextUrl.pathname === "/"
   ) {
-    return NextResponse.next();
+    return NextResponse.next({
+      request: { headers: stripIdentityHeaders(req.headers) },
+    });
   }
 
   // Check session for protected routes
@@ -24,24 +29,19 @@ export async function middleware(req: NextRequest) {
   }
 
   // Inject tenant context for protected routes
-  const headers = new Headers(req.headers);
-
-  // Organization ID from better-auth = Tenant ID
-  if (session.session.activeOrganizationId) {
-    headers.set("x-tenant-id", session.session.activeOrganizationId);
-  }
-
-  // User ID for audit logging
-  headers.set("x-user-id", session.user.id);
+  const headers = buildIdentityHeaders(req.headers, {
+    tenantId: session.session.activeOrganizationId,
+    userId: session.user.id,
+  });
 
   return NextResponse.next({
     request: { headers },
   });
 }
 
+// Every API route runs the middleware, public ones included. The old matcher
+// excluded ingest/auth/health, so the public branch above never ran for them
+// and their handlers received client identity headers untouched.
 export const config = {
-  matcher: [
-    "/console/:path*",
-    "/api/((?!ingest|auth|health).*)",
-  ],
+  matcher: ["/console/:path*", "/api/:path*"],
 };
