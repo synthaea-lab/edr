@@ -22,6 +22,8 @@ rule webshell_php_superglobal_exec {
     meta:
         description = "PHP code-execution sink fed directly from a request superglobal - minimal webshell backdoor shape"
         technique = "T1505.003"
+        severity = "critical"
+        falsepositives = "none known — ordinary PHP application code has no reason to feed eval/system/passthru/shell_exec/exec directly from an unsanitized request superglobal"
     strings:
         $php = { 3C 3F 70 68 70 } // "<?php"
         $sink1 = { 65 76 61 6C 28 24 5F 50 4F 53 54 } // eval($_POST
