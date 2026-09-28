@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -9,6 +9,7 @@ const prisma = new PrismaClient();
 export async function cleanDatabase() {
   // Delete in order respecting foreign keys
   await prisma.auditLog.deleteMany();
+  await prisma.caseNarrative.deleteMany();
   await prisma.case.deleteMany();
   await prisma.detection.deleteMany();
   await prisma.corpusSample.deleteMany();
@@ -64,17 +65,49 @@ export async function createTestDetection(
     technique: string;
     severity: string;
     timestamp: Date;
+    caseId: string | null;
+    event: Record<string, unknown>;
+    meta: Record<string, unknown>;
   }>
 ) {
   return prisma.detection.create({
     data: {
       tenantId,
       agentId,
+      caseId: overrides?.caseId,
       timestamp: overrides?.timestamp || new Date(),
       technique: overrides?.technique || "T1059.001",
       severity: overrides?.severity || "high",
-      event: { test: "data" },
-      meta: { test: "meta" },
+      event: (overrides?.event || { test: "data" }) as Prisma.InputJsonValue,
+      meta: (overrides?.meta || { test: "meta" }) as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * Creates a test case narrative.
+ */
+export async function createTestCaseNarrative(
+  tenantId: string,
+  caseId: string,
+  overrides?: Partial<{
+    narrative: string;
+    citations: Array<{ detectionId: string; claim: string }>;
+    generatedAt: Date;
+    generatedBy: string;
+  }>
+) {
+  return prisma.caseNarrative.create({
+    data: {
+      tenantId,
+      caseId,
+      narrative: overrides?.narrative || "Test narrative.",
+      citations: overrides?.citations || [],
+      model: "test-model",
+      provider: "self-hosted",
+      promptVersion: 1,
+      generatedBy: overrides?.generatedBy || "system:test",
+      generatedAt: overrides?.generatedAt || new Date(),
     },
   });
 }
