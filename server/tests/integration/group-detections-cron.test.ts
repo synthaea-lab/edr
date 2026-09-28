@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 import {
   cleanDatabase,
@@ -19,6 +19,10 @@ function cronRequest() {
 describe("GET /api/cron/group-detections", () => {
   beforeEach(async () => {
     await cleanDatabase();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
@@ -210,6 +214,101 @@ describe("GET /api/cron/group-detections", () => {
     expect(cases).toHaveLength(1);
     const grouped = await prisma.detection.findMany({ where: { tenantId: tenant.id } });
     expect(grouped.every((d) => d.caseId === cases[0].id)).toBe(true);
+  });
+
+  it("caps and drains each tenant independently of how many other tenants exist", async () => {
+    // Regression, turned multi-tenant per review (Jihair54): the previous fix
+    // capped each tenant's read at GROUPING_BATCH_SIZE, but ran every tenant
+    // inside ONE shared transaction — so the real per-invocation budget was
+    // `tenants × GROUPING_BATCH_SIZE`, not GROUPING_BATCH_SIZE, and enough
+    // tenants could still blow the transaction timeout and roll back
+    // everyone, including tenants with a tiny backlog. Two tenants, each with
+    // a backlog larger than one batch, must each independently cap at
+    // GROUPING_BATCH_SIZE per tick and drain over the same number of ticks a
+    // single tenant would need — neither tenant's batch size depends on how
+    // many other tenants exist.
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const agentA = await createTestAgent(tenantA.id);
+    const agentB = await createTestAgent(tenantB.id);
+    const total = GROUPING_BATCH_SIZE + 50;
+    const t0 = new Date();
+
+    for (const [tenant, agent] of [
+      [tenantA, agentA],
+      [tenantB, agentB],
+    ] as const) {
+      await prisma.detection.createMany({
+        data: Array.from({ length: total }, (_, i) => ({
+          tenantId: tenant.id,
+          agentId: agent.id,
+          technique: "T1059.001",
+          severity: "high",
+          timestamp: new Date(t0.getTime() + i * 1000),
+          event: { test: "data" },
+          meta: { test: "meta" },
+        })),
+      });
+    }
+
+    const first = await (await GET(cronRequest())).json();
+    expect(first.detectionsGrouped).toBe(GROUPING_BATCH_SIZE * 2);
+    expect(first.moreWorkLikely).toBe(true);
+
+    const ungroupedA = await prisma.detection.count({
+      where: { tenantId: tenantA.id, caseId: null },
+    });
+    const ungroupedB = await prisma.detection.count({
+      where: { tenantId: tenantB.id, caseId: null },
+    });
+    expect(ungroupedA).toBe(50);
+    expect(ungroupedB).toBe(50);
+
+    const second = await (await GET(cronRequest())).json();
+    expect(second.detectionsGrouped).toBe(100);
+    expect(second.moreWorkLikely).toBe(false);
+  });
+
+  it("continues to the remaining tenants when one tenant's transaction throws", async () => {
+    // Regression (review, Jihair54): a per-tenant transaction fixes
+    // cross-TICK isolation, but without a try/catch around each one, a
+    // single tenant's transaction throwing (a real timeout, a serialization
+    // failure) would still abort the whole loop and skip every tenant after
+    // it in THIS SAME invocation — the same "one slow tenant blocks
+    // everyone" failure mode, just narrowed from every tick to the rest of
+    // this one.
+    const tenantA = await createTestTenant();
+    const tenantB = await createTestTenant();
+    const agentA = await createTestAgent(tenantA.id);
+    const agentB = await createTestAgent(tenantB.id);
+    await createTestDetection(tenantA.id, agentA.id, { technique: "T1059.001" });
+    await createTestDetection(tenantB.id, agentB.id, { technique: "T1059.001" });
+
+    const realTransaction = prisma.$transaction.bind(prisma);
+    vi.spyOn(prisma, "$transaction")
+      .mockImplementationOnce(() => {
+        throw new Error("simulated transaction failure (e.g. a real timeout)");
+      })
+      // Every call after the first (one-time) override goes through untouched.
+      .mockImplementation(realTransaction as typeof prisma.$transaction);
+
+    const res = await GET(cronRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.tenantsChecked).toBe(2);
+    expect(body.tenantsFailed).toBe(1);
+
+    const groupedA = await prisma.detection.count({
+      where: { tenantId: tenantA.id, caseId: { not: null } },
+    });
+    const groupedB = await prisma.detection.count({
+      where: { tenantId: tenantB.id, caseId: { not: null } },
+    });
+    // Exactly one tenant's detection got grouped: the other tenant's
+    // transaction threw and was caught, but the loop still reached and
+    // completed the remaining tenant instead of aborting the whole request.
+    expect(groupedA + groupedB).toBe(1);
   });
 
   it("rejects the call when CRON_SECRET is unset", async () => {
