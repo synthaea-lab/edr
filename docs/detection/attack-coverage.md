@@ -27,7 +27,7 @@ dedicated content · 📋 waits on a filed issue (telemetry or content) ·
 
 Engine tags as of this assessment (from `rules`/`correlator` source):
 T1021.002, T1036.005, T1037.004, T1041, T1048.003, T1053.003/.005, T1055,
-T1059 (+.001/.004), T1070.002, T1071 (+.004), T1105, T1110, T1127, T1136.001,
+T1059 (+.001/.004), T1070.001/.002, T1071 (+.004), T1105, T1110, T1127, T1136.001,
 T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
 own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 
@@ -73,7 +73,7 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 
 | Technique | L | W | M | Status |
 | --- | --- | --- | --- | --- |
-| T1070 Indicator Removal (.002 log clearing shipped; timestomp pending) | 🟢 | 🟢/📋 | 🟢 | `check_log_clear_exec` (wevtutil/`log erase`/journal-vacuum, all platforms) + `check_log_file_delete` (L/M FileDelete streams; W file half waits on #136). Timestomp stays: LSM row (L), #136 (W), #357 (M) |
+| T1070 Indicator Removal (.001/.002 log clearing shipped; timestomp pending) | 🟢 | 🟢/📋 | 🟢 | `check_log_clear_exec` (wevtutil/`Clear-EventLog` tagged .001, `log erase`/journal-vacuum .002) + `check_log_file_delete` (L/M FileDelete streams; W file half waits on #136). Timestomp stays: LSM row (L), #136 (W), #357 (M) |
 | T1562 Impair Defenses | 📋 | 📋 | 🟢 | Signal-to-ES-clients shipped (M); kill-tracing #362 (L); driver tamper telemetry #39 (W); service-stop content everywhere |
 | T1055 Process Injection | 📋 | 🟢/📋 | 📋 | Remote-thread tag exists (W partial; full via TI-ETW #137); ptrace/process_vm #265 (L); task-port set #355 (M) |
 | T1036 Masquerading | 🟢 | 🟢 | 🟢 | `check_masquerading` — system-binary names outside their legitimate locations (wave 1, #379) |
