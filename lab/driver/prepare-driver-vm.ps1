@@ -5,11 +5,12 @@
 .DESCRIPTION
     Turns a fresh Windows 11 guest into a place a test-signed minifilter can
     load, and a crash can be read:
-      1. checks it runs in a VirtualBox guest (never a host, ADR-0012) and
+      1. checks it runs in a VirtualBox or VMware guest (never a host, ADR-0012) and
          that Secure Boot is off (test-signing is refused under it);
       2. trusts the developer's test certificate (Root + TrustedPublisher);
       3. `bcdedit /set testsigning on`, kernel debugging on COM1, which
-         new-driver-vm.ps1 exposes on the host as \\.\pipe\<vm>-kd;
+         new-driver-vm.ps1 exposes on the host as \\.\pipe\<vm>-kd (on
+         VMware, add a serial port on a named pipe in the VM settings);
       4. shows DbgPrint output (Debug Print Filter), keeps a kernel memory
          dump and stops on a bugcheck instead of rebooting past it;
       5. optionally enables Driver Verifier for the driver (ADR-0012
@@ -22,6 +23,8 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea\lab\driver\prepare-driver-vm.ps1
+    (VMware: from the repo's shared folder, e.g. "\\vmware-host\Shared Folders\edr-new\lab\driver\...".
+    The certificate and package paths follow the script's own location.)
 #>
 [CmdletBinding()]
 param(
@@ -33,12 +36,13 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "common-driver.ps1")
 
 Assert-Admin
-Assert-InVirtualBox
+Assert-InTestVm
 
 $secureBoot = $false
 try { $secureBoot = Confirm-SecureBootUEFI } catch { $secureBoot = $false }
 if ($secureBoot) {
-    throw "Secure Boot is on. Power the VM off and run on the host: VBoxManage modifynvram <vm> secureboot --disable"
+    throw ("Secure Boot is on. Power the VM off, then on the host: VirtualBox: VBoxManage modifynvram <vm> secureboot --disable; " +
+        "VMware: VM Settings > Options > Advanced > untick 'Enable secure boot'.")
 }
 Write-Host "[ok] Secure Boot off"
 

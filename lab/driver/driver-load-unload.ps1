@@ -6,7 +6,7 @@
 .DESCRIPTION
     ADR-0012's first milestone: a minifilter that registers, loads and
     unloads cleanly on a test-signed VM. Each step is checked, not just run:
-      1. preconditions: VirtualBox guest, test-signing on, the package's
+      1. preconditions: VirtualBox or VMware guest, test-signing on, the package's
          signatures valid (so the test certificate is trusted here);
       2. copies the package locally and installs it from its INF;
       3. `fltmc load`, then the filter must be listed by `fltmc filters`;
@@ -17,8 +17,9 @@
     pre-load): a bug here bluescreens the VM.
 
 .PARAMETER PackageDir
-    The signed package (sign-driver.ps1). Default: the host's
-    target\driver\package through the \\VBoxSvr\synthaea share.
+    The signed package (sign-driver.ps1). Default: target\driver\package
+    next to this script's repository, i.e. the host's through the VM's
+    shared folder (\\VBoxSvr\synthaea, or VMware's \\vmware-host\Shared Folders\...).
 
 .PARAMETER FilterName
     The filter's service name. Default: read from the INF's AddService line.
@@ -70,7 +71,7 @@ function Write-Step([string]$Text) { Write-Host "[..] $Text" -ForegroundColor Cy
 function Write-Ok([string]$Text) { Write-Host "[ok] $Text" -ForegroundColor Green }
 
 Assert-Admin
-Assert-InVirtualBox
+Assert-InTestVm
 if (-not (Test-TestSigningOn)) { throw "test-signing is off; run prepare-driver-vm.ps1 and reboot" }
 
 if (-not $PackageDir) { $PackageDir = Join-Path (Get-DriverOutDir) "package" }

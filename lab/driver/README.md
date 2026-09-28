@@ -3,6 +3,11 @@
 Scripts for the driver's lab loop: one test-signing VirtualBox VM per
 developer, separate from the demo VM, never the host (ADR-0012 Acceptance).
 VirtualBox rather than Hyper-V because some team hosts run Windows 11 Home.
+VMware Workstation works too: skip `new-driver-vm.ps1`, turn Secure Boot off in
+the VM settings (Options > Advanced), share the repository with the guest, and pass
+`-Vmx <path to the .vmx>` to `snapshot-driver-vm.ps1`. The guest scripts accept
+either hypervisor and find the certificate and package next to themselves, so
+run them from the shared folder (`\\vmware-host\Shared Folders\<share>\lab\driver\...`).
 
 | Script | Runs on | Does |
 | --- | --- | --- |

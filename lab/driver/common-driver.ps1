@@ -55,11 +55,21 @@ function Assert-Admin {
     }
 }
 
-function Assert-InVirtualBox([switch]$Force) {
+function Get-VmRun {
+    # VMware Workstation's CLI; Player has no snapshots, so it doesn't count.
+    foreach ($c in @("${env:ProgramFiles(x86)}\VMware\VMware Workstation\vmrun.exe",
+            "$env:ProgramFiles\VMware\VMware Workstation\vmrun.exe")) {
+        if (Test-Path $c) { return $c }
+    }
+    throw "vmrun.exe not found; snapshots need VMware Workstation (Player has none)"
+}
+
+function Assert-InTestVm([switch]$Force) {
     # ADR-0012: never on a host machine. A driver bug bluescreens whatever runs it.
+    # The team's test VMs run on VirtualBox or VMware Workstation.
     $model = (Get-CimInstance Win32_ComputerSystem).Model
-    if ($model -notmatch "VirtualBox" -and -not $Force) {
-        throw "This machine ('$model') is not a VirtualBox guest. Driver tests run in the test-signing VM only (ADR-0012); -Force overrides."
+    if ($model -notmatch "VirtualBox|VMware" -and -not $Force) {
+        throw "This machine ('$model') is not a VirtualBox or VMware guest. Driver tests run in the test-signing VM only (ADR-0012); -Force overrides."
     }
 }
 
