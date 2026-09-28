@@ -1057,6 +1057,69 @@ fn burst_write_and_rename_excludes_tmp_path() {
 }
 
 #[test]
+fn burst_write_and_rename_fires_with_realistic_small_writes() {
+    // Regression for #496: the old SlidingSum pushed one entry per
+    // FileWriteEvent, so its 256-entry cap capped the tracked total at
+    // 256 * (bytes per call) — ~16-32MB at real buffered-I/O sizes, never
+    // reaching BURST_WRITE_BYTES_THRESHOLD (100MB) outside a test that (like
+    // the ones above) feeds two unrealistic 60MB single writes. 1700 writes
+    // of 64KB, 1ms apart, is the shape a real bulk-encrypting write loop
+    // actually produces — should still cross the threshold once coalesced.
+    let mut state = RuleState::new();
+    let write_size: u64 = 64 * 1024;
+    let write_count: u32 = 1700; // 1700 * 64KB ~= 106MB, safely over the 100MB threshold
+    for i in 0..write_count {
+        state.on_file_write(&file_write_event_full(
+            7105,
+            "evil",
+            write_size,
+            u64::from(i) * 1_000_000, // 1ms apart
+        ));
+    }
+    let writes_end_ns = u64::from(write_count) * 1_000_000;
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7105,
+            "evil",
+            &format!("/home/u/src{i}.docx"),
+            &format!("/home/u/dst{i}.docx"),
+            writes_end_ns + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "realistic small writes should still cross the byte threshold"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
+fn burst_write_and_rename_excludes_package_manager_temp_rename() {
+    // Regression for #496: a package upgrade staging heavy writes under
+    // `foo.dpkg-new` then renaming each one onto `foo` cleared both of this
+    // rule's gates (rename count, byte volume) with no ransomware behavior at
+    // all — confirmed live (30 files, 120MB).
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7106, "dpkg", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7106,
+            "dpkg",
+            &format!("/usr/lib/libfoo{i}.so.dpkg-new"),
+            &format!("/usr/lib/libfoo{i}.so"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert!(
+        alerts.is_empty(),
+        "package-manager stage-then-rename-over-original is not ransomware"
+    );
+}
+
+#[test]
 fn burst_write_and_rename_does_not_realert_within_window() {
     let mut state = RuleState::new();
     state.on_file_write(&file_write_event_full(7104, "evil", 60 * 1024 * 1024, 0));

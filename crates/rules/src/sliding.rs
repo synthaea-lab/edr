@@ -75,8 +75,30 @@ pub(crate) struct SlidingSum {
     total: u64,
 }
 
-/// Same reasoning as `SLIDING_TIMESTAMPS_CAP`.
+/// Bounds one key's memory, same reasoning as `SLIDING_TIMESTAMPS_CAP` — with
+/// entries coalesced by [`SLIDING_SUM_SLOT_NS`], this is no longer the
+/// practical ceiling on the tracked total (issue #496): it only matters if a
+/// caller somehow produces more distinct slots than fit in the window, which
+/// legitimate writers never do.
 const SLIDING_SUM_CAP: usize = 256;
+
+/// Writes within this long of the current slot's first write are coalesced
+/// into it rather than starting a new entry (issue #496). Before this
+/// existed, `add` pushed one entry per call, so [`SLIDING_SUM_CAP`] capped the
+/// tracked total at `256 * (bytes per write call)` — 16-32MB at realistic
+/// 64-128KB buffered-write sizes, far under `BURST_WRITE_BYTES_THRESHOLD`
+/// (100MB): the threshold was unreachable on real telemetry, confirmed live
+/// (120MB written in 64KB chunks produced no alert). Coalescing bounds entry
+/// *count* by wall-clock time instead of call count: at most
+/// `window_ns / SLIDING_SUM_SLOT_NS` slots ever exist per key (25 for the 5s
+/// ransomware window at 200ms), nowhere near `SLIDING_SUM_CAP`, so the total
+/// this returns is the real in-window sum regardless of how many small writes
+/// produced it. 200ms is short enough that two genuinely distinct write
+/// bursts a legitimate multi-writer process interleaves rarely land in the
+/// same slot, long enough that a single writer's normal buffered-I/O call
+/// rate (sub-millisecond apart) collapses to a handful of slots instead of
+/// hundreds.
+const SLIDING_SUM_SLOT_NS: u64 = 200_000_000; // 200ms
 
 impl SlidingSum {
     /// Drops entries older than `window_ns` relative to `ts`, keeping `total` in sync.
@@ -92,10 +114,19 @@ impl SlidingSum {
         }
     }
 
-    /// Prunes expired entries, adds `value` at `ts`, returns the new in-window total.
+    /// Prunes expired entries, adds `value` at `ts` (coalesced into the
+    /// current slot when `ts` falls within [`SLIDING_SUM_SLOT_NS`] of that
+    /// slot's first write — see its doc), returns the new in-window total.
     pub(crate) fn add(&mut self, ts: u64, value: u64, window_ns: u64) -> u64 {
         self.prune(ts, window_ns);
-        self.entries.push_back((ts, value));
+        match self.entries.back_mut() {
+            Some((slot_start, slot_total))
+                if ts.saturating_sub(*slot_start) < SLIDING_SUM_SLOT_NS =>
+            {
+                *slot_total = slot_total.saturating_add(value);
+            }
+            _ => self.entries.push_back((ts, value)),
+        }
         self.total = self.total.saturating_add(value);
         if self.entries.len() > SLIDING_SUM_CAP
             && let Some((_, v)) = self.entries.pop_front()

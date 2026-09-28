@@ -109,6 +109,23 @@ pub(crate) const BURST_WRITE_BYTES_THRESHOLD: u64 = 100 * 1024 * 1024;
 /// doc describes for `comm`-based exclusions.
 pub(crate) const RANSOMWARE_EXCLUDED_PATH_PREFIXES: &[&str] = &["/tmp/", "/var/tmp/"];
 
+/// Suffixes a package manager (or an editor's atomic-save convention) appends
+/// to a file it's about to replace, then renames away — the *reverse*
+/// relationship from `check_mass_rename_pattern`'s ransomware shape
+/// (`old_path` + suffix = `new_path`, e.g. `document.docx` ->
+/// `document.docx.locked`): here `old_path` = `new_path` + suffix
+/// (`lib.so.dpkg-new` -> `lib.so`). Confirmed live (#496): a package upgrade
+/// renaming a batch of `.dpkg-new` staging files into place, alongside the
+/// large writes that staged their content (120MB across 30 files in the
+/// capture), cleared both of `check_burst_write_volume`'s gates — rename
+/// count and byte volume — and false-positived T1486. `apk`'s equivalent
+/// suffix is included on the same reasoning, not independently captured live.
+/// rsync's own temp-file convention plausibly hits the same false positive
+/// (also named in the #496 report) but isn't a fixed suffix on the final
+/// name the way these are, so it isn't covered here — add it if a live
+/// capture shows the actual shape.
+pub(crate) const PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES: &[&str] = &[".dpkg-new", ".apk-new"];
+
 /// Pairing window for one scheduled-task registration seen on both Security 4698
 /// and TaskScheduler/Operational 106 (#422, T1053.005). The two are normalized by
 /// separate poll threads, each on a 2s cadence, so their timestamps land a few

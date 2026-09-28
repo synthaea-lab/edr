@@ -17,12 +17,12 @@ use crate::{
         AGENT_CHILD_EXCLUSIONS, AUTH_FAILURE_THRESHOLD, AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD,
         BEACON_WINDOW_NS, BROWSERS, BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS,
         DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MEMFD_EXEC_WINDOW_NS,
-        QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX,
-        RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD,
-        SCAN_SPREAD_WINDOW_NS, SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS,
-        SELF_SPAWN_THRESHOLD, SELF_SPAWN_WINDOW_NS, SHELL_COMMS, STANDARD_PORTS,
-        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
-        WEB_SERVER_COMMS,
+        PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, QUARANTINE_EXEC_WINDOW_NS,
+        RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
+        RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
+        SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_THRESHOLD,
+        SELF_SPAWN_WINDOW_NS, SHELL_COMMS, STANDARD_PORTS, SUSPECT_CHILDREN_WIN,
+        SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS, WEB_SERVER_COMMS,
     },
     has_write_intent,
     sliding::{FlowPortDedup, SlidingCounter, SlidingDistinct, SlidingSum},
@@ -1135,18 +1135,32 @@ impl RuleState {
 
     /// Second, independent T1486 signal (issue #82): heavy write volume alongside
     /// a rename burst, regardless of whether the rename shape matched
-    /// `check_mass_rename_pattern`'s prefix-preserving pattern — catches an
-    /// encryptor that writes-new-then-unlinks or otherwise doesn't keep the
-    /// original name as a prefix of the new one.
+    /// `check_mass_rename_pattern`'s prefix-preserving pattern — catches a
+    /// renamed-over-the-original-name encryptor shape that check's
+    /// suffix-appending model doesn't.
+    ///
+    /// Only ever runs on `FileRenameEvent` (dispatched from `on_file_rename`,
+    /// never on an unlink) — despite an earlier version of this doc's claim to
+    /// catch a "writes-new-then-unlinks" shape, no unlink telemetry feeds this
+    /// at all (review finding, #496). `bytes_written` comes from
+    /// `FileWriteEvent::bytes_requested`, which `sensor-linux-ebpf`'s
+    /// `sys_enter_write` hook records for every `write(2)` regardless of what
+    /// the fd refers to — a regular file, a socket, a pipe — so a chatty
+    /// network/IPC-heavy process's write volume counts the same as real disk
+    /// writes toward this total. Both caveats are honest gaps, not yet closed.
     ///
     /// Deliberately no name-keyed exclusion here: `FileRenameEvent`/`FileWriteEvent`
     /// carry no executable path (same gap `check_mass_rename_pattern`'s doc
     /// describes, tracked in #459), so a `comm`-only exclusion would be spoofable.
     /// `RANSOMWARE_EXCLUDED_PATH_PREFIXES` is path-based, not name-based, and stays.
+    /// [`is_package_manager_temp_rename`] is shape-based (#496): a package
+    /// manager staging heavy writes under `foo.dpkg-new` then renaming it onto
+    /// `foo` previously cleared both gates below and false-positived T1486.
     fn check_burst_write_volume(&mut self, event: &FileRenameEvent) -> Option<Alert> {
         if RANSOMWARE_EXCLUDED_PATH_PREFIXES
             .iter()
             .any(|prefix| event.new_path.starts_with(prefix))
+            || is_package_manager_temp_rename(&event.old_path, &event.new_path)
         {
             return None;
         }
@@ -1236,6 +1250,18 @@ fn is_proc_fd_path(path: &str) -> bool {
         return false;
     };
     (pid_or_self == "self" || is_all_digits(pid_or_self)) && is_all_digits(fd)
+}
+
+/// True when `old_path` is `new_path` with one of
+/// [`PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES`] appended — the package-manager
+/// "stage under a temp name, then rename over the real one" shape
+/// `check_burst_write_volume` excludes (#496). The reverse relationship from
+/// [`is_rotation_suffix`]'s callers (`new_path` = `old_path` + suffix): here
+/// the suffix is on the *old* name.
+fn is_package_manager_temp_rename(old_path: &str, new_path: &str) -> bool {
+    old_path
+        .strip_prefix(new_path)
+        .is_some_and(|suffix| PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES.contains(&suffix))
 }
 
 /// Whether the file at `path` is the one a process named `comm` runs from. A
