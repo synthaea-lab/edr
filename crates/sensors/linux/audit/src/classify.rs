@@ -166,11 +166,16 @@ fn classify_avc(record: &AuditRecord) -> Option<AuditEvent> {
         tcontext: record.fields.get("tcontext").cloned(),
         tclass,
         permissive: record.fields.get("permissive").is_some_and(|v| v == "1"),
+        // Same hex-decoding as argv (#297 review, Nikolas): the kernel hex-encodes
+        // `path=`/`name=` too whenever the value contains a space or a quote (e.g.
+        // `cp id_rsa "id rsa"` logs `name=696420727361`), so reading the field raw
+        // would leak the encoded form straight into the alert instead of decoding
+        // it — a free evasion.
         object_path: record
             .fields
             .get("path")
             .or_else(|| record.fields.get("name"))
-            .cloned(),
+            .map(|v| decode_audit_value(v)),
     })
 }
 
@@ -384,6 +389,31 @@ mod tests {
             panic!("expected PolicyDenial event");
         };
         assert_eq!(object_path.as_deref(), Some("/home/alice/.ssh/id_rsa"));
+    }
+
+    #[test]
+    fn classify_avc_decodes_hex_encoded_name() {
+        // The kernel hex-encodes name=/path= whenever the value contains a space
+        // or a quote — same reason argv gets the same treatment. Undecoded, this
+        // would leak "696420727361" (the hex form of "id rsa") straight into the
+        // alert instead of the actual name (review on #490, Nikolas).
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("scontext".to_string(), "httpd_t".to_string());
+        fields.insert("tclass".to_string(), "file".to_string());
+        fields.insert("name".to_string(), "696420727361".to_string());
+
+        let record = AuditRecord {
+            record_type: AUDIT_AVC,
+            timestamp_sec: 0,
+            timestamp_ms: 0,
+            seq: 0,
+            fields,
+        };
+
+        let AuditEvent::PolicyDenial { object_path, .. } = classify(&record).unwrap() else {
+            panic!("expected PolicyDenial event");
+        };
+        assert_eq!(object_path.as_deref(), Some("id rsa"));
     }
 
     #[test]
