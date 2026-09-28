@@ -318,7 +318,7 @@ fn detection_correlator_golden() {
             case_id: "case-0f2a".into(),
         },
         score: Some(0.87),
-        techniques: vec!["T1059/T1071".into()],
+        techniques: vec!["T1059".into(), "T1071".into()],
         attributions: Vec::new(),
         events: vec![sample_exec_event()],
     };

@@ -7,7 +7,7 @@
     "case_id": "case-0f2a"
   },
   "score": 0.87,
-  "techniques": ["T1059/T1071"],
+  "techniques": ["T1059", "T1071"],
   "events": [
     {
       "type": "exec",
