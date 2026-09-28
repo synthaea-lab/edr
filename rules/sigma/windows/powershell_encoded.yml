@@ -7,6 +7,10 @@ tags:
   - attack.t1059.001
   - attack.defense_evasion
   - attack.t1027
+level: medium
+falsepositives:
+  - Some MDM/config-management tooling and PowerShell remoting frameworks use
+    -EncodedCommand legitimately to pass multi-line scripts.
 detection:
   selection:
     Image|endswith:
