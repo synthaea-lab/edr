@@ -80,9 +80,7 @@ fn classify_exec(record: &AuditRecord) -> Option<AuditEvent> {
     for i in 0..argc {
         let key = format!("a{i}");
         let value = record.fields.get(&key)?;
-        // Auditd may hex-encode arguments - decode if needed
-        let decoded = decode_audit_value(value);
-        argv.push(decoded);
+        argv.push(decode_audit_value(value, record.quoted.contains(&key)));
     }
 
     // First argument is the image path
@@ -171,20 +169,22 @@ fn classify_avc(record: &AuditRecord) -> Option<AuditEvent> {
         // `cp id_rsa "id rsa"` logs `name=696420727361`), so reading the field raw
         // would leak the encoded form straight into the alert instead of decoding
         // it — a free evasion.
-        object_path: record
-            .fields
-            .get("path")
-            .or_else(|| record.fields.get("name"))
-            .map(|v| decode_audit_value(v)),
+        object_path: ["path", "name"].into_iter().find_map(|key| {
+            let value = record.fields.get(key)?;
+            Some(decode_audit_value(value, record.quoted.contains(key)))
+        }),
     })
 }
 
-/// Decodes audit field values (handles hex-encoded strings).
-fn decode_audit_value(value: &str) -> String {
-    // If value looks like hex (even length, all hex chars), try to decode
-    if value.len().is_multiple_of(2)
+/// An untrusted audit string as the kernel meant it. A `quoted` value was logged
+/// verbatim; an unquoted hex-shaped one was hex-encoded because it contained a
+/// space, a quote or a control character. Guessing from the shape alone turned
+/// a quoted literal such as `6162` into `ab` (#491). A decode that isn't valid
+/// UTF-8 keeps the hex form rather than inventing text.
+fn decode_audit_value(value: &str, quoted: bool) -> String {
+    if !quoted
+        && !value.is_empty()
         && value.chars().all(|c| c.is_ascii_hexdigit())
-        && value.len() > 2
         && let Ok(bytes) = hex_decode(value)
         && let Ok(s) = String::from_utf8(bytes)
     {
@@ -264,6 +264,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let event = classify(&record).unwrap();
@@ -301,15 +302,76 @@ mod tests {
     #[test]
     fn decode_hex_value() {
         let hex = "2F62696E2F6C73"; // "/bin/ls" in hex
-        let decoded = decode_audit_value(hex);
+        let decoded = decode_audit_value(hex, false);
         assert_eq!(decoded, "/bin/ls");
     }
 
     #[test]
     fn decode_plain_value() {
         let plain = "/bin/ls";
-        let decoded = decode_audit_value(plain);
+        let decoded = decode_audit_value(plain, true);
         assert_eq!(decoded, "/bin/ls");
+    }
+
+    /// The argv of an EXECVE record parsed from its wire text, as the sensor
+    /// sees it (nlmsghdr + payload), so quoting comes from the real parser.
+    fn classify_wire(record_type: u32, payload: &str) -> Option<AuditEvent> {
+        let body = format!("msg=audit(1000.0:1): {payload}");
+        let len = u32::try_from(16 + body.len()).unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&len.to_ne_bytes());
+        raw.extend_from_slice(&u16::try_from(record_type).unwrap().to_ne_bytes());
+        raw.extend_from_slice(&[0; 10]);
+        raw.extend_from_slice(body.as_bytes());
+        classify(&crate::parse::parse_audit_message(&raw).unwrap())
+    }
+
+    fn argv_from_wire(payload: &str) -> Vec<String> {
+        match classify_wire(AUDIT_EXECVE, payload) {
+            Some(AuditEvent::Exec { argv, .. }) => argv,
+            other => panic!("expected Exec event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_quoted_hex_shaped_avc_name_stays_literal() {
+        // Regression (#491), same decoder on #490's object_path.
+        let event = classify_wire(
+            AUDIT_AVC,
+            r#"avc:  denied  { read } for  pid=1 comm="cat" name="6162" scontext=a tclass=file"#,
+        );
+        let Some(AuditEvent::PolicyDenial { object_path, .. }) = event else {
+            panic!("expected PolicyDenial event, got {event:?}");
+        };
+        assert_eq!(object_path.as_deref(), Some("6162"));
+    }
+
+    #[test]
+    fn a_quoted_hex_shaped_argument_stays_literal() {
+        // Regression (#491): the kernel quotes `6162` because it needs no
+        // escaping, and the old shape-only heuristic still decoded it to "ab".
+        let argv = argv_from_wire(r#"argc=3 a0="/bin/echo" a1="6162" a2="31323334""#);
+        assert_eq!(argv, vec!["/bin/echo", "6162", "31323334"]);
+    }
+
+    #[test]
+    fn an_unquoted_hex_argument_is_decoded() {
+        // `id rsa` contains a space, so the kernel hex-encodes it unquoted.
+        let argv = argv_from_wire(r#"argc=2 a0="/bin/cp" a1=696420727361"#);
+        assert_eq!(argv, vec!["/bin/cp", "id rsa"]);
+    }
+
+    #[test]
+    fn a_single_space_argument_is_decoded() {
+        // Two hex digits: the old `len() > 2` guard left it as "20".
+        let argv = argv_from_wire(r#"argc=2 a0="/bin/echo" a1=20"#);
+        assert_eq!(argv, vec!["/bin/echo", " "]);
+    }
+
+    #[test]
+    fn an_unquoted_argument_that_is_not_utf8_keeps_its_hex_form() {
+        let argv = argv_from_wire(r#"argc=2 a0="/bin/echo" a1=cafe"#);
+        assert_eq!(argv, vec!["/bin/echo", "cafe"]);
     }
 
     #[test]
@@ -341,6 +403,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let event = classify(&record).unwrap();
@@ -383,6 +446,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let AuditEvent::PolicyDenial { object_path, .. } = classify(&record).unwrap() else {
@@ -408,6 +472,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let AuditEvent::PolicyDenial { object_path, .. } = classify(&record).unwrap() else {
@@ -430,6 +495,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let AuditEvent::PolicyDenial { object_path, .. } = classify(&record).unwrap() else {
@@ -454,6 +520,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         let AuditEvent::PolicyDenial { permissive, .. } = classify(&record).unwrap() else {
@@ -473,6 +540,7 @@ mod tests {
             timestamp_ms: 0,
             seq: 0,
             fields,
+            quoted: std::collections::HashSet::new(),
         };
 
         assert!(classify(&record).is_none());

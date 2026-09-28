@@ -3,7 +3,7 @@
 //! Wire format: 16-byte binary nlmsghdr + text payload "msg=audit(timestamp:seq): key=value ..."
 //! The record type comes from `nlmsghdr.nlmsg_type`, not from a "type=" text prefix.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Size of the netlink message header — `struct nlmsghdr`: `nlmsg_len: u32`,
 /// `nlmsg_type: u16`, `nlmsg_flags: u16`, `nlmsg_seq: u32`, `nlmsg_pid: u32`.
@@ -17,6 +17,12 @@ pub struct AuditRecord {
     pub timestamp_ms: u32,
     pub seq: u64,
     pub fields: HashMap<String, String>,
+    /// Keys whose value was quoted on the wire. The kernel quotes an untrusted
+    /// string only when it logs it verbatim, and hex-encodes it unquoted when it
+    /// contains a space, a quote or a control character, so quoting is the one
+    /// reliable "literal or hex" signal. The quotes themselves are stripped from
+    /// `fields` (#491).
+    pub quoted: HashSet<String>,
 }
 
 /// Parses one audit message from the wire.
@@ -47,7 +53,7 @@ pub fn parse_audit_message(raw: &[u8]) -> Result<AuditRecord, String> {
     let (timestamp_sec, timestamp_ms, seq) = parse_msg_header(&msg)?;
 
     // Parse remaining "key=value" pairs
-    let fields = parse_fields(&msg)?;
+    let (fields, quoted) = parse_fields(&msg)?;
 
     Ok(AuditRecord {
         record_type,
@@ -55,6 +61,7 @@ pub fn parse_audit_message(raw: &[u8]) -> Result<AuditRecord, String> {
         timestamp_ms,
         seq,
         fields,
+        quoted,
     })
 }
 
@@ -100,14 +107,17 @@ fn parse_msg_header(msg: &str) -> Result<(u64, u32, u64), String> {
     Ok((timestamp_sec, timestamp_ms, seq))
 }
 
-fn parse_fields(msg: &str) -> Result<HashMap<String, String>, String> {
+type Fields = (HashMap<String, String>, HashSet<String>);
+
+fn parse_fields(msg: &str) -> Result<Fields, String> {
     let mut fields = HashMap::new();
+    let mut quoted = HashSet::new();
 
     // Find the end of the msg=audit(...): header
     let fields_start = msg.find("): ").map(|pos| pos + 3).unwrap_or(0);
 
     if fields_start == 0 || fields_start >= msg.len() {
-        return Ok(fields);
+        return Ok((fields, quoted));
     }
 
     let fields_str = &msg[fields_start..];
@@ -135,7 +145,8 @@ fn parse_fields(msg: &str) -> Result<HashMap<String, String>, String> {
         current = eq_pos + 1;
 
         // Parse value (may be quoted)
-        let (value, next_pos) = if current < bytes.len() && bytes[current] == b'"' {
+        let is_quoted = current < bytes.len() && bytes[current] == b'"';
+        let (value, next_pos) = if is_quoted {
             // Quoted value
             current += 1;
             let value_end = bytes[current..]
@@ -158,11 +169,17 @@ fn parse_fields(msg: &str) -> Result<HashMap<String, String>, String> {
             (value, value_end)
         };
 
+        if is_quoted {
+            quoted.insert(key.clone());
+        } else {
+            // A repeated key keeps only its last value; its quoting must follow.
+            quoted.remove(&key);
+        }
         fields.insert(key, value);
         current = next_pos;
     }
 
-    Ok(fields)
+    Ok((fields, quoted))
 }
 
 #[cfg(test)]
@@ -232,6 +249,20 @@ mod tests {
         let record = parse_audit_message(&raw).unwrap();
         assert_eq!(record.fields.get("pid"), Some(&"1234".to_string()));
         assert_eq!(record.fields.get("uid"), Some(&"1000".to_string()));
+    }
+
+    #[test]
+    fn quoted_values_are_recorded_as_quoted() {
+        let raw = build_wire_message(
+            1309,
+            "msg=audit(1000.0:1): argc=3 a0=\"/bin/echo\" a1=6964 a2=\"6162\"",
+        );
+        let record = parse_audit_message(&raw).unwrap();
+        assert!(record.quoted.contains("a0"));
+        assert!(record.quoted.contains("a2"));
+        assert!(!record.quoted.contains("a1"));
+        assert!(!record.quoted.contains("argc"));
+        assert_eq!(record.fields.get("a2"), Some(&"6162".to_string()));
     }
 
     #[test]
