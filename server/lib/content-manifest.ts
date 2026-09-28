@@ -72,7 +72,13 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 /**
- * Canonical JSON for signing (matches ADR-0015 Decision 2)
+ * Canonical JSON for signing — byte-for-byte the same scheme as
+ * `crates/updater::content::ContentManifest::canonical_bytes` (the Rust agent
+ * side that actually enforces the signature), not an independent TS
+ * convention: a prior version of this function dropped the `signature` key
+ * entirely instead of keeping it present-but-empty, so a manifest signed
+ * against Rust's canonical bytes could never verify here and vice versa
+ * (PR #509 review). Both sides must agree on:
  * - 2-space indent
  * - Sorted keys, at every nesting level (not just top-level manifest fields —
  *   a naive `JSON.stringify(value, Object.keys(value).sort(), 2)` replacer
@@ -80,10 +86,18 @@ function sortKeysDeep(value: unknown): unknown {
  *   nested object too, so `entries[]`' own fields (path/type/sha256/...)
  *   would silently serialize as `{}` — verified and fixed; see
  *   `tests/unit/content-manifest.test.ts`)
- * - No signature field in signed payload
+ * - `signature` present in the signed payload, forced to `""` — not omitted
+ *
+ * `tests/unit/content-manifest.test.ts` and `cargo test -p updater` both
+ * verify against the same checked-in golden fixture
+ * (`tests/fixtures/content-manifest-golden.json`) so the two sides can't
+ * silently drift apart again.
  */
-export function canonicalJSON(manifest: Omit<ContentManifest, "signature">): string {
-  return JSON.stringify(sortKeysDeep(manifest), null, 2);
+export function canonicalJSON(
+  manifest: ContentManifest | Omit<ContentManifest, "signature">
+): string {
+  const unsigned = { ...manifest, signature: "" };
+  return JSON.stringify(sortKeysDeep(unsigned), null, 2);
 }
 
 /**
@@ -95,12 +109,11 @@ export async function verifySignature(
   publicKey: Uint8Array
 ): Promise<boolean> {
   try {
-    // Remove signature from manifest for canonical JSON
-    const { signature, ...payload } = manifest;
-    const canonical = canonicalJSON(payload);
+    // canonicalJSON forces `signature` to "" itself — pass the full manifest.
+    const canonical = canonicalJSON(manifest);
 
     // Convert hex signature to bytes
-    const signatureBytes = hexToBytes(signature);
+    const signatureBytes = hexToBytes(manifest.signature);
 
     // Verify using Web Crypto API (Ed25519)
     const key = await crypto.subtle.importKey(
