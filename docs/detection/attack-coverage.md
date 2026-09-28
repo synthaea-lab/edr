@@ -128,8 +128,25 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | T1071 Application Layer Protocol | 🟢 | 🟢 | 🟢 | BEACON on all platforms (macOS via NE flows once #351 activates; 🔨 until then) |
 | T1071.004 DNS | 📋 | 🟢 | 🔨 | #267 (L); DnsQuery live (W); NE DNS built (M) |
 | T1573/T1571 Encrypted/Non-Standard Port | 🟢 | 🟡 | 🟡 | Non-standard-port tag (L); TLS fingerprints #86/#373/#360 deepen all three |
-| T1105 Ingress Tool Transfer | 🟢 | 🟢 | 🟢 | Download-then-exec tagged |
+| T1105 Ingress Tool Transfer | 🟢 | 🟢 | 🟢 | Download-then-exec tagged: `curl`/`wget` (L/M); `curl.exe`/`wget.exe`/`certutil.exe` (W, live since #442; before it the Windows join never matched). See "Windows downloads" below |
 | T1090/T1572 Proxy/Tunneling | 🟡 | 🟡 | 🟡 | Flow shapes visible; content work |
+
+### Windows downloads: which rule sees what (#442)
+
+Two joins cover a download that is then run. They see different downloaders, and
+some downloaders fall between them.
+
+| Downloader | Mark-of-the-web written? | Covered by |
+| --- | --- | --- |
+| Browsers, Outlook/mail clients, most archivers | yes (`Zone.Identifier`) | T1204.002 provenance→exec join (`FileQuarantine`, #365) |
+| `curl.exe`, `wget.exe`, `certutil -urlcache` | no | T1105 download→exec join (`DOWNLOADER_COMMS`: the tool writes the file itself) |
+| `bitsadmin` / BITS jobs | no | **not covered**: the BITS service (`svchost.exe`) writes the file; BITS ETW is #284 |
+| PowerShell `Invoke-WebRequest` / `Start-BitsTransfer` | depends on version | **not covered** as a download: `powershell.exe` writes too much to key on; script-content telemetry (#282) is the path |
+| Custom droppers | usually no | **not covered** by these joins; LOLBIN/PARENT-SUSPECT lineage and ML carry them |
+
+Both joins key on the executed image, so a downloaded *script* run through an
+interpreter (`powershell -File x.ps1`) joins neither. Removing a mark
+(`Unblock-File`, T1553.005) is not detected yet (#442, then the minifilter #136).
 
 ## Exfiltration (TA0010)
 
