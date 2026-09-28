@@ -7,7 +7,7 @@ use std::{collections::HashMap, net::IpAddr};
 use schema::{
     AuthEvent, AuthOutcome, ConnectEvent, ExecEvent, FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN,
     FileOpenEvent, FileQuarantineEvent, FileRenameEvent, FileWriteEvent, ListenPortEvent,
-    NetworkFlowEvent, User,
+    MemfdCreateEvent, NetworkFlowEvent, User,
 };
 use store::BoundedMap;
 
@@ -16,12 +16,13 @@ use crate::{
     exclusions::{
         AGENT_CHILD_EXCLUSIONS, AUTH_FAILURE_THRESHOLD, AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD,
         BEACON_WINDOW_NS, BROWSERS, BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS,
-        DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, QUARANTINE_EXEC_WINDOW_NS,
-        RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
-        RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
-        SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_THRESHOLD,
-        SELF_SPAWN_WINDOW_NS, SHELL_COMMS, STANDARD_PORTS, SUSPECT_CHILDREN_WIN,
-        SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS, WEB_SERVER_COMMS,
+        DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MEMFD_EXEC_WINDOW_NS,
+        QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX,
+        RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD,
+        SCAN_SPREAD_WINDOW_NS, SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS,
+        SELF_SPAWN_THRESHOLD, SELF_SPAWN_WINDOW_NS, SHELL_COMMS, STANDARD_PORTS,
+        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
+        WEB_SERVER_COMMS,
     },
     has_write_intent,
     sliding::{FlowPortDedup, SlidingCounter, SlidingDistinct, SlidingSum},
@@ -135,6 +136,13 @@ pub struct RuleState {
     /// [`Self::seed_ld_trust_from_system`] runs — the rule then falls back to the
     /// baseline alone, which only costs false positives on vendor directories.
     ld_trust_extra: Vec<String>,
+    /// pid → timestamp of the last `MemfdCreateEvent` seen for it (T1620, issue
+    /// #497): the evidence [`Self::check_memfd_exec`] requires before treating
+    /// an exec via `/proc/(self|<pid>)/fd/<n>` as a memfd-exec, since that path
+    /// shape alone (unlike `/dev/fd/<n>` + a `memfd:`-prefixed `comm`) is not
+    /// reliable evidence on its own — see that method's doc. LRU-bounded like
+    /// `pid_comm`, same key space.
+    recent_memfd_creates: BoundedMap<u32, u64>,
 }
 
 /// Same bound as the correlator's entity table: the realistic live-pid space.
@@ -169,6 +177,7 @@ impl RuleState {
             task_registrations: BoundedMap::new(COUNTER_CAP),
             own_pid: None,
             ld_trust_extra: Vec::new(),
+            recent_memfd_creates: BoundedMap::new(PID_COMM_CAP),
         }
     }
 
@@ -676,6 +685,7 @@ impl RuleState {
         alerts.extend(self.check_self_spawn(event));
         alerts.extend(self.check_parent_suspect(event));
         alerts.extend(self.check_lolbin(event));
+        alerts.extend(self.check_memfd_exec(event));
         alerts.extend(crate::stateless::check_ld_preload_hijack(
             event,
             &self.ld_trust_extra,
@@ -767,6 +777,84 @@ impl RuleState {
             }];
         }
         Vec::new()
+    }
+
+    /// To be called for every `MemfdCreateEvent` in the stream (Linux, issue
+    /// #265). Does not produce alerts directly — `memfd_create(2)` alone is
+    /// common in legitimate code (glibc, systemd, browser sandboxing); it's
+    /// the *exec* that's the technique, not the creation. Records the
+    /// timestamp consumed by `check_memfd_exec` as corroborating evidence for
+    /// one of its two exec shapes.
+    pub fn on_memfd_create(&mut self, event: &MemfdCreateEvent) {
+        self.recent_memfd_creates
+            .insert(event.meta.pid, event.meta.timestamp_ns);
+    }
+
+    /// T1620 — Reflective Code Loading: executing a payload that never touches
+    /// disk via `memfd_create(2)` + `execveat(fd, "", ..., AT_EMPTY_PATH)`
+    /// (issue #85's Linux scope).
+    ///
+    /// `ExecEvent::image_path` is `bprm->filename` at the kernel's
+    /// `sched_process_exec` tracepoint (`crates/sensors/linux/ebpf`, #111) —
+    /// **not** `/proc/<pid>/exe`. Traced against a live kernel (Alpine
+    /// 6.18.50, #85 review) with a memfd copy of `/bin/true`, two distinct
+    /// shapes, evidenced differently (#497 review — the first cut treated
+    /// either shape alone as sufficient, which false-positived on every
+    /// container start):
+    /// - `execveat(fd, "", AT_EMPTY_PATH)`: `bprm->filename` is `/dev/fd/<n>`,
+    ///   and the kernel names the task after the memfd dentry, so `comm`
+    ///   reliably starts with `memfd:`. The path shape plus that `comm`
+    ///   prefix together are the evidence — nothing else produces this exact
+    ///   combination.
+    /// - `execv` via `/proc/self/fd/<n>` (or `/proc/<pid>/fd/<n>`): `comm` is
+    ///   whatever the caller set, not reliably `memfd:` — the path shape
+    ///   *alone* is not evidence of a memfd. Confirmed live: `runc`'s own
+    ///   CVE-2019-5736 self-protection re-execs `runc init` via
+    ///   `/proc/self/fd/<n>` on every container start (any Docker/containerd/
+    ///   Kubernetes host), with `comm` truncated to the fd number and no
+    ///   memfd anywhere in the picture; a plain `open()` + `execveat(fd, "",
+    ///   AT_EMPTY_PATH)` of a real on-disk binary produces the same path
+    ///   shape too. This shape now requires corroborating evidence: a
+    ///   `MemfdCreateEvent` for the same pid within
+    ///   [`MEMFD_EXEC_WINDOW_NS`] — real memfd-exec creates, writes, then
+    ///   execs its own payload back-to-back in one short-lived process,
+    ///   while `runc init` and an on-disk exec via `/proc/self/fd` never
+    ///   called `memfd_create` at all. This is deliberately not a
+    ///   `parent_comm`-keyed exclusion for `runc` specifically (spoofable,
+    ///   same reasoning `check_burst_write_volume`'s doc gives for avoiding
+    ///   name-keyed exclusions) — the evidence gate handles it structurally.
+    ///
+    /// Neither shape ever produces `/memfd:<name> (deleted)` — that string is
+    /// only what `readlink /proc/<pid>/exe` shows, which the sensor doesn't
+    /// read. An earlier version of this check matched on that string and
+    /// never fired on real telemetry.
+    fn check_memfd_exec(&mut self, event: &ExecEvent) -> Option<Alert> {
+        let path = &event.image_path;
+        if is_dev_fd_path(path) {
+            if !event.meta.comm.starts_with("memfd:") {
+                return None;
+            }
+        } else if is_proc_fd_path(path) {
+            let created =
+                self.recent_memfd_creates
+                    .peek(&event.meta.pid)
+                    .is_some_and(|&created_ts| {
+                        event.meta.timestamp_ns.saturating_sub(created_ts) <= MEMFD_EXEC_WINDOW_NS
+                    });
+            if !created {
+                return None;
+            }
+        } else {
+            return None;
+        }
+        Some(Alert {
+            technique: "T1620",
+            message: format!(
+                "pid={} comm={}: executed from a file descriptor ({path}), not a real path — \
+                 no payload ever touched disk",
+                event.meta.pid, event.meta.comm,
+            ),
+        })
     }
 
     /// To be called for every `FileQuarantineEvent` in the stream (macOS ES,
@@ -1026,6 +1114,28 @@ impl RuleState {
 /// accepted over alerting on every rotation run.
 fn is_rotation_suffix(suffix: &str) -> bool {
     !suffix.bytes().any(|b| b.is_ascii_alphabetic())
+}
+
+fn is_all_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Matches `/dev/fd/<n>` — `execveat(fd, "", AT_EMPTY_PATH)`'s `bprm->filename`
+/// shape, see `check_memfd_exec`'s doc.
+fn is_dev_fd_path(path: &str) -> bool {
+    path.strip_prefix("/dev/fd/").is_some_and(is_all_digits)
+}
+
+/// Matches `/proc/self/fd/<n>` or `/proc/<pid>/fd/<n>` — exec via
+/// `/proc/self/fd` (or another pid's), see `check_memfd_exec`'s doc.
+fn is_proc_fd_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/proc/") else {
+        return false;
+    };
+    let Some((pid_or_self, fd)) = rest.split_once("/fd/") else {
+        return false;
+    };
+    (pid_or_self == "self" || is_all_digits(pid_or_self)) && is_all_digits(fd)
 }
 
 /// Whether the file at `path` is the one a process named `comm` runs from. A

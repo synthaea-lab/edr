@@ -1083,64 +1083,99 @@ fn burst_write_and_rename_does_not_realert_within_window() {
     );
 }
 
-// ── T1620 memfd fileless exec (stateless, issue #85) ───────────────────────
+// ── T1620 memfd fileless exec (stateful since #497, issue #85) ─────────────
 // Strings below are what the kernel actually emits (traced on Alpine 6.18.50
 // against a live memfd exec, #85 review) — NOT `/memfd:<name> (deleted)`, which is
 // only what `readlink /proc/<pid>/exe` shows and the sensor never reads.
 
-#[test]
-fn memfd_exec_matches_dev_fd_path() {
-    // execveat(fd, "", AT_EMPTY_PATH): bprm->filename is /dev/fd/<n>.
-    let mut event = exec_event("");
-    event.image_path = "/dev/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn memfd_exec_event(pid: u32, comm: &str, image_path: &str, timestamp_ns: u64) -> ExecEvent {
+    let mut event = exec_event_full(pid, 1, comm, "", timestamp_ns);
+    event.image_path = image_path.to_string();
+    event
 }
 
 #[test]
-fn memfd_exec_matches_proc_self_fd_path() {
-    // execv via /proc/self/fd/<n>.
-    let mut event = exec_event("");
-    event.image_path = "/proc/self/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn memfd_exec_matches_dev_fd_path_with_memfd_comm() {
+    // execveat(fd, "", AT_EMPTY_PATH): bprm->filename is /dev/fd/<n>, and the
+    // kernel names the task after the memfd dentry.
+    let event = memfd_exec_event(100, "memfd:payload", "/dev/fd/3", 0);
+    let alerts = RuleState::new().on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
 }
 
 #[test]
-fn memfd_exec_matches_proc_pid_fd_path() {
-    let mut event = exec_event("");
-    event.image_path = "/proc/12345/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn dev_fd_path_without_memfd_comm_does_not_alert() {
+    // Regression (#497): the first cut treated /dev/fd/<n> alone as
+    // sufficient — a real on-disk binary exec'd via
+    // open()+execveat(fd,"",AT_EMPTY_PATH) produces this exact path shape
+    // too, with an ordinary comm, and isn't fileless.
+    let event = memfd_exec_event(100, "busybox", "/dev/fd/3", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
-fn memfd_exec_matches_via_comm() {
-    // The execveat(AT_EMPTY_PATH) case names the task after the memfd dentry.
-    let mut event = exec_event("");
-    event.meta.comm = "memfd:payload".to_string();
-    event.image_path = "/dev/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn proc_self_fd_exec_with_prior_memfd_create_matches() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000); // 10ms later
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn proc_pid_fd_exec_with_prior_memfd_create_matches() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/100/fd/3", 10_000_000);
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn runc_style_proc_self_fd_reexec_without_memfd_create_does_not_alert() {
+    // Regression (#497, live on the lab VM): runc's own CVE-2019-5736
+    // self-protection re-execs "runc init" via /proc/self/fd/<n> on every
+    // container start — comm truncated to the fd number, parent_comm=runc,
+    // no memfd_create anywhere in the picture. `docker run --rm alpine true`
+    // x3 gave 3 false T1620 alerts before this fix.
+    let event = memfd_exec_event(200, "6", "/proc/self/fd/6", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
+}
+
+#[test]
+fn proc_fd_exec_past_the_correlation_window_does_not_alert() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", MEMFD_EXEC_WINDOW_NS + 1);
+    assert!(state.on_exec(&event).is_empty());
+}
+
+#[test]
+fn proc_fd_exec_correlates_only_its_own_pid() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(999, 0)); // a different pid
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(state.on_exec(&event).is_empty());
 }
 
 #[test]
 fn normal_exec_does_not_match_memfd() {
     let event = exec_event("/usr/bin/ls -la");
-    assert!(check_memfd_exec(&event).is_none());
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
 fn path_with_fd_in_an_unrelated_location_does_not_false_positive() {
     // Contains "/fd/" but isn't rooted at /dev or /proc — a real user path.
-    let mut event = exec_event("");
-    event.image_path = "/home/user/documents/fd/notes.txt".to_string();
-    assert!(check_memfd_exec(&event).is_none());
+    let event = memfd_exec_event(100, "notes", "/home/user/documents/fd/notes.txt", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
 fn proc_fd_path_with_non_numeric_pid_does_not_false_positive() {
-    let mut event = exec_event("");
-    event.image_path = "/proc/self/fd/notanumber".to_string();
-    assert!(check_memfd_exec(&event).is_none());
+    let event = memfd_exec_event(100, "x", "/proc/self/fd/notanumber", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }

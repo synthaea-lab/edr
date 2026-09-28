@@ -403,6 +403,13 @@ impl DetectionSink {
         self.rule_state.lock().unwrap().on_file_write(event);
     }
 
+    /// `MemfdCreate` events (Linux, issue #265): no alert on their own —
+    /// tracks per-pid memfd-creation history consumed by the memfd-exec
+    /// signal (T1620, issue #497) on a later `Exec`.
+    fn detect_memfd_create(&self, event: &schema::MemfdCreateEvent) {
+        self.rule_state.lock().unwrap().on_memfd_create(event);
+    }
+
     /// Writes one alert to the shared log and highlighted stderr. `pub(crate)`
     /// rather than private: `silence::spawn_monitor` (#71) emits a sensor-silence
     /// verdict through the exact same path as a rule/correlator/Sigma finding —
@@ -547,6 +554,7 @@ impl EventSink for DetectionSink {
             Event::FileQuarantine(e) => self.detect_file_quarantine(e),
             Event::FileRename(e) => self.detect_file_rename(e),
             Event::FileWrite(e) => self.detect_file_write(e),
+            Event::MemfdCreate(e) => self.detect_memfd_create(e),
             // New telemetry categories reach the engines as they land; until a rule
             // consumes them, logging below is the whole treatment.
             _ => {}
