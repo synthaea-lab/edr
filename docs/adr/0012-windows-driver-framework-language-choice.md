@@ -1,7 +1,7 @@
 # ADR-0012: Windows kernel driver framework — classic WDK/C for the minifilter core, not `windows-drivers-rs` yet
 
-- **Status**: proposed
-- **Date**: 2026-09-18
+- **Status**: accepted (2026-09-25, team call with Florian)
+- **Date**: 2026-09-18 (proposed), 2026-09-25 (accepted)
 
 ## Context
 
@@ -78,13 +78,12 @@ constraint on top of unfamiliar kernel APIs.
 
 ## Decision
 
-**Proposed**: build the minifilter core (#136) and kernel callbacks (#137) in
+**Accepted**: build the minifilter core (#136) and kernel callbacks (#137) in
 C against the classic WDK, following the Microsoft `fs-minifilter` sample as
 a starting skeleton, communicating with the existing Rust agent process
-through a `FltCreateCommunicationPort` connection (kernel side) /
-named-pipe-equivalent (user side) — the same boundary pattern the agent
-already uses for other IPC (see `agent/src/ipc.rs` for precedent, if it
-exists — needs confirming before implementation).
+through a `FltCreateCommunicationPort` connection (kernel side) and fltlib's
+`FilterConnectCommunicationPort` / `FilterGetMessage` (user side). This is the
+first kernel/user boundary in the codebase (see Acceptance below).
 
 Revisit `windows-drivers-rs` once it documents `FltMgr` support and drops
 the "not recommended for production" caveat — re-litigating language choice
@@ -96,10 +95,9 @@ events into `schema::Event`, rules, sinks) stays Rust, matching the pattern
 already used for `sensor-windows-etw` (Rust) attaching to a C++-surfaced ETW
 API.
 
-This is marked **proposed**, not **accepted** — same convention as ADR-0008
-before #218 formalized it. Given this breaks the repo's Rust-everywhere
-convention, it should get explicit team sign-off before code lands, not be
-decided unilaterally in a feature branch.
+Because this breaks the repo's Rust-everywhere convention, it required explicit
+team sign-off before any code lands. That sign-off was given on 2026-09-25
+(see Acceptance below).
 
 ## Consequences
 
@@ -123,16 +121,37 @@ decided unilaterally in a feature branch.
   path, but the driver won't be tamper-resistant or production-signable until
   MVI membership resolves.
 
-## Open questions for the team
+## Acceptance (2026-09-25)
 
-- Does the agent already have a kernel-mode IPC precedent to follow (device
-  ioctl, named pipe, ALPC), or does this introduce the first one?
-- Who owns WDK/driver-signing expertise on the team, or is this the first
-  person to ramp up on it? (Affects timeline — kernel driver development has
-  a real learning curve independent of language choice.)
-- Lab VM readiness: which lab machine(s) get test-signing enabled, and is
-  that acceptable given it slightly weakens the VM's own security posture
-  (test-signed drivers from anywhere can load)?
+Accepted on the 2026-09-25 team call: the minifilter core and kernel callbacks
+are written in C against the classic WDK. `windows-drivers-rs` is revisited
+under the conditions stated above.
+
+### Answers to the open questions
+
+- **Kernel-mode IPC precedent**: none. The `ipc` crate (#26) is a user-mode
+  agent/cli channel (UDS / named pipe) and is not reused. The driver introduces
+  the first kernel/user boundary: `FltCreateCommunicationPort` on the kernel
+  side, fltlib (`FilterConnectCommunicationPort`, `FilterGetMessage`) on the
+  agent side.
+- **Owners**: Nikolas and Hugo ramp up on WDK / driver signing together.
+- **Lab VMs**: one dedicated Windows 11 VM per developer, separate from the
+  demo VM (driver bugs bluescreen the machine), Secure Boot off, test-signing
+  on, a clean snapshot taken before each load. Never on a host machine.
+
+### Guardrails for the C code
+
+C in kernel mode is where a security product is most exposed, so every PR
+touching the driver follows these rules:
+
+1. **Thin kernel side.** The driver collects and forwards; no detection logic
+   and no complex parsing in kernel mode. Everything past the communication
+   port stays in Rust.
+2. **Every message from user mode is hostile.** Sizes, lengths and pointers
+   received on the communication port are validated before use.
+3. **Tooling**: SAL annotations and `/analyze`, CodeQL with Microsoft's driver
+   query suite, Driver Verifier enabled on the test VM.
+4. **Two-person review** for any PR that touches C code.
 
 ## References
 
