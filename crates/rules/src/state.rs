@@ -143,6 +143,21 @@ pub struct RuleState {
     /// reliable evidence on its own — see that method's doc. LRU-bounded like
     /// `pid_comm`, same key space.
     recent_memfd_creates: BoundedMap<u32, u64>,
+    /// pid → a `/proc/.../fd/<n>` exec seen with no corroborating
+    /// `MemfdCreateEvent` yet (#503 review): held instead of dropped, since
+    /// the creation may still arrive after the exec despite always preceding
+    /// it at the kernel's own timestamp — two ring buffers drained
+    /// independently don't guarantee delivery order. [`Self::on_memfd_create`]
+    /// checks this and fires retroactively. LRU-bounded like `pid_comm`, same
+    /// key space.
+    pending_proc_fd_exec: BoundedMap<u32, PendingProcFdExec>,
+}
+
+/// See [`RuleState::pending_proc_fd_exec`].
+struct PendingProcFdExec {
+    path: String,
+    comm: String,
+    timestamp_ns: u64,
 }
 
 /// Same bound as the correlator's entity table: the realistic live-pid space.
@@ -178,6 +193,7 @@ impl RuleState {
             own_pid: None,
             ld_trust_extra: Vec::new(),
             recent_memfd_creates: BoundedMap::new(PID_COMM_CAP),
+            pending_proc_fd_exec: BoundedMap::new(PID_COMM_CAP),
         }
     }
 
@@ -780,14 +796,32 @@ impl RuleState {
     }
 
     /// To be called for every `MemfdCreateEvent` in the stream (Linux, issue
-    /// #265). Does not produce alerts directly — `memfd_create(2)` alone is
-    /// common in legitimate code (glibc, systemd, browser sandboxing); it's
-    /// the *exec* that's the technique, not the creation. Records the
-    /// timestamp consumed by `check_memfd_exec` as corroborating evidence for
-    /// one of its two exec shapes.
-    pub fn on_memfd_create(&mut self, event: &MemfdCreateEvent) {
+    /// #265). `memfd_create(2)` alone is common in legitimate code (glibc,
+    /// systemd, browser sandboxing); it's the *exec* that's the technique, not
+    /// the creation, so this mostly just records the timestamp
+    /// `check_memfd_exec` consumes as corroborating evidence for its
+    /// `/proc/.../fd/<n>` shape.
+    ///
+    /// Can still produce an alert directly (#503 review, Nikolas): the kernel
+    /// always creates the memfd before executing it, but userspace drains the
+    /// `memfd_create` and `exec` ring buffers independently
+    /// (`crates/sensors/linux/userspace`'s `tokio::select!`), so the *exec*
+    /// event can be processed here first despite the kernel-side ordering.
+    /// `check_memfd_exec` holds that exec as [`Self::pending_proc_fd_exec`]
+    /// instead of dropping it outright; this method checks for one on every
+    /// creation and fires retroactively if it's still within
+    /// [`MEMFD_EXEC_WINDOW_NS`].
+    pub fn on_memfd_create(&mut self, event: &MemfdCreateEvent) -> Vec<Alert> {
         self.recent_memfd_creates
             .insert(event.meta.pid, event.meta.timestamp_ns);
+        if let Some(pending) = self.pending_proc_fd_exec.peek(&event.meta.pid)
+            && pending.timestamp_ns.saturating_sub(event.meta.timestamp_ns) <= MEMFD_EXEC_WINDOW_NS
+        {
+            let alert = memfd_proc_fd_exec_alert(event.meta.pid, &pending.comm, &pending.path);
+            self.pending_proc_fd_exec.remove(&event.meta.pid);
+            return vec![alert];
+        }
+        Vec::new()
     }
 
     /// T1620 — Reflective Code Loading: executing a payload that never touches
@@ -828,33 +862,61 @@ impl RuleState {
     /// only what `readlink /proc/<pid>/exe` shows, which the sensor doesn't
     /// read. An earlier version of this check matched on that string and
     /// never fired on real telemetry.
+    ///
+    /// Even with the `MemfdCreateEvent` gate, the `/proc/.../fd/<n>` shape is
+    /// correlation by pid and time, not proof that the executed fd *is* the
+    /// created memfd (#503 review, Nikolas): a process that creates a memfd
+    /// for a legitimate reason and then execs an ordinary on-disk binary
+    /// through a different, unrelated fd within the same window would still
+    /// match here. Closing that requires knowing the fd `memfd_create`
+    /// actually returned, which needs a kernel-side change this fix doesn't
+    /// make (`MemfdCreateEvent` doesn't carry it — see #505's follow-up
+    /// issue) — until then this shape's alert says exactly what was
+    /// observed (a memfd creation *and* an fd-exec close together in the same
+    /// process) rather than the stronger, unproven "no payload ever touched
+    /// disk" claim the `/dev/fd/<n>` + `memfd:` shape below can actually back.
     fn check_memfd_exec(&mut self, event: &ExecEvent) -> Option<Alert> {
         let path = &event.image_path;
         if is_dev_fd_path(path) {
             if !event.meta.comm.starts_with("memfd:") {
                 return None;
             }
-        } else if is_proc_fd_path(path) {
+            return Some(memfd_dev_fd_exec_alert(
+                event.meta.pid,
+                &event.meta.comm,
+                path,
+            ));
+        }
+        if is_proc_fd_path(path) {
             let created =
                 self.recent_memfd_creates
                     .peek(&event.meta.pid)
                     .is_some_and(|&created_ts| {
                         event.meta.timestamp_ns.saturating_sub(created_ts) <= MEMFD_EXEC_WINDOW_NS
                     });
-            if !created {
-                return None;
+            if created {
+                return Some(memfd_proc_fd_exec_alert(
+                    event.meta.pid,
+                    &event.meta.comm,
+                    path,
+                ));
             }
-        } else {
-            return None;
+            // No corroborating creation seen yet — it may still arrive after
+            // this exec (#503 review). Hold it instead of dropping it;
+            // `on_memfd_create` checks for it. One pending exec per pid, same
+            // reasoning `recent_memfd_creates` gives for tracking only the
+            // latest creation: a second `/proc/fd` exec for the same pid
+            // before the first resolves is rare enough not to warrant a list.
+            self.pending_proc_fd_exec.insert(
+                event.meta.pid,
+                PendingProcFdExec {
+                    path: path.clone(),
+                    comm: event.meta.comm.clone(),
+                    timestamp_ns: event.meta.timestamp_ns,
+                },
+            );
         }
-        Some(Alert {
-            technique: "T1620",
-            message: format!(
-                "pid={} comm={}: executed from a file descriptor ({path}), not a real path — \
-                 no payload ever touched disk",
-                event.meta.pid, event.meta.comm,
-            ),
-        })
+        None
     }
 
     /// To be called for every `FileQuarantineEvent` in the stream (macOS ES,
@@ -1105,6 +1167,33 @@ impl RuleState {
             });
         }
         None
+    }
+}
+
+/// The `/dev/fd/<n>` + `comm` starting with `memfd:` shape: structural
+/// evidence (see `check_memfd_exec`'s doc), strong enough to say the payload
+/// never touched disk.
+fn memfd_dev_fd_exec_alert(pid: u32, comm: &str, path: &str) -> Alert {
+    Alert {
+        technique: "T1620",
+        message: format!(
+            "pid={pid} comm={comm}: executed from a file descriptor ({path}), not a real \
+             path — no payload ever touched disk",
+        ),
+    }
+}
+
+/// The `/proc/.../fd/<n>` shape, corroborated only by a same-pid
+/// `MemfdCreateEvent` within the window (see `check_memfd_exec`'s doc for why
+/// that's timing correlation, not proof the executed fd is the created one).
+fn memfd_proc_fd_exec_alert(pid: u32, comm: &str, path: &str) -> Alert {
+    Alert {
+        technique: "T1620",
+        message: format!(
+            "pid={pid} comm={comm}: executed from a file descriptor ({path}) shortly after \
+             this process created a memfd — consistent with a memfd-exec payload that never \
+             touched disk, not confirmed to be the same file descriptor",
+        ),
     }
 }
 

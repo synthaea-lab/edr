@@ -1179,3 +1179,68 @@ fn proc_fd_path_with_non_numeric_pid_does_not_false_positive() {
     let event = memfd_exec_event(100, "x", "/proc/self/fd/notanumber", 0);
     assert!(RuleState::new().on_exec(&event).is_empty());
 }
+
+#[test]
+fn memfd_create_arriving_after_a_pending_proc_fd_exec_alerts_retroactively() {
+    // Regression (#503 review, Nikolas): the kernel always creates the memfd
+    // before executing it, but userspace drains the two ring buffers
+    // independently, so the exec event can be processed here first. The exec
+    // must not be silently dropped just because its evidence hasn't arrived
+    // yet.
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(
+        state.on_exec(&exec).is_empty(),
+        "no corroborating evidence yet — held, not alerted, and not dropped"
+    );
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 0)); // "before" the exec, kernel-time
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the held exec must alert once its evidence arrives, even though \
+         the exec was processed first"
+    );
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn memfd_create_outside_the_window_does_not_retroactively_alert() {
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", MEMFD_EXEC_WINDOW_NS + 1);
+    assert!(state.on_exec(&exec).is_empty());
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 0));
+    assert!(
+        alerts.is_empty(),
+        "a creation more than MEMFD_EXEC_WINDOW_NS before the held exec \
+         must not retroactively alert"
+    );
+}
+
+#[test]
+fn pending_proc_fd_exec_is_consumed_and_does_not_double_alert() {
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(state.on_exec(&exec).is_empty());
+    let first = state.on_memfd_create(&memfd_create_event_full(100, 0));
+    assert_eq!(first.len(), 1);
+    // A second creation for the same pid must not re-match the same
+    // already-consumed pending exec.
+    let second = state.on_memfd_create(&memfd_create_event_full(100, 5_000_000));
+    assert!(second.is_empty());
+}
+
+#[test]
+fn proc_fd_shape_alert_does_not_overclaim_the_dev_fd_shapes_disk_free_evidence() {
+    // #503 review: the /proc/fd shape is pid+time correlation, not proof the
+    // executed fd is the created memfd — the message must not claim more
+    // than that.
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        !alerts[0].message.contains("no payload ever touched disk"),
+        "the /proc/fd shape can't back that claim, unlike /dev/fd + memfd: comm"
+    );
+}

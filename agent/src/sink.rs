@@ -403,11 +403,17 @@ impl DetectionSink {
         self.rule_state.lock().unwrap().on_file_write(event);
     }
 
-    /// `MemfdCreate` events (Linux, issue #265): no alert on their own —
+    /// `MemfdCreate` events (Linux, issue #265): usually no alert on its own —
     /// tracks per-pid memfd-creation history consumed by the memfd-exec
-    /// signal (T1620, issue #497) on a later `Exec`.
+    /// signal (T1620, issue #497) on a later `Exec`. Can still emit directly
+    /// when a matching `/proc/.../fd/<n>` exec was already seen and is
+    /// waiting on this corroborating evidence (#503 review: the two ring
+    /// buffers can deliver out of order even though the kernel always
+    /// creates the memfd before executing it).
     fn detect_memfd_create(&self, event: &schema::MemfdCreateEvent) {
-        self.rule_state.lock().unwrap().on_memfd_create(event);
+        for alert in self.rule_state.lock().unwrap().on_memfd_create(event) {
+            self.emit(alert.technique, &alert.message);
+        }
     }
 
     /// Writes one alert to the shared log and highlighted stderr. `pub(crate)`
