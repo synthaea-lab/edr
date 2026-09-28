@@ -1120,6 +1120,34 @@ fn burst_write_and_rename_excludes_package_manager_temp_rename() {
 }
 
 #[test]
+fn burst_write_and_rename_still_fires_for_the_dpkg_new_shape_under_a_non_package_manager_comm() {
+    // Regression for #500 (Nikolas's review): the filename convention alone
+    // used to be a free pass — an encryptor naming its own staging files
+    // `<target>.dpkg-new` and renaming onto `<target>` cleared this rule
+    // exactly like a real package manager would. `comm` must also actually
+    // be a package manager now.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7107, "evil", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7107,
+            "evil",
+            &format!("/home/u/doc{i}.docx.dpkg-new"),
+            &format!("/home/u/doc{i}.docx"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the .dpkg-new naming convention alone must not suppress the alert \
+         when comm isn't a real package manager"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
 fn burst_write_and_rename_does_not_realert_within_window() {
     let mut state = RuleState::new();
     state.on_file_write(&file_write_event_full(7104, "evil", 60 * 1024 * 1024, 0));

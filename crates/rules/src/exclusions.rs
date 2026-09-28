@@ -126,6 +126,22 @@ pub(crate) const RANSOMWARE_EXCLUDED_PATH_PREFIXES: &[&str] = &["/tmp/", "/var/t
 /// capture shows the actual shape.
 pub(crate) const PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES: &[&str] = &[".dpkg-new", ".apk-new"];
 
+/// `comm` values a real Debian/Alpine package manager runs the staging-rename
+/// dance under. Required *alongside* [`PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES`]
+/// before `check_burst_write_volume` excludes a burst (#500 review, Nikolas):
+/// the suffix convention alone is just a filename shape the process being
+/// renamed-and-written controls — a real encryptor can name its own staging
+/// file `target.dpkg-new` then rename onto `target` purely to dodge this
+/// signal. `comm` is spoofable too (`prctl`/`argv[0]`), so this doesn't make
+/// the exclusion unspoofable — it raises the bar from "match one filename
+/// convention" to "also make the process look like the exact package manager
+/// that convention belongs to", which is what corroboration means here, not
+/// a claim of unforgeability. `dpkg-deb`/`apt`/`apt-get` shell out to `dpkg`
+/// for the actual file replacement, so `dpkg` alone already covers Debian;
+/// listed anyway since callers observing themselves is cheaper than the debate
+/// over whether they always do.
+pub(crate) const PACKAGE_MANAGER_COMMS: &[&str] = &["dpkg", "dpkg-deb", "apt", "apt-get", "apk"];
+
 /// Pairing window for one scheduled-task registration seen on both Security 4698
 /// and TaskScheduler/Operational 106 (#422, T1053.005). The two are normalized by
 /// separate poll threads, each on a 2s cadence, so their timestamps land a few

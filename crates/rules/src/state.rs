@@ -17,7 +17,7 @@ use crate::{
         AGENT_CHILD_EXCLUSIONS, AUTH_FAILURE_THRESHOLD, AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD,
         BEACON_WINDOW_NS, BROWSERS, BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS,
         DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MEMFD_EXEC_WINDOW_NS,
-        PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, QUARANTINE_EXEC_WINDOW_NS,
+        PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, QUARANTINE_EXEC_WINDOW_NS,
         RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
         RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
         SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_THRESHOLD,
@@ -1153,14 +1153,19 @@ impl RuleState {
     /// carry no executable path (same gap `check_mass_rename_pattern`'s doc
     /// describes, tracked in #459), so a `comm`-only exclusion would be spoofable.
     /// `RANSOMWARE_EXCLUDED_PATH_PREFIXES` is path-based, not name-based, and stays.
-    /// [`is_package_manager_temp_rename`] is shape-based (#496): a package
-    /// manager staging heavy writes under `foo.dpkg-new` then renaming it onto
-    /// `foo` previously cleared both gates below and false-positived T1486.
+    /// [`is_package_manager_temp_rename`] requires both the filename shape and
+    /// `comm` to match a known package manager (#496, hardened per #500
+    /// review): the shape alone — staging heavy writes under `foo.dpkg-new`
+    /// then renaming it onto `foo` — previously cleared both gates below and
+    /// false-positived T1486, but the shape by itself is just a naming
+    /// convention the renaming process controls; requiring `comm` too raises
+    /// the bar to also impersonating the specific package manager it belongs
+    /// to, not just picking a suffix.
     fn check_burst_write_volume(&mut self, event: &FileRenameEvent) -> Option<Alert> {
         if RANSOMWARE_EXCLUDED_PATH_PREFIXES
             .iter()
             .any(|prefix| event.new_path.starts_with(prefix))
-            || is_package_manager_temp_rename(&event.old_path, &event.new_path)
+            || is_package_manager_temp_rename(&event.old_path, &event.new_path, &event.meta.comm)
         {
             return None;
         }
@@ -1253,15 +1258,18 @@ fn is_proc_fd_path(path: &str) -> bool {
 }
 
 /// True when `old_path` is `new_path` with one of
-/// [`PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES`] appended — the package-manager
-/// "stage under a temp name, then rename over the real one" shape
-/// `check_burst_write_volume` excludes (#496). The reverse relationship from
-/// [`is_rotation_suffix`]'s callers (`new_path` = `old_path` + suffix): here
-/// the suffix is on the *old* name.
-fn is_package_manager_temp_rename(old_path: &str, new_path: &str) -> bool {
-    old_path
-        .strip_prefix(new_path)
-        .is_some_and(|suffix| PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES.contains(&suffix))
+/// [`PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES`] appended *and* `comm` is one of
+/// [`PACKAGE_MANAGER_COMMS`] — the package-manager "stage under a temp name,
+/// then rename over the real one" shape `check_burst_write_volume` excludes
+/// (#496), corroborated by which process is doing it (#500 review) so the
+/// filename convention alone isn't a free pass. The path relationship is the
+/// reverse of [`is_rotation_suffix`]'s callers (`new_path` = `old_path` +
+/// suffix): here the suffix is on the *old* name.
+fn is_package_manager_temp_rename(old_path: &str, new_path: &str, comm: &str) -> bool {
+    PACKAGE_MANAGER_COMMS.contains(&comm)
+        && old_path
+            .strip_prefix(new_path)
+            .is_some_and(|suffix| PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES.contains(&suffix))
 }
 
 /// Whether the file at `path` is the one a process named `comm` runs from. A

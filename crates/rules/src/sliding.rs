@@ -71,7 +71,17 @@ const FLOW_PORT_DEDUP_CAP: usize = 256;
 /// write-volume corroboration check (issue #82) to track write volume per pid.
 #[derive(Default)]
 pub(crate) struct SlidingSum {
-    entries: VecDeque<(u64, u64)>,
+    /// `(slot_start, slot_end, value)`. `slot_start` never changes once a slot
+    /// exists — it's what a *new* write compares against to decide whether it
+    /// still belongs in this slot (bounds slot width to
+    /// [`SLIDING_SUM_SLOT_NS`]). `slot_end` is the timestamp of the most
+    /// recent write coalesced into the slot — what [`SlidingSum::prune`]
+    /// compares against, so a slot expires based on how long ago it was last
+    /// written to, not how long ago it was first opened. Reviewed by Nikolas
+    /// on #500: pruning against `slot_start` evicted a slot's bytes up to
+    /// [`SLIDING_SUM_SLOT_NS`] before they were actually `window_ns` old,
+    /// undercounting a burst right at the window boundary.
+    entries: VecDeque<(u64, u64, u64)>,
     total: u64,
 }
 
@@ -101,14 +111,16 @@ const SLIDING_SUM_CAP: usize = 256;
 const SLIDING_SUM_SLOT_NS: u64 = 200_000_000; // 200ms
 
 impl SlidingSum {
-    /// Drops entries older than `window_ns` relative to `ts`, keeping `total` in sync.
+    /// Drops entries older than `window_ns` relative to `ts`, keeping `total` in
+    /// sync. Compares against each slot's *last* write (`slot_end`), not its
+    /// first (`slot_start`) — see the field doc for why that distinction matters.
     fn prune(&mut self, ts: u64, window_ns: u64) {
         while self
             .entries
             .front()
-            .is_some_and(|&(t, _)| ts.saturating_sub(t) > window_ns)
+            .is_some_and(|&(_, end, _)| ts.saturating_sub(end) > window_ns)
         {
-            if let Some((_, v)) = self.entries.pop_front() {
+            if let Some((_, _, v)) = self.entries.pop_front() {
                 self.total = self.total.saturating_sub(v);
             }
         }
@@ -120,16 +132,17 @@ impl SlidingSum {
     pub(crate) fn add(&mut self, ts: u64, value: u64, window_ns: u64) -> u64 {
         self.prune(ts, window_ns);
         match self.entries.back_mut() {
-            Some((slot_start, slot_total))
+            Some((slot_start, slot_end, slot_total))
                 if ts.saturating_sub(*slot_start) < SLIDING_SUM_SLOT_NS =>
             {
+                *slot_end = ts.max(*slot_end);
                 *slot_total = slot_total.saturating_add(value);
             }
-            _ => self.entries.push_back((ts, value)),
+            _ => self.entries.push_back((ts, ts, value)),
         }
         self.total = self.total.saturating_add(value);
         if self.entries.len() > SLIDING_SUM_CAP
-            && let Some((_, v)) = self.entries.pop_front()
+            && let Some((_, _, v)) = self.entries.pop_front()
         {
             self.total = self.total.saturating_sub(v);
         }
@@ -236,7 +249,7 @@ impl<T: PartialEq> SlidingDistinct<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::SlidingDistinct;
+    use super::{SlidingDistinct, SlidingSum};
 
     #[test]
     fn counts_distinct_values_only() {
@@ -259,5 +272,49 @@ mod tests {
         // Past the window relative to "a" and "b" — both should be pruned,
         // leaving only the new value.
         assert_eq!(counter.record("c", 20_000_000_000, 10_000_000_000), 1);
+    }
+
+    const WINDOW_NS: u64 = 5_000_000_000; // matches RANSOMWARE_RENAME_WINDOW_NS
+
+    #[test]
+    fn coalesced_slot_expires_from_its_last_write_not_its_first() {
+        // Regression for #500 (Nikolas's review of #496's fix): the slot's
+        // stored timestamp used to be the *first* write's, so `prune` evicted
+        // the whole slot — including bytes from writes coalesced in later,
+        // right up to SLIDING_SUM_SLOT_NS after that first write — as soon as
+        // that first timestamp alone crossed `window_ns`, up to
+        // SLIDING_SUM_SLOT_NS (200ms) before those later bytes were actually
+        // `window_ns` old. A large write opens the slot at t=0; a second,
+        // tiny write 190ms later coalesces into the same slot (190ms <
+        // 200ms), moving its *last* write to t=190ms.
+        let mut sum = SlidingSum::default();
+        sum.add(0, 100 * 1024 * 1024, WINDOW_NS);
+        sum.add(190_000_000, 1, WINDOW_NS);
+
+        // 5.1s after the slot opened, but only 4.91s after it was last
+        // written to — still within the window relative to the slot's real
+        // recency. The old code pruned on the first write's age (5.1s > 5s)
+        // and evicted the whole 100MB+1 here; the fix prunes on the last
+        // write's age (4.91s <= 5s) and keeps it.
+        let total = sum.total(5_100_000_000, WINDOW_NS);
+        assert_eq!(
+            total,
+            100 * 1024 * 1024 + 1,
+            "bytes coalesced into a slot must survive until the slot's last \
+             write, not its first, is window_ns old"
+        );
+    }
+
+    #[test]
+    fn slot_still_expires_once_even_its_last_write_is_outside_the_window() {
+        // The other half: once the slot's last write really is older than
+        // window_ns, it must still expire — this isn't a license to retain
+        // forever.
+        let mut sum = SlidingSum::default();
+        sum.add(0, 100 * 1024 * 1024, WINDOW_NS);
+        sum.add(190_000_000, 1, WINDOW_NS);
+
+        let total = sum.total(190_000_000 + WINDOW_NS + 1, WINDOW_NS);
+        assert_eq!(total, 0, "a slot outside the window must still be pruned");
     }
 }
