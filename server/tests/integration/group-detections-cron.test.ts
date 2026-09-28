@@ -9,6 +9,12 @@ import {
 } from "../helpers/db";
 import { GROUPING_BATCH_SIZE } from "@/lib/case-grouping";
 import { GET } from "@/app/api/cron/group-detections/route";
+// The route imports its own `prisma` singleton from "@/lib/prisma" — a
+// different PrismaClient instance than the one `../helpers/db` constructs
+// for test setup/assertions (review, Jihair54: spying on the wrong instance
+// meant the mock below was never actually hit). Aliased so it's obvious at
+// each call site which one a given line means.
+import { prisma as routePrisma } from "@/lib/prisma";
 
 function cronRequest() {
   return new NextRequest("http://localhost/api/cron/group-detections", {
@@ -284,18 +290,20 @@ describe("GET /api/cron/group-detections", () => {
     await createTestDetection(tenantA.id, agentA.id, { technique: "T1059.001" });
     await createTestDetection(tenantB.id, agentB.id, { technique: "T1059.001" });
 
-    const realTransaction = prisma.$transaction.bind(prisma);
-    vi.spyOn(prisma, "$transaction")
+    const realTransaction = routePrisma.$transaction.bind(routePrisma);
+    vi.spyOn(routePrisma, "$transaction")
       .mockImplementationOnce(() => {
         throw new Error("simulated transaction failure (e.g. a real timeout)");
       })
       // Every call after the first (one-time) override goes through untouched.
-      .mockImplementation(realTransaction as typeof prisma.$transaction);
+      .mockImplementation(realTransaction as typeof routePrisma.$transaction);
 
     const res = await GET(cronRequest());
     const body = await res.json();
 
-    expect(res.status).toBe(200);
+    // One of two tenants failed: a partial failure, not a total outage —
+    // 207, not 200 (a caller checking only for 2xx must still see this).
+    expect(res.status).toBe(207);
     expect(body.tenantsChecked).toBe(2);
     expect(body.tenantsFailed).toBe(1);
 
@@ -309,6 +317,34 @@ describe("GET /api/cron/group-detections", () => {
     // transaction threw and was caught, but the loop still reached and
     // completed the remaining tenant instead of aborting the whole request.
     expect(groupedA + groupedB).toBe(1);
+  });
+
+  it("answers a non-2xx when every tenant fails, instead of a silent 200", async () => {
+    // Regression (review, Jihair54): the lock-cast bug made every tenant's
+    // transaction throw on every tick, and this route still answered 200
+    // with detectionsGrouped: 0 -- indistinguishable from "nothing to do",
+    // so nothing a scheduler or monitor would ever notice. A total failure
+    // must surface as a non-2xx.
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await createTestDetection(tenant.id, agent.id, { technique: "T1059.001" });
+
+    vi.spyOn(routePrisma, "$transaction").mockImplementation(() => {
+      throw new Error("simulated total outage (e.g. the lock-cast bug)");
+    });
+
+    const res = await GET(cronRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(502);
+    expect(body.tenantsChecked).toBe(1);
+    expect(body.tenantsFailed).toBe(1);
+    expect(body.detectionsGrouped).toBe(0);
+
+    const grouped = await prisma.detection.count({
+      where: { tenantId: tenant.id, caseId: { not: null } },
+    });
+    expect(grouped).toBe(0);
   });
 
   it("rejects the call when CRON_SECRET is unset", async () => {

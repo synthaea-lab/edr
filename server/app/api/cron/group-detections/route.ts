@@ -63,10 +63,16 @@ type TenantGroupingResult =
  * (backlog possibly larger than one batch) without an extra count query.
  *
  * Authentication: Bearer token (CRON_SECRET)
- * Response: { tenantsChecked, tenantsSkipped, tenantsFailed, casesCreated,
- *   detectionsGrouped, moreWorkLikely } — `tenantsSkipped` counts tenants
- *   another invocation already held the lock for; `tenantsFailed` counts
- *   tenants whose transaction threw. Neither is a whole-request skip.
+ * Response body: { tenantsChecked, tenantsSkipped, tenantsFailed,
+ *   casesCreated, detectionsGrouped, moreWorkLikely[, error] } —
+ *   `tenantsSkipped` counts tenants another invocation already held the lock
+ *   for; `tenantsFailed` counts tenants whose transaction threw. Neither is a
+ *   whole-request skip. Status: 200 when every checked tenant either
+ *   succeeded or was only skipped; 207 when some (not all) tenants failed —
+ *   a partial failure, still visible to a caller that only checks for 2xx;
+ *   502 when every checked tenant failed (review, Jihair54 — this used to
+ *   silently answer 200 with `detectionsGrouped: 0`, indistinguishable from
+ *   "nothing to do").
  */
 export async function GET(req: NextRequest) {
   try {
@@ -110,14 +116,36 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({
+    const body = {
       tenantsChecked: tenants.length,
       tenantsSkipped,
       tenantsFailed,
       casesCreated,
       detectionsGrouped,
       moreWorkLikely,
-    });
+    };
+
+    // A failure must be visible, not only counted in the body (review,
+    // Jihair54): the lock-cast bug above made every tenant fail on every
+    // tick, and this route still answered 200 with detectionsGrouped: 0 —
+    // nothing a scheduler or monitor would ever notice. 207 (Multi-Status)
+    // for a partial failure — some tenants still made progress, this is not
+    // a full outage; 502 when every checked tenant failed, since nothing at
+    // all happened and the caller should treat this run as not having run.
+    if (tenants.length > 0 && tenantsFailed === tenants.length) {
+      console.error(
+        `Detection grouping: every tenant failed (${tenantsFailed}/${tenants.length})`
+      );
+      return NextResponse.json({ ...body, error: "All tenants failed" }, { status: 502 });
+    }
+    if (tenantsFailed > 0) {
+      console.error(
+        `Detection grouping: ${tenantsFailed}/${tenants.length} tenants failed`
+      );
+      return NextResponse.json({ ...body, error: "Some tenants failed" }, { status: 207 });
+    }
+
+    return NextResponse.json(body);
   } catch (error) {
     console.error("Detection grouping error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -130,8 +158,14 @@ async function groupOneTenant(
   tx: Prisma.TransactionClient,
   tenantId: string
 ): Promise<TenantGroupingResult> {
+  // Explicit ::int cast (review, Jihair54): Prisma binds a plain JS number as
+  // bigint, but the two-argument pg_try_advisory_xact_lock only exists as
+  // (int4, int4) — without the cast, this throws 42883 "function ... does
+  // not exist" on every call, so every tenant's transaction failed and
+  // nothing was ever grouped (masked because the whole route still answered
+  // 200 — see the tenantsFailed handling in GET, below).
   const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
-    SELECT pg_try_advisory_xact_lock(${GROUPING_LOCK_KEY}, hashtext(${tenantId})) AS locked
+    SELECT pg_try_advisory_xact_lock(${GROUPING_LOCK_KEY}::int, hashtext(${tenantId})) AS locked
   `;
   if (!lockRows[0]?.locked) {
     return { skipped: true };
