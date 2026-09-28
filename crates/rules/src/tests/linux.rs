@@ -196,13 +196,28 @@ fn ld_preload_from_a_seeded_ld_so_conf_dir_does_not_alert() {
     assert!(!fired(&mut seeded));
 }
 
-// ── T1037.004 / T1053.003 persistence writes ────────────────────────────────
+// ── Persistence writes, tagged per-pattern (issue #495) ─────────────────────
 
 #[test]
 fn write_to_bashrc_matches_persistence() {
     // O_WRONLY|O_CREAT|O_TRUNC, values observed in real conditions (touch(1)).
     let event = file_open_event("/home/app/.bashrc", 577);
-    assert!(check_persistence_write(&event).is_some());
+    let alert = check_persistence_write(&event).unwrap();
+    assert_eq!(alert.technique, "T1546.004");
+}
+
+#[test]
+fn write_to_profile_d_matches_persistence() {
+    let event = file_open_event("/etc/profile.d/evil.sh", O_WRONLY | O_CREAT);
+    let alert = check_persistence_write(&event).unwrap();
+    assert_eq!(alert.technique, "T1546.004");
+}
+
+#[test]
+fn write_to_cron_d_matches_persistence() {
+    let event = file_open_event("/etc/cron.d/evil", O_WRONLY | O_CREAT);
+    let alert = check_persistence_write(&event).unwrap();
+    assert_eq!(alert.technique, "T1053.003");
 }
 
 #[test]
@@ -222,7 +237,8 @@ fn write_outside_persistence_paths_does_not_alert() {
 #[test]
 fn write_to_systemd_unit_matches_persistence() {
     let event = file_open_event("/etc/systemd/system/evil.service", O_WRONLY | O_CREAT);
-    assert!(check_persistence_write(&event).is_some());
+    let alert = check_persistence_write(&event).unwrap();
+    assert_eq!(alert.technique, "T1543.002");
 }
 
 #[test]

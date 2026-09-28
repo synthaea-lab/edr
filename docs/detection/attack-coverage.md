@@ -26,10 +26,12 @@ dedicated content · 📋 waits on a filed issue (telemetry or content) ·
 **W**indows / **M**acos where coverage differs.
 
 Engine tags as of this assessment (from `rules`/`correlator` source):
-T1021.002, T1036.005, T1037.004, T1041, T1048.003, T1053.003/.005, T1055,
+T1021.002, T1036.005, T1041, T1048.003, T1053.003/.005, T1055,
 T1059 (+.001/.004), T1070.001/.002, T1071 (+.004), T1105, T1110, T1127, T1136.001,
-T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
-own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
+T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1546.004, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
+own tags (pipeline: #73); YARA/intel content is #60/#82 territory. (T1037.004
+dropped from this list, issue #495: the rule that used to claim it doesn't
+actually detect an RC-script write — see the T1546 row below.)
 
 ## Initial Access (TA0001)
 
@@ -58,7 +60,7 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | T1547 Boot/Logon Autostart | 🟡 | 🟢 | 🟢 | Run-key writes visible+rule'd (W), login items (.015, M); Linux rc-path patterns |
 | T1053 Scheduled Task | 🟢 | 🟢 | 🟡 | as above |
 | T1136 Create Account | 📋 | 🟢 | 📋 | 4720 (W) live; Linux useradd content work; macOS OD events #356 |
-| T1546 Event-Triggered Execution | 🟡 | 🟡 | 🟡 | WMI subscriptions (W, via inventory #286-adjacent), shell-rc writes (L/M patterns partial) — pack below |
+| T1546 Event-Triggered Execution | 🟢 | 🟡 | 🟡 | Shell-rc writes now tagged T1546.004 (L, `check_persistence_write`, issue #495); WMI subscriptions (W, via inventory #286-adjacent); macOS `.zshrc` pattern still on the unconfirmed placeholder pending #495's per-pattern follow-up |
 | T1574 Hijack Execution Flow | 🟢 | 🟡 | 🟡 | LD_PRELOAD/LD_AUDIT capture + trust-set rule #363 (L, lab: `ld-preload-hijack.sh`); DLL side-load visible via image loads (W); dylib content work (M) |
 
 ## Privilege Escalation (TA0004)

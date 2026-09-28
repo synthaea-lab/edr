@@ -3,13 +3,15 @@ platform: linux
 script: persistence-write.sh
 simulates: >
   A write-intent open to a known shell-profile persistence path (~/.bashrc) —
-  T1037.004, Boot or Logon Initialization Scripts. One of the oldest, plainest Linux
-  malware persistence moves: appending a line to a shell profile needs no special
-  privilege beyond what the compromised user already has, and survives every new
-  interactive shell. The scenario appends a clearly marked, harmless comment line,
-  never sourced as a command, and removes it again in cleanup.
+  T1546.004, Event Triggered Execution: Unix Shell Configuration Modification (issue
+  #495; previously mistagged T1037.004/T1053.003, neither of which this path
+  actually is — see check_persistence_write's doc). One of the oldest, plainest
+  Linux malware persistence moves: appending a line to a shell profile needs no
+  special privilege beyond what the compromised user already has, and survives
+  every new interactive shell. The scenario appends a clearly marked, harmless
+  comment line, never sourced as a command, and removes it again in cleanup.
 expected_detections:
-  - technique: "T1037.004/T1053.003"
+  - technique: "T1546.004"
     rule: check_persistence_write   # crates/rules/src/stateless.rs —
                                      # PERSISTENCE_PATH_PATTERNS substring match on
                                      # .bashrc, gated on has_write_intent(flags)

@@ -79,24 +79,45 @@ pub(crate) fn check_encoded_powershell(event: &ExecEvent) -> Option<Alert> {
     }
 }
 
-/// T1037.004 (Boot or Logon Initialization Scripts) / T1053.003 (Cron) — write to a
-/// known persistence path. List deliberately restricted to the threat-model examples,
-/// not exhaustive coverage of Linux persistence mechanisms. Per-platform path sets are
-/// follow-up scope (Windows persistence arrives with registry telemetry, M3).
-const PERSISTENCE_PATH_PATTERNS: &[&str] = &[
-    ".bashrc",
-    "/etc/profile.d/",
-    "/etc/cron.d/",
-    "/etc/systemd/system/",
+/// T1546.004 — Event Triggered Execution: Unix Shell Configuration Modification.
+const SHELL_CONFIG_MODIFICATION: &str = "T1546.004";
+/// T1053.003 — Scheduled Task/Job: Cron.
+const CRON_JOB: &str = "T1053.003";
+/// T1543.002 — Create or Modify System Process: Systemd Service.
+const SYSTEMD_SERVICE: &str = "T1543.002";
+/// Placeholder for the macOS patterns below, pending confirmation of their
+/// real per-pattern ATT&CK ids (issue #495: none of these were reassessed —
+/// only the original Linux set, #41 — so the old combined tag stays until
+/// someone does). **Not** an accurate technique on its own: T1037.004 is
+/// specifically RC scripts (`/etc/rc.local`, `/etc/rc.common`), and none of
+/// the patterns below is one — this is a known-wrong placeholder, not a real
+/// tag, kept only so these patterns still alert while unconfirmed rather
+/// than going silent.
+const UNCONFIRMED_MACOS_PERSISTENCE: &str = "T1037.004/T1053.003";
+
+/// Write to a known persistence path — paired with the ATT&CK id each
+/// pattern actually is (issue #495: the first cut tagged every entry with
+/// the same combined `T1037.004/T1053.003` string regardless of which
+/// pattern matched, the same class of bug as #424's Windows log-clearing
+/// mistag, fixed there the same way). List deliberately restricted to the
+/// threat-model examples, not exhaustive coverage of Linux persistence
+/// mechanisms. Per-platform path sets are follow-up scope (Windows
+/// persistence arrives with registry telemetry, M3).
+const PERSISTENCE_PATH_PATTERNS: &[(&str, &str)] = &[
+    (SHELL_CONFIG_MODIFICATION, ".bashrc"),
+    (SHELL_CONFIG_MODIFICATION, "/etc/profile.d/"),
+    (CRON_JOB, "/etc/cron.d/"),
+    (SYSTEMD_SERVICE, "/etc/systemd/system/"),
     // macOS (issue #32): substring match deliberately catches the per-user
     // (`~/Library/...`) and system (`/Library/...`) launchd directories alike.
-    "/Library/LaunchAgents/",
-    "/Library/LaunchDaemons/",
-    ".zshrc",
-    "/etc/periodic/",
+    // Left tagged with the unconfirmed placeholder above — see its doc.
+    (UNCONFIRMED_MACOS_PERSISTENCE, "/Library/LaunchAgents/"),
+    (UNCONFIRMED_MACOS_PERSISTENCE, "/Library/LaunchDaemons/"),
+    (UNCONFIRMED_MACOS_PERSISTENCE, ".zshrc"),
+    (UNCONFIRMED_MACOS_PERSISTENCE, "/etc/periodic/"),
     // at(1) jobs — rare on modern macOS, which is exactly why a write there
     // is signal.
-    "/var/at/tabs/",
+    (UNCONFIRMED_MACOS_PERSISTENCE, "/var/at/tabs/"),
 ];
 
 /// A path captured by the `open` collector can be relative to an unresolved `dfd`
@@ -105,16 +126,16 @@ const PERSISTENCE_PATH_PATTERNS: &[&str] = &[
 #[must_use]
 pub(crate) fn check_persistence_write(event: &FileOpenEvent) -> Option<Alert> {
     let path = &event.path;
-    let matched_pattern = PERSISTENCE_PATH_PATTERNS
+    let &(technique, matched_pattern) = PERSISTENCE_PATH_PATTERNS
         .iter()
-        .find(|pattern| path.contains(*pattern))?;
+        .find(|(_, pattern)| path.contains(*pattern))?;
 
     if !has_write_intent(event.flags) {
         return None;
     }
 
     Some(Alert {
-        technique: "T1037.004/T1053.003",
+        technique,
         message: format!(
             "pid={} comm={}: write to a known persistence path ({matched_pattern}): {path}",
             event.meta.pid, event.meta.comm,
