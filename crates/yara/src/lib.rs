@@ -42,14 +42,19 @@ pub enum YaraError {
 /// missing them is a hard load-time error, not a silently-unused YAML/text block.
 struct RuleMetadata {
     severity: Severity,
+    /// ATT&CK technique id (`T1234` or `T1234.001`), issue #74. Already validated at
+    /// extraction time by [`extract_metadata`] — #73 checked its format and then
+    /// discarded it; this keeps it instead of re-deriving it later.
+    technique: String,
 }
 
-/// One YARA match, with the metadata required by issue #73 attached — the scanner
-/// no longer hands back a bare rule identifier only.
+/// One YARA match, with the metadata required by issues #73/#74 attached — the
+/// scanner no longer hands back a bare rule identifier only.
 #[derive(Debug, Clone)]
 pub struct YaraMatch {
     pub identifier: String,
     pub severity: Severity,
+    pub technique: String,
 }
 
 /// Compiled rule set, ready to scan. Compile once, scan many.
@@ -186,13 +191,13 @@ impl RuleSet {
                 // `rules.iter()` pass in `from_compiled` — this is defensive, not
                 // expected to ever fall back, kept panic-free because scanning runs
                 // on attacker-influenced file content.
-                let severity = self
-                    .metadata
-                    .get(&identifier)
-                    .map_or(Severity::Low, |m| m.severity);
+                let found = self.metadata.get(&identifier);
+                let severity = found.map_or(Severity::Low, |m| m.severity);
+                let technique = found.map_or_else(String::new, |m| m.technique.clone());
                 YaraMatch {
                     identifier,
                     severity,
+                    technique,
                 }
             })
             .collect())
@@ -225,8 +230,8 @@ fn extract_metadata(rule: &yara_x::Rule) -> Result<RuleMetadata, YaraError> {
         )
     })?;
 
-    match technique {
-        Some(t) if is_technique(t) => {}
+    let technique = match technique {
+        Some(t) if is_technique(t) => t.to_string(),
         Some(t) => {
             return Err(missing_metadata(
                 rule.identifier(),
@@ -239,7 +244,7 @@ fn extract_metadata(rule: &yara_x::Rule) -> Result<RuleMetadata, YaraError> {
                 "missing `technique` meta".to_string(),
             ));
         }
-    }
+    };
 
     match falsepositives {
         Some(fp) if !fp.trim().is_empty() => {}
@@ -251,7 +256,10 @@ fn extract_metadata(rule: &yara_x::Rule) -> Result<RuleMetadata, YaraError> {
         }
     }
 
-    Ok(RuleMetadata { severity })
+    Ok(RuleMetadata {
+        severity,
+        technique,
+    })
 }
 
 fn parse_severity(s: &str) -> Option<Severity> {
@@ -328,6 +336,7 @@ rule test_marker {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].identifier, "test_marker");
         assert_eq!(hits[0].severity, Severity::High);
+        assert_eq!(hits[0].technique, "T1105");
         assert!(rules.scan_file(&miss).unwrap().is_empty());
     }
 

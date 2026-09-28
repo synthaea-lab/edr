@@ -77,4 +77,8 @@ pub struct SigmaAlert {
     pub tags: Vec<String>,
     pub description: String,
     pub severity: Severity,
+    /// ATT&CK technique ids (`T1234`, `T1234.001`) extracted from `tags`, normalized
+    /// to bare uppercase form — issue #74. `tags` keeps the full raw list (tactic
+    /// tags included); this is the filtered, structured subset of it.
+    pub techniques: Vec<String>,
 }

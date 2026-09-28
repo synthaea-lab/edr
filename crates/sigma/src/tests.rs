@@ -94,6 +94,33 @@ detection:
     assert!(eval_rule_exec(&rule, &ev2).is_none());
 }
 
+/// Issue #74: `SigmaAlert.techniques` is the ATT&CK-tag subset of `tags`, normalized
+/// to bare uppercase form, with non-technique tactic tags filtered out.
+#[test]
+fn eval_rule_extracts_techniques_from_tags() {
+    let rule = parse(
+        r#"
+title: Base64 PowerShell
+description: PS encoded
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.defense_evasion
+  - attack.t1027
+severity: high
+falsepositives:
+  - none known
+detection:
+  selection:
+    Image|endswith: '\powershell.exe'
+  condition: selection
+"#,
+    );
+    let ev = exec("C:\\Windows\\System32\\powershell.exe", "powershell.exe");
+    let alert = eval_rule_exec(&rule, &ev).unwrap();
+    assert_eq!(alert.techniques, vec!["T1059.001", "T1027"]);
+}
+
 #[test]
 fn eval_rule_keywords() {
     let rule = parse(

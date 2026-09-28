@@ -4,7 +4,10 @@
 
 use schema::{ExecEvent, detection::Severity};
 
-use crate::rule::{Selection, SigmaAlert, SigmaRule, ValueList};
+use crate::{
+    rule::{Selection, SigmaAlert, SigmaRule, ValueList},
+    validate::technique_id,
+};
 
 /// Evaluates a validated rule against an `ExecEvent`.
 pub(crate) fn eval_rule_exec(rule: &SigmaRule, event: &ExecEvent) -> Option<SigmaAlert> {
@@ -18,6 +21,7 @@ pub(crate) fn eval_rule_exec(rule: &SigmaRule, event: &ExecEvent) -> Option<Sigm
             // `SigmaEngine::load_rule` — the fallback only fires for a
             // hand-constructed rule evaluated directly in a test.
             severity: rule.severity.unwrap_or(Severity::Low),
+            techniques: rule.tags.iter().filter_map(|t| technique_id(t)).collect(),
         })
     } else {
         None

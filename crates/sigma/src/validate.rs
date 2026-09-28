@@ -59,7 +59,7 @@ fn validate_metadata(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
             "missing `falsepositives` (must list at least one known FP scenario, or explain why none are known)".to_string(),
         ));
     }
-    if !rule.tags.iter().any(|t| is_technique_tag(t)) {
+    if !rule.tags.iter().any(|t| technique_id(t).is_some()) {
         return Err(missing_metadata(
             path,
             "no ATT&CK technique tag in `tags` (expected e.g. `attack.t1059.004`)".to_string(),
@@ -82,22 +82,24 @@ fn validate_metadata(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
 }
 
 /// Matches Sigma's `attack.t<technique>[.<sub-technique>]` tag convention, e.g.
-/// `attack.t1059.004` or `attack.t1105`.
-fn is_technique_tag(tag: &str) -> bool {
+/// `attack.t1059.004` or `attack.t1105`, and returns the normalized bare form
+/// (`T1059.004`). `pub(crate)`: also used by `crate::eval` to extract
+/// `SigmaAlert.techniques` from the raw tag list (issue #74) — one parser, so
+/// validation and extraction can never disagree on what counts as a technique tag.
+pub(crate) fn technique_id(tag: &str) -> Option<String> {
     let lower = tag.to_lowercase();
-    let Some(rest) = lower.strip_prefix("attack.t") else {
-        return false;
-    };
+    let rest = lower.strip_prefix("attack.t")?;
     let mut parts = rest.splitn(2, '.');
-    let Some(id) = parts.next() else {
-        return false;
-    };
+    let id = parts.next()?;
     if id.len() != 4 || !id.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
+        return None;
     }
     match parts.next() {
-        None => true,
-        Some(sub) => sub.len() == 3 && sub.bytes().all(|b| b.is_ascii_digit()),
+        None => Some(format!("T{id}")),
+        Some(sub) if sub.len() == 3 && sub.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(format!("T{id}.{sub}"))
+        }
+        Some(_) => None,
     }
 }
 

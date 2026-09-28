@@ -168,7 +168,12 @@ pub mod time;
 /// while this branch was open, then renumbered each time another PR took the
 /// number first: 22 → 23 (#262 Phase 3 xattr), 23 → 24 (#297 `PolicyDenial`),
 /// 24 → 25 (#264), 25 → 26 → 27 (#265, #266).
-pub const SCHEMA_VERSION: u32 = 27;
+///
+/// Bumped 27 → 28 for [`detection::Detection::techniques`] (#74): structured ATT&CK
+/// technique identifiers on a detection, additive `Vec<String>` alongside
+/// `attributions`, no new variant. Same serialization-visible reasoning as every
+/// field addition since v13.
+pub const SCHEMA_VERSION: u32 = 28;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
