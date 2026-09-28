@@ -193,10 +193,14 @@ fn decoded_field(record: &AuditRecord, key: &str) -> Option<String> {
 /// on a field the kernel emitted unquoted — see `decoded_field`, its only
 /// caller outside this module's own tests.
 fn decode_audit_value(value: &str) -> String {
-    // If value looks like hex (even length, all hex chars), try to decode
+    // Callers only reach this for values the wire parser saw arrive unquoted
+    // (see `decoded_field`), so an even-length, all-hex value here can only be
+    // the kernel's own hex encoding of an untrusted string (it hex-encodes any
+    // string containing a space, a quote, or a control character, regardless
+    // of length — including a single byte, e.g. `a1=20` for a lone space).
+    // There is no ambiguity left to guard against with a minimum length.
     if value.len().is_multiple_of(2)
         && value.chars().all(|c| c.is_ascii_hexdigit())
-        && value.len() > 2
         && let Ok(bytes) = hex_decode(value)
         && let Ok(s) = String::from_utf8(bytes)
     {
@@ -378,6 +382,20 @@ mod tests {
             panic!("expected Exec event, got {event:?}");
         };
         assert_eq!(argv, vec!["/bin/echo", "6162", "id rsa"]);
+    }
+
+    #[test]
+    fn classify_wire_decodes_a_single_hex_encoded_byte() {
+        // Reported by Jihair on #505: the kernel hex-encodes any untrusted
+        // string containing a space, a quote or a control character,
+        // regardless of length. A lone space argument arrives as `a1=20`
+        // (unquoted), and must still be decoded even though it's shorter
+        // than the old `len() > 2` guard allowed.
+        let event = classify_wire(AUDIT_EXECVE, r#"argc=2 a0="/bin/echo" a1=20"#);
+        let AuditEvent::Exec { argv, .. } = event else {
+            panic!("expected Exec event, got {event:?}");
+        };
+        assert_eq!(argv, vec!["/bin/echo", " "]);
     }
 
     #[test]
