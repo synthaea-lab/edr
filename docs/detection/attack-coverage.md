@@ -26,9 +26,9 @@ dedicated content · 📋 waits on a filed issue (telemetry or content) ·
 **W**indows / **M**acos where coverage differs.
 
 Engine tags as of this assessment (from `rules`/`correlator` source):
-T1021.002, T1036.005, T1037.004, T1041, T1048.003, T1053.003/.005, T1055,
+T1021.002, T1036.005, T1037.004, T1041, T1046, T1048.003, T1053.003/.005, T1055,
 T1059 (+.001/.004), T1070.001/.002, T1071 (+.004), T1105, T1110, T1127, T1136.001,
-T1204, T1218, T1486, T1490, T1543.001/.002/.003, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
+T1204, T1210, T1218, T1486, T1490, T1543.001/.002/.003, T1547.015, T1571, T1574.006, T1611, T1620. Sigma-imported content carries its
 own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 
 ## Initial Access (TA0001)
@@ -98,7 +98,7 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | Technique | L | W | M | Status |
 | --- | --- | --- | --- | --- |
 | T1057 / T1082 / T1016 / T1087 recon (process/system/network/account) | 🟡 | 🟡 | 🟡 | All exec-visible; the signal is the *burst*, not one command — recon-burst content in the pack below |
-| T1046 Network Service Discovery | 🟡 | 📋 | 📋 | Connect-fan-out visible (L); listener baselines #366/#358 sharpen it |
+| T1046 Network Service Discovery | 🟢 | 📋 | 📋 | SCAN-SPREAD: distinct-destination burst per (pid, dport) (L, #465); listener baselines #366/#358 sharpen W/M |
 | T1518 Software Discovery (security tools) | 🟡 | 🟡 | 🟡 | Exec-visible; TCC-probing recon partially shipped via `TccDecision` (M) |
 | T1069 Permission Groups Discovery | 🟡 | 📋 | 📋 | LDAP recon #364 (W); OD queries #356 (M) |
 
@@ -111,6 +111,7 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | T1021.001 RDP | — | 📋 | — | #285 |
 | T1570 Lateral Tool Transfer | 🟡 | 🟡 | 🟡 | Write-then-exec joins exist per-host; cross-host is plane M9 |
 | T1021.003 / T1047 DCOM & WMI | — | 🟢 | — | WMI method tags live |
+| T1210 Exploitation of Remote Services | 🟢 | 📋 | 📋 | Same SCAN-SPREAD alert as T1046 above (L, #465) — a distinct-destination burst on one port is the same telemetry shape whether framed as discovery or spread/exploitation |
 
 ## Collection (TA0009)
 
