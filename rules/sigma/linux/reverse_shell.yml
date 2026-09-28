@@ -9,7 +9,7 @@ tags:
   - attack.t1059.004
   - attack.command_and_control
   - attack.t1071
-severity: critical
+level: critical
 falsepositives:
   - Authorized penetration testing or red-team exercises using these exact patterns;
     otherwise none known.

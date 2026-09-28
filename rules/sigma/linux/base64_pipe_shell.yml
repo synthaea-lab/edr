@@ -8,7 +8,7 @@ tags:
   - attack.t1059.004
   - attack.defense_evasion
   - attack.t1027
-severity: high
+level: high
 falsepositives:
   - Some deployment/config-management tooling base64-encodes payloads before piping
     to a shell; rare outside that context.

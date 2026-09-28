@@ -141,6 +141,15 @@ impl RuleSet {
         self.count
     }
 
+    /// Identifiers of every compiled rule. Lets a caller (the content test
+    /// suite's sample-pairing checks) assert against the actual rule set rather
+    /// than only its size — a count match alone (review, Jihair54/Sollykhan)
+    /// can't catch a renamed or swapped rule keeping a stale sample label.
+    #[must_use]
+    pub fn rule_identifiers(&self) -> Vec<&str> {
+        self.metadata.keys().map(String::as_str).collect()
+    }
+
     /// Scans one file, returning the identifiers of matching rules. Refuses files
     /// over [`MAX_SCAN_BYTES`] and non-regular files (a FIFO would block the
     /// worker forever, /dev/zero would read without end — review finding). The

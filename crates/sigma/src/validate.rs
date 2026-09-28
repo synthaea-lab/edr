@@ -47,11 +47,12 @@ pub(crate) fn validate(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
     validate_metadata(rule, path)
 }
 
-/// Checks the required rule metadata: severity, at least one ATT&CK technique tag,
-/// non-empty false-positive notes, and a recognized platform directory.
+/// Checks the required rule metadata: severity (`level`, upstream Sigma's field
+/// name), at least one ATT&CK technique tag, non-empty false-positive notes, and
+/// a recognized platform directory.
 fn validate_metadata(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
     if rule.severity.is_none() {
-        return Err(missing_metadata(path, "missing `severity`".to_string()));
+        return Err(missing_metadata(path, "missing `level`".to_string()));
     }
     if rule.falsepositives.is_empty() {
         return Err(missing_metadata(

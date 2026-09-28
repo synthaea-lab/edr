@@ -49,7 +49,7 @@ title: Test cmd
 description: test
 tags:
   - attack.t1059
-severity: medium
+level: medium
 falsepositives:
   - none known
 detection:
@@ -72,7 +72,7 @@ title: Base64 PowerShell
 description: PS encoded
 tags:
   - attack.t1059.001
-severity: high
+level: high
 falsepositives:
   - none known
 detection:
@@ -107,7 +107,7 @@ tags:
   - attack.t1059.001
   - attack.defense_evasion
   - attack.t1027
-severity: high
+level: high
 falsepositives:
   - none known
 detection:
@@ -129,7 +129,7 @@ title: Suspicious keyword
 description: test
 tags:
   - attack.t1003
-severity: high
+level: high
 falsepositives:
   - none known
 detection:
@@ -153,7 +153,7 @@ title: Office spawning shell
 description: test
 tags:
   - attack.t1059
-severity: high
+level: high
 falsepositives:
   - none known
 detection:
@@ -196,7 +196,7 @@ fn interior_wildcards_are_rejected_at_load() {
 #[test]
 fn keyword_wildcards_match_like_field_globs() {
     let rule = parse(
-        "title: KW\ntags:\n  - attack.t1003\nseverity: high\nfalsepositives:\n  - none known\ndetection:\n  selection:\n    - '*mimikatz*'\n  condition: selection\n",
+        "title: KW\ntags:\n  - attack.t1003\nlevel: high\nfalsepositives:\n  - none known\ndetection:\n  selection:\n    - '*mimikatz*'\n  condition: selection\n",
     );
     let ev = exec("C:\\t\\x.exe", "run mimikatz please");
     assert!(eval_rule_exec(&rule, &ev).is_some());
@@ -205,7 +205,7 @@ fn keyword_wildcards_match_like_field_globs() {
 #[test]
 fn modifier_case_is_insensitive_at_eval() {
     let rule = parse(
-        "title: Case\ntags:\n  - attack.t1059\nseverity: medium\nfalsepositives:\n  - none known\ndetection:\n  selection:\n    Image|EndsWith: '\\cmd.exe'\n  condition: selection\n",
+        "title: Case\ntags:\n  - attack.t1059\nlevel: medium\nfalsepositives:\n  - none known\ndetection:\n  selection:\n    Image|EndsWith: '\\cmd.exe'\n  condition: selection\n",
     );
     let ev = exec("C:\\Windows\\System32\\cmd.exe", "cmd.exe");
     assert!(

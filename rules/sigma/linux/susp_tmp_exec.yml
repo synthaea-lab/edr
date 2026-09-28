@@ -9,7 +9,7 @@ tags:
   - attack.t1059
   - attack.defense_evasion
   - attack.t1036
-severity: medium
+level: medium
 falsepositives:
   - Installers and setup scripts commonly extract to and run from /tmp or
     /var/tmp during normal software installation.

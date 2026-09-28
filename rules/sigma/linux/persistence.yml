@@ -10,7 +10,7 @@ tags:
   - attack.t1053.003
   - attack.t1098.004
   - attack.t1543.002
-severity: high
+level: high
 falsepositives:
   - Legitimate sysadmin maintenance (editing crontab, adding an SSH key, enabling a
     systemd service) during a scheduled change window.
