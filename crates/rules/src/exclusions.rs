@@ -126,6 +126,19 @@ pub(crate) const RANSOMWARE_EXCLUDED_PATH_PREFIXES: &[&str] = &["/tmp/", "/var/t
 /// capture shows the actual shape.
 pub(crate) const PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES: &[&str] = &[".dpkg-new", ".apk-new"];
 
+/// The prefix apk-tools actually stages under, confirmed live (#500 review,
+/// Jihair, real `apk fix` reinstall on Alpine): apk does *not* use the
+/// `.apk-new` suffix above for its own package-file replacement — that string
+/// is the sidecar it leaves next to a locally modified config file, which it
+/// never renames onto anything. The real staging shape extracts each file to
+/// a hidden name in the *same directory* as the final path (not derived from
+/// it by suffix) and renames that onto the final name, e.g.
+/// `usr/bin/.apk.e9a41015f8b7e04a3f02df6f500e89f18738758051d63799` ->
+/// `usr/bin/c89`. Without this, coalescing `SlidingSum` correctly (this same
+/// PR) made every apk upgrade over ~100MB in 5s a live false T1486 (806/810
+/// renames in the capture had this shape, zero had `.apk-new`).
+pub(crate) const APK_STAGING_FILE_PREFIX: &str = ".apk.";
+
 /// `comm` values a real Debian/Alpine package manager runs the staging-rename
 /// dance under. Required *alongside* [`PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES`]
 /// before `check_burst_write_volume` excludes a burst (#500 review, Nikolas):

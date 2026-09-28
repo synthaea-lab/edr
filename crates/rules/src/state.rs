@@ -14,10 +14,11 @@ use store::BoundedMap;
 use crate::{
     Alert,
     exclusions::{
-        AGENT_CHILD_EXCLUSIONS, AUTH_FAILURE_THRESHOLD, AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD,
-        BEACON_WINDOW_NS, BROWSERS, BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS,
-        DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MEMFD_EXEC_WINDOW_NS,
-        PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, QUARANTINE_EXEC_WINDOW_NS,
+        AGENT_CHILD_EXCLUSIONS, APK_STAGING_FILE_PREFIX, AUTH_FAILURE_THRESHOLD,
+        AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD, BEACON_WINDOW_NS, BROWSERS,
+        BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS, DOWNLOADER_COMMS,
+        LOLBIN_LEGIT_PARENTS, LOLBINS, MEMFD_EXEC_WINDOW_NS, PACKAGE_MANAGER_COMMS,
+        PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, QUARANTINE_EXEC_WINDOW_NS,
         RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
         RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
         SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_THRESHOLD,
@@ -1267,9 +1268,28 @@ fn is_proc_fd_path(path: &str) -> bool {
 /// suffix): here the suffix is on the *old* name.
 fn is_package_manager_temp_rename(old_path: &str, new_path: &str, comm: &str) -> bool {
     PACKAGE_MANAGER_COMMS.contains(&comm)
-        && old_path
+        && (old_path
             .strip_prefix(new_path)
             .is_some_and(|suffix| PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES.contains(&suffix))
+            || is_apk_staging_rename(old_path, new_path))
+}
+
+/// True for apk-tools' real staging shape (#500 review, Jihair): `old_path`
+/// sits in the same directory as `new_path` (not derived from it by suffix —
+/// see [`APK_STAGING_FILE_PREFIX`]'s doc) and its basename is that prefix
+/// followed by a hex digest, e.g. `usr/bin/.apk.e9a41015…` ->
+/// `usr/bin/c89`. Splits on the last `/` rather than comparing absolute
+/// prefixes because apk's renames are relative to a directory fd
+/// (`renameat`), so there's no leading `/` to anchor on — `usr/bin/foo` and
+/// `bin/foo` must both work, and no separator at all means "current
+/// directory" for both sides equally.
+fn is_apk_staging_rename(old_path: &str, new_path: &str) -> bool {
+    let (old_dir, old_base) = old_path.rsplit_once('/').unwrap_or(("", old_path));
+    let (new_dir, _) = new_path.rsplit_once('/').unwrap_or(("", new_path));
+    old_dir == new_dir
+        && old_base
+            .strip_prefix(APK_STAGING_FILE_PREFIX)
+            .is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Whether the file at `path` is the one a process named `comm` runs from. A

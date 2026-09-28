@@ -1148,6 +1148,56 @@ fn burst_write_and_rename_still_fires_for_the_dpkg_new_shape_under_a_non_package
 }
 
 #[test]
+fn burst_write_and_rename_excludes_the_real_apk_staging_shape() {
+    // Regression for #500 review (Jihair, real `apk fix` reinstall on
+    // Alpine): apk doesn't use the `.apk-new` suffix — it stages each file as
+    // a hidden `.apk.<hex>` name in the *same directory* as the final path
+    // and renames that onto it. Paths are relative (renameat against a
+    // directory fd), not absolute.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7108, "apk", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7108,
+            "apk",
+            &format!("usr/bin/.apk.e9a41015f8b7e04a3f02df6f500e89f18738758051d637{i:02}"),
+            &format!("usr/bin/bin{i}"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert!(
+        alerts.is_empty(),
+        "apk's real staging-file shape is not ransomware"
+    );
+}
+
+#[test]
+fn burst_write_and_rename_still_fires_for_the_apk_staging_shape_under_a_non_package_manager_comm() {
+    // Same shape, arbitrary comm: the directory+prefix convention alone must
+    // not be a free pass, same reasoning as the dpkg-new test above.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7109, "evil", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7109,
+            "evil",
+            &format!("home/u/.apk.e9a41015f8b7e04a3f02df6f500e89f18738758051d637{i:02}"),
+            &format!("home/u/doc{i}"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the .apk.<hex> staging convention alone must not suppress the alert \
+         when comm isn't a real package manager"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
 fn burst_write_and_rename_does_not_realert_within_window() {
     let mut state = RuleState::new();
     state.on_file_write(&file_write_event_full(7104, "evil", 60 * 1024 * 1024, 0));
