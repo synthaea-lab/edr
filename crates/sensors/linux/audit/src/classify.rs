@@ -349,6 +349,37 @@ mod tests {
         assert_eq!(argv, vec!["/bin/ls"]);
     }
 
+    /// Runs a payload through the *real* parser (`crate::parse::parse_audit_message`),
+    /// not a hand-built `AuditRecord` — so quotedness comes from the actual wire
+    /// scan, not from what a test author assumed it would be.
+    fn classify_wire(record_type: u32, fields_payload: &str) -> AuditEvent {
+        let body = format!("msg=audit(1000.0:1): {fields_payload}");
+        let total_len = (16 + body.len()) as u32;
+        let mut raw = Vec::with_capacity(total_len as usize);
+        raw.extend_from_slice(&total_len.to_ne_bytes());
+        raw.extend_from_slice(&(record_type as u16).to_ne_bytes());
+        raw.extend_from_slice(&[0u8; 10]); // flags + seq + pid, unused here
+        raw.extend_from_slice(body.as_bytes());
+        let record = crate::parse::parse_audit_message(&raw).unwrap();
+        classify(&record).unwrap()
+    }
+
+    #[test]
+    fn classify_wire_execve_mixes_quoted_and_hex_encoded_argv() {
+        // Adapted from a real capture on a lab VM (Alpine 6.18.50, issue #504):
+        // a1 is a literal hex-shaped filename (quoted), a2 is genuinely
+        // hex-encoded (unquoted, because the real argument contained a space).
+        // Before the fix, a1 would have been wrongly decoded to "id rsa".
+        let event = classify_wire(
+            AUDIT_EXECVE,
+            r#"argc=3 a0="/bin/echo" a1="6162" a2=696420727361"#,
+        );
+        let AuditEvent::Exec { argv, .. } = event else {
+            panic!("expected Exec event, got {event:?}");
+        };
+        assert_eq!(argv, vec!["/bin/echo", "6162", "id rsa"]);
+    }
+
     #[test]
     fn parse_ipv4_sockaddr() {
         // Example: AF_INET (0x0002), port 8080 (0x1F90), IP 127.0.0.1 (0x7F000001)
