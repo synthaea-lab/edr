@@ -7,6 +7,7 @@ import {
   createTestDetection,
   prisma,
 } from "../helpers/db";
+import { GROUPING_BATCH_SIZE } from "@/lib/case-grouping";
 import { GET } from "@/app/api/cron/group-detections/route";
 
 function cronRequest() {
@@ -169,6 +170,46 @@ describe("GET /api/cron/group-detections", () => {
     expect(body.detectionsGrouped).toBe(0);
     const cases = await prisma.case.findMany({ where: { tenantId: tenant.id } });
     expect(cases).toHaveLength(1);
+  });
+
+  it("drains a backlog larger than one batch over successive ticks instead of stalling", async () => {
+    // Regression (review, Jihair54/Sollykhan): before batching, a backlog
+    // larger than the transaction could handle in 30s never made progress —
+    // every retry redid the same doomed work. GROUPING_BATCH_SIZE + 50 forces
+    // this run to actually span two ticks.
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const total = GROUPING_BATCH_SIZE + 50;
+    const t0 = new Date();
+    await prisma.detection.createMany({
+      data: Array.from({ length: total }, (_, i) => ({
+        tenantId: tenant.id,
+        agentId: agent.id,
+        technique: "T1059.001",
+        severity: "high",
+        timestamp: new Date(t0.getTime() + i * 1000),
+        event: { test: "data" },
+        meta: { test: "meta" },
+      })),
+    });
+
+    const first = await (await GET(cronRequest())).json();
+    expect(first.detectionsGrouped).toBe(GROUPING_BATCH_SIZE);
+    expect(first.moreWorkLikely).toBe(true);
+
+    const stillUngrouped = await prisma.detection.count({
+      where: { tenantId: tenant.id, caseId: null },
+    });
+    expect(stillUngrouped).toBe(50);
+
+    const second = await (await GET(cronRequest())).json();
+    expect(second.detectionsGrouped).toBe(50);
+    expect(second.moreWorkLikely).toBe(false);
+
+    const cases = await prisma.case.findMany({ where: { tenantId: tenant.id } });
+    expect(cases).toHaveLength(1);
+    const grouped = await prisma.detection.findMany({ where: { tenantId: tenant.id } });
+    expect(grouped.every((d) => d.caseId === cases[0].id)).toBe(true);
   });
 
   it("rejects the call when CRON_SECRET is unset", async () => {

@@ -11,6 +11,19 @@
 
 export const GROUPING_TIME_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Per-tenant cap on ungrouped detections read in one cron invocation (review,
+ * Jihair54/Sollykhan): without a cap, the whole sweep ran inside one 30s
+ * transaction over every ungrouped detection — fine for a small backlog
+ * (measured: 2,000 detections grouped in ~21s) but a larger one (measured:
+ * 20,000) blows the transaction timeout and rolls back with *no* progress,
+ * every retry redoing the same doomed work. 500 leaves comfortable margin
+ * under that measured rate, and staying well under `caseId: null` per pass
+ * means the next cron tick picks up exactly where this one left off — a
+ * backlog drains over several ticks instead of never draining at all.
+ */
+export const GROUPING_BATCH_SIZE = 500;
+
 const SEVERITY_RANK: Record<string, number> = {
   low: 0,
   medium: 1,

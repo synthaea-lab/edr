@@ -70,7 +70,13 @@ model Detection {
   // cron/group-detections sweep — the staleness check on a case narrative
   // compares against this, not createdAt, since a detection can be grouped
   // into a case well after it was ingested (see GET /api/cases/[id]).
-  updatedAt DateTime @updatedAt @map("updated_at")
+  //
+  // @default(now()) alongside @updatedAt (review, Jihair54/Sollykhan): without
+  // it, adding this NOT NULL column to a table that already has rows fails —
+  // Postgres has no value to backfill existing rows with. The default only
+  // matters for that one backfill; every write after this migration still
+  // goes through @updatedAt's own bump-on-write behavior.
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // SetNull, not Cascade: deleting a Case must not delete the underlying

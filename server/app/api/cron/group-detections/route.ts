@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
-import { isRelatedTechnique, outranksSeverity, withinTimeWindow } from "@/lib/case-grouping";
+import {
+  GROUPING_BATCH_SIZE,
+  isRelatedTechnique,
+  outranksSeverity,
+  withinTimeWindow,
+} from "@/lib/case-grouping";
 
 interface CandidateCase {
   id: string;
@@ -32,9 +37,17 @@ const GROUPING_LOCK_KEY = 50_262_001;
  * `caseId: null`. The whole sweep runs inside one transaction guarded by an
  * advisory lock, so overlapping invocations don't double-group.
  *
+ * Batched per tenant (review, Jihair54/Sollykhan): at most
+ * `GROUPING_BATCH_SIZE` ungrouped detections per tenant per invocation, so
+ * one run always completes well inside the transaction timeout regardless of
+ * backlog size — a large backlog drains over several cron ticks instead of
+ * timing out and rolling back with no progress every time. `moreWorkLikely`
+ * tells the caller whether any tenant's batch came back full (backlog
+ * possibly larger than one batch) without an extra count query.
+ *
  * Authentication: Bearer token (CRON_SECRET)
- * Response: { tenantsChecked, casesCreated, detectionsGrouped } or
- *   { skipped: true } if another invocation already holds the lock.
+ * Response: { tenantsChecked, casesCreated, detectionsGrouped, moreWorkLikely }
+ *   or { skipped: true } if another invocation already holds the lock.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -56,15 +69,24 @@ export async function GET(req: NextRequest) {
 
         let casesCreated = 0;
         let detectionsGrouped = 0;
+        let moreWorkLikely = false;
 
         for (const tenant of tenants) {
           const ungrouped = await tx.detection.findMany({
             where: { tenantId: tenant.id, caseId: null },
             orderBy: { timestamp: "asc" },
+            take: GROUPING_BATCH_SIZE,
           });
 
           if (ungrouped.length === 0) {
             continue;
+          }
+          if (ungrouped.length === GROUPING_BATCH_SIZE) {
+            // A full batch doesn't prove more is queued (could land exactly on
+            // the cap), but it's the cheap signal available without a second
+            // count query — a false positive here just costs one extra tick
+            // that finds nothing left.
+            moreWorkLikely = true;
           }
 
           const openCases: CandidateCase[] = await tx.case.findMany({
@@ -146,7 +168,13 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        return { skipped: false as const, tenantsChecked: tenants.length, casesCreated, detectionsGrouped };
+        return {
+          skipped: false as const,
+          tenantsChecked: tenants.length,
+          casesCreated,
+          detectionsGrouped,
+          moreWorkLikely,
+        };
       },
       { timeout: 30_000 }
     );
