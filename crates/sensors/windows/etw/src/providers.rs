@@ -16,7 +16,7 @@ use schema::{
 use crate::{
     normalize,
     sensor::{SharedState, basename, meta},
-    winapi,
+    winapi, zone_identifier,
 };
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
@@ -265,11 +265,17 @@ pub(crate) fn file_provider(sink: Arc<dyn EventSink>, state: Arc<SharedState>) -
         if path.ends_with(&state.canary_path) {
             return;
         }
-        sink.on_event(Event::FileOpen(FileOpenEvent {
-            meta: meta(pid, 0, comm, timestamp_ns),
-            path,
-            flags,
-        }));
+        // #365: a create/write on `host:Zone.Identifier` is the mark-of-the-web
+        // being written. The stream is read back off this thread (#439).
+        let meta = meta(pid, 0, comm, timestamp_ns);
+        if let Some(host) = zone_identifier::stream_host_path(&path) {
+            state.marks.offer(zone_identifier::MarkWrite {
+                stream_path: path.clone(),
+                host: host.to_string(),
+                meta: meta.clone(),
+            });
+        }
+        sink.on_event(Event::FileOpen(FileOpenEvent { meta, path, flags }));
     };
     Provider::by_guid(KERNEL_FILE_GUID)
         .add_callback(callback)

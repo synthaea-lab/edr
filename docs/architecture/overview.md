@@ -123,8 +123,8 @@ applied to the architecture itself:
 
 - **The whole matrix in one command**: `tools/gauntlet.sh` (fmt, dependency
   direction, clippy on host + Linux target + the Windows sensor crates, all
-  tests, cargo-deny, the strict docs build). While CI is billing-blocked
-  (#318) this is the gate, with an opt-in pre-push hook.
+  tests, cargo-deny, the strict docs build), with an opt-in pre-push hook.
+  CI runs the same jobs on every push and PR and is the gate (#318).
 - **Contracts**: golden fixtures pin every `Event` variant per
   `SCHEMA_VERSION`; `v1_compat` pins backward reads; the ML feature vectors are
   parity-tested Rust↔Python against shared fixtures (ADR-0002).

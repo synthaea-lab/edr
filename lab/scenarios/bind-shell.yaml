@@ -1,0 +1,33 @@
+name: bind-shell
+platform: linux
+script: bind-shell.sh
+simulates: >
+  A backdoor bind shell: an interactive `sh` served on a local TCP port through a
+  listening `nc`, opened after the agent started, then used once by a client.
+  Loopback only.
+expected_detections:
+  - technique: "T1571"
+    rule: check_listen_port_drift   # crates/rules fn name, traceability if the rule moves/renames
+    min_count: 1
+    tolerance: 0
+  - technique: "T1059/T1071"
+    rule: rule_spawn_connect   # crates/correlator/src/rules.rs, from the client `nc`
+    min_count: 1                # (spawned, then connects to 4445), not the listener
+    tolerance: 0
+notes: >
+  The alert comes from the netlink sock_diag poll (every 10s), not from the eBPF
+  listen event, so the script holds the listener 12s before connecting. Start the
+  agent before the script: a listener already present in the startup snapshot is
+  baseline and never alerts.
+
+  Telemetry to check in the event log (issue #263): socket_bind and socket_listen
+  for the listening nc on 127.0.0.1:4445, then socket_accept from the same pid
+  (it carries the client's peer_port, not 4445). No rule consumes those yet;
+  wiring the real-time listen event into a rule (instead of waiting for the poll)
+  is the follow-up that would make this detection immediate.
+
+  Live-tested 2026-09-25 on the Alpine lab VM (kernel 6.18.50-0-virt, busybox nc,
+  release agent with embedded probes): exactly one T1571 ("comm=nc new listener
+  on 127.0.0.1:4445"), one T1059/T1071 for the client nc, all three socket events
+  captured, zero ring-buffer drops. A T1562 line also appears when the harness
+  stops the agent with SIGTERM; that comes from the teardown, not the scenario.

@@ -6,6 +6,7 @@ Deterministic PRNG (Knuth LCG) mirrors Rust robustness tests for parity.
 """
 
 from .base import MutationResult, Mutator
+from .lineage import ALL_LINEAGE_MUTATORS
 from .prng import LCG
 
-__all__ = ["LCG", "MutationResult", "Mutator"]
+__all__ = ["ALL_LINEAGE_MUTATORS", "LCG", "MutationResult", "Mutator"]

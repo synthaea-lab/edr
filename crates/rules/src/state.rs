@@ -5,7 +5,8 @@
 use std::{collections::HashMap, net::IpAddr};
 
 use schema::{
-    AuthEvent, AuthOutcome, ConnectEvent, ExecEvent, FileOpenEvent, ListenPortEvent,
+    AuthEvent, AuthOutcome, ConnectEvent, ExecEvent, FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN,
+    FileOpenEvent, FileQuarantineEvent, FileRenameEvent, FileWriteEvent, ListenPortEvent,
     NetworkFlowEvent, User,
 };
 use store::BoundedMap;
@@ -14,19 +15,38 @@ use crate::{
     Alert,
     exclusions::{
         AGENT_CHILD_EXCLUSIONS, AUTH_FAILURE_THRESHOLD, AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD,
-        BEACON_WINDOW_NS, BROWSERS, DOWNLOAD_EXEC_WINDOW_NS, DOWNLOADER_COMMS,
-        LOLBIN_LEGIT_PARENTS, LOLBINS, SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS,
+        BEACON_WINDOW_NS, BROWSERS, BURST_WRITE_BYTES_THRESHOLD, DOWNLOAD_EXEC_WINDOW_NS,
+        DOWNLOADER_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, QUARANTINE_EXEC_WINDOW_NS,
+        RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
+        RANSOMWARE_RENAME_WINDOW_NS, SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS,
         SELF_SPAWN_THRESHOLD, SELF_SPAWN_WINDOW_NS, SHELL_COMMS, STANDARD_PORTS,
-        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, WEB_SERVER_COMMS,
+        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
+        WEB_SERVER_COMMS,
     },
     has_write_intent,
-    sliding::{FlowPortDedup, SlidingCounter},
+    sliding::{FlowPortDedup, SlidingCounter, SlidingSum},
 };
 
 struct RecentWrite {
     pid: u32,
     comm: String,
     timestamp_ns: u64,
+}
+
+/// A download-provenance mark, as [`RuleState::on_file_quarantine`] saw it.
+struct RecentQuarantine {
+    timestamp_ns: u64,
+    agent: Option<String>,
+    origin_url: Option<String>,
+    /// Set by the first exec that alerted: one alert per mark, not per run.
+    alerted: bool,
+}
+
+struct ReportedTaskRegistration {
+    timestamp_ns: u64,
+    /// The reported action list, `None` for an unknown-action report (its path
+    /// is only the sensor's placeholder).
+    actions: Option<String>,
 }
 
 /// Sliding history needed by the correlation rules:
@@ -47,6 +67,10 @@ pub struct RuleState {
     /// path → info about the last write by a known downloader (T1105). LRU-bounded:
     /// downloader writes are rare, but a hostile loop must not grow agent memory.
     recent_writes: BoundedMap<String, RecentWrite>,
+    /// case-folded path → its latest download-provenance mark (T1204.002,
+    /// #365). LRU-bounded like `recent_writes`: a burst of downloads, or a
+    /// hostile loop writing marks, must not grow agent memory.
+    recent_quarantines: BoundedMap<String, RecentQuarantine>,
     /// (ppid, comm) → sliding counter for SELF-SPAWN (T1059 Windows). LRU-bounded.
     self_spawn: BoundedMap<(u32, String), SlidingCounter>,
     /// (comm, daddr, dport) → sliding counter for BEACON (T1071 Windows). LRU-bounded.
@@ -68,6 +92,35 @@ pub struct RuleState {
     /// LRU-bounded like every other counter: a spray across many fabricated
     /// usernames must not grow this without limit.
     auth_failures: BoundedMap<(String, String), SlidingCounter>,
+    /// pid → sliding counter for RANSOMWARE-RENAME (T1486, issue #262): renames by
+    /// this pid where `new_path` is `old_path` plus an appended suffix. LRU-bounded:
+    /// a hostile process renaming under many different pids (unusual, but not
+    /// impossible) must not grow this without limit either.
+    ransomware_rename: BoundedMap<u32, SlidingCounter>,
+    /// ppid → the same counter, for the shell-loop shape (`for f in *; do mv "$f"
+    /// "$f.locked"; done`, `find … -exec mv {} {}.x \;`): each rename runs in its own
+    /// short-lived `mv` pid, so the per-pid counter never climbs, but every child
+    /// shares the loop's shell as `ppid`. Real Linux ransomware ships this way, so the
+    /// per-pid counter alone would miss it (issue #262 review, old-dov). LRU-bounded.
+    /// `ppid <= 1` (unknown/init) is never keyed here — see `check_mass_rename_pattern`.
+    ransomware_rename_by_ppid: BoundedMap<u32, SlidingCounter>,
+    /// pid → sliding sum of `FileWriteEvent::bytes_requested` (issue #82): the
+    /// write-volume half of a second, independent T1486 corroboration signal —
+    /// heavy write volume alongside a rename burst, regardless of whether the
+    /// rename shape itself matched `check_mass_rename_pattern`'s prefix-preserving
+    /// pattern. LRU-bounded.
+    write_volume: BoundedMap<u32, SlidingSum>,
+    /// pid → sliding counter of renames, any shape — the rename half of the
+    /// write-volume corroboration signal above. Deliberately separate from
+    /// `ransomware_rename`: that counter only records prefix-preserving renames
+    /// (`check_mass_rename_pattern`'s shape), this one counts every rename, so a
+    /// pid that renames heavily without preserving the original name still
+    /// contributes here.
+    rename_count: BoundedMap<u32, SlidingCounter>,
+    /// Task leaf name → last reported T1053.005 registration, so one registration
+    /// seen on both Security 4698 and TaskScheduler/Operational 106 alerts once
+    /// (#422). LRU-bounded like the counters.
+    task_registrations: BoundedMap<String, ReportedTaskRegistration>,
     /// The agent's own pid, for [`Self::check_self_spawn`]'s narrow exclusion of
     /// its own known children (issue #403). `None` until [`Self::seed_own_pid`] is
     /// called — `sensor-*` crates stay `schema`-only (`tools/check-deps.py`), so
@@ -99,11 +152,17 @@ impl RuleState {
         Self {
             pid_comm: BoundedMap::new(PID_COMM_CAP),
             recent_writes: BoundedMap::new(RECENT_WRITES_CAP),
+            recent_quarantines: BoundedMap::new(RECENT_WRITES_CAP),
             self_spawn: BoundedMap::new(COUNTER_CAP),
             beacon: BoundedMap::new(COUNTER_CAP),
             beacon_flow_dedup: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
             auth_failures: BoundedMap::new(COUNTER_CAP),
+            ransomware_rename: BoundedMap::new(COUNTER_CAP),
+            ransomware_rename_by_ppid: BoundedMap::new(COUNTER_CAP),
+            write_volume: BoundedMap::new(COUNTER_CAP),
+            rename_count: BoundedMap::new(COUNTER_CAP),
+            task_registrations: BoundedMap::new(COUNTER_CAP),
             own_pid: None,
             ld_trust_extra: Vec::new(),
         }
@@ -254,7 +313,7 @@ impl RuleState {
             self.recent_writes
                 .iter()
                 .find(|(path, write): &(&String, &RecentWrite)| {
-                    path.rsplit('/').next().unwrap_or(path.as_str()) == comm
+                    written_file_is(path, comm)
                         && event.meta.timestamp_ns.saturating_sub(write.timestamp_ns)
                             <= DOWNLOAD_EXEC_WINDOW_NS
                 })?;
@@ -267,6 +326,45 @@ impl RuleState {
                 format_delta(event.meta.timestamp_ns.saturating_sub(write.timestamp_ns)),
                 write.pid,
                 write.comm,
+            ),
+        })
+    }
+
+    /// T1204.002 — User Execution: Malicious File. A file carrying a
+    /// download-provenance mark (`FileQuarantine`: macOS quarantine xattr,
+    /// Windows `Zone.Identifier`) is executed within
+    /// [`QUARANTINE_EXEC_WINDOW_NS`] of being marked. Platform-neutral: the
+    /// join is on the executed image path, which both ES and ETW report as the
+    /// full path the mark was written for.
+    ///
+    /// One alert per mark (`alerted`): re-running the same download is not a
+    /// new finding, a re-download writes a fresh mark and is. Paths are
+    /// case-folded — NTFS and default APFS are both case-insensitive.
+    ///
+    /// Known gap: a downloaded *script* run through an interpreter
+    /// (`powershell -File x.ps1`, `sh x.sh`) has the interpreter as its image
+    /// path and does not join; T1105's comm-based match has the same shape of
+    /// limit on Linux.
+    fn check_quarantined_exec(&mut self, event: &ExecEvent) -> Option<Alert> {
+        let now = event.meta.timestamp_ns;
+        let mark = self
+            .recent_quarantines
+            .get_mut(&event.image_path.to_lowercase())?;
+        let age = now.saturating_sub(mark.timestamp_ns);
+        if mark.alerted || age > QUARANTINE_EXEC_WINDOW_NS {
+            return None;
+        }
+        mark.alerted = true;
+        Some(Alert {
+            technique: "T1204.002",
+            message: format!(
+                "pid={} comm={} executes {}, downloaded {} earlier (origin: {}, marked by {})",
+                event.meta.pid,
+                event.meta.comm,
+                event.image_path,
+                format_delta(age),
+                mark.origin_url.as_deref().unwrap_or("unrecorded"),
+                mark.agent.as_deref().unwrap_or("unknown"),
             ),
         })
     }
@@ -524,6 +622,7 @@ impl RuleState {
         let mut alerts = Vec::new();
         alerts.extend(self.check_web_server_spawns_shell(event));
         alerts.extend(self.check_download_then_exec(event));
+        alerts.extend(self.check_quarantined_exec(event));
         alerts.extend(self.check_self_spawn(event));
         alerts.extend(self.check_parent_suspect(event));
         alerts.extend(self.check_lolbin(event));
@@ -618,10 +717,68 @@ impl RuleState {
         Vec::new()
     }
 
-    /// To be called for every `FileOpenEvent` in the stream. Does not produce alerts
-    /// directly — updates the history of downloader writes, consumed by
-    /// `check_download_then_exec`.
-    pub fn on_file_open(&mut self, event: &FileOpenEvent) {
+    /// To be called for every `FileQuarantineEvent` in the stream (macOS ES,
+    /// Windows ETW `Zone.Identifier`). Does not produce alerts directly —
+    /// records the mark consumed by `check_quarantined_exec`.
+    pub fn on_file_quarantine(&mut self, event: &FileQuarantineEvent) {
+        self.recent_quarantines.insert(
+            event.path.to_lowercase(),
+            RecentQuarantine {
+                timestamp_ns: event.meta.timestamp_ns,
+                agent: event.agent.clone(),
+                origin_url: event.origin_url.clone(),
+                alerted: false,
+            },
+        );
+    }
+
+    /// To be called for every `FileOpenEvent` in the stream. Reports T1053.005
+    /// scheduled-task creation (deduplicated, see
+    /// [`Self::check_task_registration`]) and updates the history of downloader
+    /// writes, consumed by `check_download_then_exec`.
+    pub fn on_file_open(&mut self, event: &FileOpenEvent) -> Vec<Alert> {
+        let alerts = self.check_task_registration(event).into_iter().collect();
+        self.record_downloader_write(event);
+        alerts
+    }
+
+    /// T1053.005 creation (`check_scheduled_task_persistence`), reported once per
+    /// registration. With both channels up, one `schtasks /Create` yields a 4698 and
+    /// a 106 for the same task, in either order a few seconds apart; the sensor
+    /// reads the 106's actions back from the task file, so the two usually match.
+    ///
+    /// A registration of an already-reported task inside
+    /// [`TASK_REGISTRATION_DEDUP_WINDOW_NS`] is suppressed only when it adds
+    /// nothing: an unknown-action report, or the same action list. A different
+    /// action list alerts (a re-registration with a new payload), and so does a
+    /// known action list after an unknown-action report, so the first-arriving
+    /// 106 whose task file was unreadable never hides the 4698's actions.
+    fn check_task_registration(&mut self, event: &FileOpenEvent) -> Option<Alert> {
+        let alert = crate::stateless::check_scheduled_task_persistence(event)?;
+        let actions =
+            (event.flags & FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN == 0).then(|| event.path.clone());
+        let now = event.meta.timestamp_ns;
+        let duplicate = self
+            .task_registrations
+            .peek(&event.meta.comm)
+            .is_some_and(|previous| {
+                previous.timestamp_ns.abs_diff(now) <= TASK_REGISTRATION_DEDUP_WINDOW_NS
+                    && (actions.is_none() || actions == previous.actions)
+            });
+        if duplicate {
+            return None;
+        }
+        self.task_registrations.insert(
+            event.meta.comm.clone(),
+            ReportedTaskRegistration {
+                timestamp_ns: now,
+                actions,
+            },
+        );
+        Some(alert)
+    }
+
+    fn record_downloader_write(&mut self, event: &FileOpenEvent) {
         let comm = event.meta.comm.as_str();
         if !DOWNLOADER_COMMS.contains(&comm) || !has_write_intent(event.flags) {
             return;
@@ -634,6 +791,203 @@ impl RuleState {
                 timestamp_ns: event.meta.timestamp_ns,
             },
         );
+    }
+
+    /// T1486 — Data Encrypted for Impact. Ransomware's near-universal tell: a burst
+    /// of renames, each keeping the original filename intact and appending a new
+    /// suffix (`invoice.pdf` → `invoice.pdf.locked`), from the same pid, in a tight
+    /// window. Extension-agnostic by design — matching on "`old_path` is a strict
+    /// prefix of `new_path`" catches every real family's naming scheme (`.locked`,
+    /// `.encrypted`, `.WNCRY`, a random hex suffix, ...) without a list to keep
+    /// current against new strains, and without false-positiving on renames that
+    /// *don't* preserve the original name (a normal `mv a b` has no such relation).
+    ///
+    /// Deliberately keyed on rename shape alone, not `FileWriteEvent` volume: many
+    /// legitimate bulk operations (package installs, `tar` extraction, a compiler's
+    /// intermediate files) write many files quickly, but essentially none rename
+    /// hundreds of pre-existing files to append a shared new suffix in seconds —
+    /// see `RANSOMWARE_RENAME_THRESHOLD`'s doc for the calibration reasoning.
+    ///
+    /// Counted twice, so both real shapes reach the threshold (issue #262 review):
+    /// per-pid for a single encryptor binary, and per-ppid for the shell-loop shape
+    /// (`for f in *; do mv "$f" "$f.locked"; done`) where each rename is a separate
+    /// short-lived `mv` pid but every one shares the loop's shell as `ppid`. The
+    /// per-pid branch wins when it fires, so a single process yields one alert, not
+    /// two (its renames also land in the per-ppid counter, but that branch is only
+    /// consulted when the per-pid one did not fire this event).
+    ///
+    /// Known benign producers of this exact shape that this rule does **not** yet
+    /// discriminate, because a `FileRenameEvent` carries only `comm`, never the
+    /// executable path an evidence-gated exclusion needs (CLAUDE.md — name-keyed
+    /// exclusions must be gated on evidence, cf. [`policy::name_exclusion_applies`]):
+    /// - Log rotation (`app.log` → `app.log.1`): handled by [`is_rotation_suffix`]
+    ///   (a suffix with no letter never counts) — the one case a shape signal settles.
+    /// - In-place edit with a backup: `sed -i.bak`, `perl -i.orig` `rename(2)` the
+    ///   original to `f.bak`/`f.orig` from one pid; 20+ files in one command
+    ///   (`sed -i.bak … *.conf`) trip this rule.
+    /// - Maildir flag changes (`…:2,S` → `…:2,ST`): one IMAP pid, prefix-preserving,
+    ///   lettered suffix; "mark all read" on a large folder can exceed the threshold.
+    ///
+    /// Excluding those on `comm` alone would be spoofable (an encryptor sets
+    /// `comm=sed`), so the proper fix is to add the exe path to `FileRenameEvent` and
+    /// gate on `comm` + trusted path — tracked as a follow-up. Shapes this rule
+    /// cannot see at all (write-new-then-unlink, cross-directory moves) need a
+    /// separate write/delete correlation, also follow-up.
+    fn check_mass_rename_pattern(&mut self, event: &FileRenameEvent) -> Option<Alert> {
+        let suffix = event.new_path.strip_prefix(event.old_path.as_str())?;
+        if suffix.is_empty() || is_rotation_suffix(suffix) {
+            return None;
+        }
+        let ts = event.meta.timestamp_ns;
+
+        // Per-pid: a single encryptor process renaming its way through a tree.
+        let pid_entry = self
+            .ransomware_rename
+            .get_or_insert_with(event.meta.pid, SlidingCounter::default);
+        let pid_count = pid_entry.record(ts, RANSOMWARE_RENAME_WINDOW_NS);
+        if pid_count >= RANSOMWARE_RENAME_THRESHOLD
+            && pid_entry.try_alert(ts, RANSOMWARE_RENAME_WINDOW_NS)
+        {
+            return Some(Alert {
+                technique: "T1486",
+                message: format!(
+                    "pid={} comm={}: {pid_count} files renamed with an appended suffix in {}s \
+                     (e.g. {} → {}) — suspected ransomware encryption pass",
+                    event.meta.pid,
+                    event.meta.comm,
+                    RANSOMWARE_RENAME_WINDOW_NS / 1_000_000_000,
+                    event.old_path,
+                    event.new_path,
+                ),
+            });
+        }
+
+        // Per-ppid: a shell loop spawning one short-lived `mv` per file — the per-pid
+        // counter above never climbs, but the parent shell ties the burst together.
+        // Only pids that are themselves light renamers feed this counter, so a single
+        // busy process (already handled above) does not also drive the shared per-ppid
+        // counter to a second alert — see `RANSOMWARE_LOOP_CHILD_MAX`.
+        //
+        // ppid 0 ("unknown" — a `PROC_LINEAGE` miss on the sensor, never real pid 0)
+        // and ppid 1 (init — orphans and daemons reparent there) are shared buckets
+        // that would lump unrelated processes into a false "shell-loop" alert; a real
+        // loop's children have the loop's shell as parent, so skip both (#455 review).
+        if pid_count > RANSOMWARE_LOOP_CHILD_MAX || event.meta.ppid <= 1 {
+            return None;
+        }
+        let ppid_entry = self
+            .ransomware_rename_by_ppid
+            .get_or_insert_with(event.meta.ppid, SlidingCounter::default);
+        let ppid_count = ppid_entry.record(ts, RANSOMWARE_RENAME_WINDOW_NS);
+        if ppid_count >= RANSOMWARE_RENAME_THRESHOLD
+            && ppid_entry.try_alert(ts, RANSOMWARE_RENAME_WINDOW_NS)
+        {
+            return Some(Alert {
+                technique: "T1486",
+                message: format!(
+                    "ppid={}: {ppid_count} files renamed with an appended suffix by short-lived \
+                     children in {}s (e.g. {} → {}, comm={}) — suspected ransomware encryption \
+                     pass (shell-loop pattern)",
+                    event.meta.ppid,
+                    RANSOMWARE_RENAME_WINDOW_NS / 1_000_000_000,
+                    event.old_path,
+                    event.new_path,
+                    event.meta.comm,
+                ),
+            });
+        }
+        None
+    }
+
+    /// To be called for every `FileRenameEvent` in the stream (T1486, issue #262 +
+    /// #82's write-volume corroboration).
+    pub fn on_file_rename(&mut self, event: &FileRenameEvent) -> Vec<Alert> {
+        let mut alerts: Vec<Alert> = self.check_mass_rename_pattern(event).into_iter().collect();
+        alerts.extend(self.check_burst_write_volume(event));
+        alerts
+    }
+
+    /// To be called for every `FileWriteEvent` in the stream. Does not produce
+    /// alerts directly — tracks write volume per pid (issue #82), consumed by
+    /// `check_burst_write_volume` on the next `FileRenameEvent`.
+    pub fn on_file_write(&mut self, event: &FileWriteEvent) {
+        self.write_volume
+            .get_or_insert_with(event.meta.pid, SlidingSum::default)
+            .add(
+                event.meta.timestamp_ns,
+                event.bytes_requested,
+                RANSOMWARE_RENAME_WINDOW_NS,
+            );
+    }
+
+    /// Second, independent T1486 signal (issue #82): heavy write volume alongside
+    /// a rename burst, regardless of whether the rename shape matched
+    /// `check_mass_rename_pattern`'s prefix-preserving pattern — catches an
+    /// encryptor that writes-new-then-unlinks or otherwise doesn't keep the
+    /// original name as a prefix of the new one.
+    ///
+    /// Deliberately no name-keyed exclusion here: `FileRenameEvent`/`FileWriteEvent`
+    /// carry no executable path (same gap `check_mass_rename_pattern`'s doc
+    /// describes, tracked in #459), so a `comm`-only exclusion would be spoofable.
+    /// `RANSOMWARE_EXCLUDED_PATH_PREFIXES` is path-based, not name-based, and stays.
+    fn check_burst_write_volume(&mut self, event: &FileRenameEvent) -> Option<Alert> {
+        if RANSOMWARE_EXCLUDED_PATH_PREFIXES
+            .iter()
+            .any(|prefix| event.new_path.starts_with(prefix))
+        {
+            return None;
+        }
+        let ts = event.meta.timestamp_ns;
+        // Independent field from `rename_count` below — read first so the
+        // `SlidingCounter` borrow can stay held through the `try_alert` call.
+        let bytes_written = self
+            .write_volume
+            .get_or_insert_with(event.meta.pid, SlidingSum::default)
+            .total(ts, RANSOMWARE_RENAME_WINDOW_NS);
+        let entry = self
+            .rename_count
+            .get_or_insert_with(event.meta.pid, SlidingCounter::default);
+        let rename_count = entry.record(ts, RANSOMWARE_RENAME_WINDOW_NS);
+        if rename_count >= RANSOMWARE_RENAME_THRESHOLD
+            && bytes_written >= BURST_WRITE_BYTES_THRESHOLD
+            && entry.try_alert(ts, RANSOMWARE_RENAME_WINDOW_NS)
+        {
+            return Some(Alert {
+                technique: "T1486",
+                message: format!(
+                    "pid={} comm={} wrote {}MB and renamed {rename_count}x in {}s — \
+                     suspected ransomware kill chain",
+                    event.meta.pid,
+                    event.meta.comm,
+                    bytes_written / (1024 * 1024),
+                    RANSOMWARE_RENAME_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+}
+
+/// Suffixes logrotate and similar rotators append (`.1`, `-20260924`, `.1.2`, `~`
+/// backups): no ASCII letter at all. Ransomware markers carry letters (`.locked`,
+/// `.WNCRY`, `.id-<hex>.[mail]`); an all-digit random suffix is the one blind spot,
+/// accepted over alerting on every rotation run.
+fn is_rotation_suffix(suffix: &str) -> bool {
+    !suffix.bytes().any(|b| b.is_ascii_alphabetic())
+}
+
+/// Whether the file at `path` is the one a process named `comm` runs from. A
+/// Windows path (`C:\…`, `\\server\…`) is split on `\` and compared
+/// case-insensitively, as NTFS names files; the first cut split on `/` only, so
+/// the leaf of a Windows path was the whole path and never matched (#442).
+fn written_file_is(path: &str, comm: &str) -> bool {
+    let windows = path.as_bytes().get(1) == Some(&b':') || path.starts_with(r"\\");
+    if windows {
+        path.rsplit('\\')
+            .next()
+            .is_some_and(|leaf| leaf.eq_ignore_ascii_case(comm))
+    } else {
+        path.rsplit('/').next() == Some(comm)
     }
 }
 

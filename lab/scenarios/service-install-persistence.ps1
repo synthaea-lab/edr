@@ -8,11 +8,11 @@
     rule fires iff `sensor-windows-eventlog` captured the 7045 for the services
     this scenario installs.
 
-    Shape: this script installs N services via `sc.exe create` — the canonical
+    Shape: this script installs N services via `sc.exe create` -- the canonical
     MITRE ATT&CK T1543.003 tradecraft path. The services declare
     `notepad.exe` as their binPath and use `start= demand`, so nothing runs
     automatically; they are deleted at the end. No destructive action, no
-    lateral movement, no outbound network — benign by construction, for
+    lateral movement, no outbound network -- benign by construction, for
     detection validation only.
 
     The scenario intentionally uses `sc.exe create` rather than the
@@ -26,18 +26,18 @@
     Usage:
         1) terminal A (as Administrator):
              target\release\agent.exe run
-        2) terminal B (as Administrator — sc.exe create requires it):
-             pwsh -File lab\scenarios\service-install-persistence.ps1
-        3) expected: exactly one alert per iteration —
-             T1543.003 — service=SynthaeaDemoSvc<N> pid=<id>: service
-             persistence installed — image path: C:\Windows\System32\notepad.exe
+        2) terminal B (as Administrator -- sc.exe create requires it):
+             powershell -ExecutionPolicy Bypass -File lab\scenarios\service-install-persistence.ps1
+        3) expected: exactly one alert per iteration --
+             T1543.003 -- service=SynthaeaDemoSvc<N> pid=<id>: service
+             persistence installed -- image path: C:\Windows\System32\notepad.exe
 
     No alert means either:
         - The eventlog sensor's polling thread is not running (check that
           `sensor-windows-eventlog` is wired into `agent run`).
         - The rule regressed.
         - Note: unlike 4698, event 7045 lives in the System log (not
-          Security) and is emitted unconditionally — no audit subcategory
+          Security) and is emitted unconditionally -- no audit subcategory
           to enable, so a missing alert never points to auditpol.
 
     Prerequisites: run this script AND the agent as Administrator. The
@@ -45,20 +45,21 @@
 
     Scope: this asserts capture fidelity + rule matching for the canonical
     `sc.exe create` invocation. The `New-Service` cmdlet path is a
-    documented v2 widening — Windows emits the same 7045 for both, but a
+    documented v2 widening -- Windows emits the same 7045 for both, but a
     scenario-side proof of that would need a second script.
 
 .LINK
-    ATT&CK T1543.003 — https://attack.mitre.org/techniques/T1543/003/
+    ATT&CK T1543.003 -- https://attack.mitre.org/techniques/T1543/003/
 #>
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "common.ps1")
 
 $Iterations = 3
 $ServiceNamePrefix = "SynthaeaDemoSvc"
 # notepad.exe: a benign, always-present Windows binary. With `start= demand`
 # the service never auto-starts, and it is deleted before anything ever
-# invokes it — only the 7045 registration event matters here.
+# invokes it -- only the 7045 registration event matters here.
 $BinPath = "C:\Windows\System32\notepad.exe"
 
 Write-Host "Installing $Iterations services via sc.exe create..."
@@ -69,11 +70,9 @@ try {
         # start= demand : manual start, service never runs on its own.
         # DisplayName is cosmetic; the binPath is what the persistence would
         # execute at each service start.
-        # Note the `= ` spacing quirk in sc.exe args — required by the tool.
-        & sc.exe create $serviceName `
-            binPath= $BinPath `
-            start= demand `
-            DisplayName= "Synthaea demo service $i (benign, T1543.003 scenario)" | Out-Null
+        # Note the `= ` spacing quirk in sc.exe args -- required by the tool.
+        Invoke-Native sc.exe @("create", $serviceName, "binPath=", $BinPath, "start=", "demand",
+            "DisplayName=", "Synthaea demo service $i (benign, T1543.003 scenario)")
         $CreatedServiceNames += $serviceName
         Write-Host "  iteration $i done ($serviceName)"
         Start-Sleep -Seconds 1
@@ -86,10 +85,9 @@ try {
 }
 finally {
     Write-Host ""
-    Write-Host "Cleanup — deleting services..."
+    Write-Host "Cleanup -- deleting services..."
     foreach ($serviceName in $CreatedServiceNames) {
-        & sc.exe delete $serviceName | Out-Null
-        Write-Host "  deleted $serviceName"
+        Invoke-NativeCleanup $serviceName sc.exe @("delete", $serviceName)
     }
 }
 

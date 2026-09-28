@@ -4,7 +4,18 @@
 //! exclusions only apply through `policy::name_exclusion_applies` (a rename in
 //! %TEMP% must not inherit them).
 
-pub(crate) const DOWNLOADER_COMMS: &[&str] = &["curl", "wget"];
+/// Processes whose file writes feed the T1105 download-then-exec join: tools that
+/// write the downloaded file themselves. Windows names carry `.exe` (the ETW
+/// `comm` is the image's file name); the first cut listed only `curl`/`wget`, so
+/// the rule never saw a Windows download (#442).
+///
+/// Not listed, on purpose: `bitsadmin`/BITS jobs (the BITS service, a
+/// `svchost.exe`, writes the file, not `bitsadmin.exe`; BITS telemetry is #284),
+/// and `PowerShell` `Invoke-WebRequest` (`powershell.exe` writes far too many files
+/// for one of its writes to mean "download"). Browsers and mail clients are
+/// covered by the mark-of-the-web join (T1204.002) instead.
+pub(crate) const DOWNLOADER_COMMS: &[&str] =
+    &["curl", "wget", "curl.exe", "wget.exe", "certutil.exe"];
 pub(crate) const WEB_SERVER_COMMS: &[&str] = &["nginx", "apache2", "httpd"];
 pub(crate) const SHELL_COMMS: &[&str] = &["sh", "bash", "dash", "zsh", "ash"];
 
@@ -13,6 +24,15 @@ pub(crate) const SHELL_COMMS: &[&str] = &["sh", "bash", "dash", "zsh", "ash"];
 /// history, and an execution hours later is no longer the same "download & run"
 /// scenario anyway).
 pub(crate) const DOWNLOAD_EXEC_WINDOW_NS: u64 = 60_000_000_000; // 60s
+
+/// Window between a download-provenance mark (`FileQuarantine`: macOS quarantine
+/// xattr, Windows `Zone.Identifier`) and an exec of the marked file that still
+/// counts as "downloaded, then run" (T1204.002, #365). Wider than
+/// [`DOWNLOAD_EXEC_WINDOW_NS`]: a user opens a download minutes later, not
+/// within a script's seconds. Uncalibrated first cut (2026-09-23) — every
+/// legitimate installer run inside the window alerts too; revisit against
+/// fleet volume.
+pub(crate) const QUARANTINE_EXEC_WINDOW_NS: u64 = 600_000_000_000; // 10 min
 
 // ── Windows constants (ETW rules — T1059/T1218/T1071) ───────────────────────
 
@@ -30,6 +50,46 @@ pub(crate) const AUTH_FAILURE_THRESHOLD: u32 = 5;
 pub(crate) const AUTH_FAILURE_WINDOW_NS: u64 = 60_000_000_000; // 60s
 pub(crate) const BEACON_THRESHOLD: u32 = 3;
 pub(crate) const BEACON_WINDOW_NS: u64 = 60_000_000_000; // 60s
+
+/// RANSOMWARE-RENAME threshold and window (T1486): N renames by the same pid, each
+/// adding a new suffix onto its own old path (`document.docx` →
+/// `document.docx.locked`), in X seconds. 20-in-5s clears any plausible benign bulk
+/// rename (a script tagging a handful of its own output files) while staying well
+/// under what a real encryptor manages on modern storage — issue #262's own example
+/// ("100+ files modified in 10s") is a full order of magnitude higher than this
+/// threshold, so this alerts well before that volume is reached.
+pub(crate) const RANSOMWARE_RENAME_THRESHOLD: u32 = 20;
+pub(crate) const RANSOMWARE_RENAME_WINDOW_NS: u64 = 5_000_000_000; // 5s
+/// A pid contributes to the per-ppid (shell-loop) counter only while it has renamed
+/// at most this many files in the window. A loop's `mv` child renames exactly one
+/// file and exits, so it always qualifies; a single busy encryptor climbs past this
+/// almost immediately and is caught by the per-pid counter instead — this keeps one
+/// process's burst from also driving the shared per-ppid counter to a second alert.
+pub(crate) const RANSOMWARE_LOOP_CHILD_MAX: u32 = 3;
+
+// ── Ransomware write-volume corroboration (T1486, issue #82) ───────────────
+// Second, independent signal alongside check_mass_rename_pattern's shape check:
+// heavy write volume + a rename burst, regardless of the rename shape. Reuses
+// RANSOMWARE_RENAME_THRESHOLD/_WINDOW_NS above for "what counts as a burst" so the
+// two signals agree on calibration.
+
+/// 100MB written in the same window as `RANSOMWARE_RENAME_THRESHOLD` renames is the
+/// "full kill chain" signal: encrypt = read + heavy write + rename.
+pub(crate) const BURST_WRITE_BYTES_THRESHOLD: u64 = 100 * 1024 * 1024;
+
+/// Compression temp files land here — the one documented FP source for a
+/// heavy-write + mass-rename shape (archive extraction/creation). Path-based, not
+/// name-keyed, so it doesn't need the evidence-gating `check_mass_rename_pattern`'s
+/// doc describes for `comm`-based exclusions.
+pub(crate) const RANSOMWARE_EXCLUDED_PATH_PREFIXES: &[&str] = &["/tmp/", "/var/tmp/"];
+
+/// Pairing window for one scheduled-task registration seen on both Security 4698
+/// and TaskScheduler/Operational 106 (#422, T1053.005). The two are normalized by
+/// separate poll threads, each on a 2s cadence, so their timestamps land a few
+/// seconds apart in either order. 60s covers a slow poll with ample margin, while a
+/// real re-registration of the same task with the same action inside it adds
+/// nothing an analyst would miss. Uncalibrated against fleet traffic (2026-09-25).
+pub(crate) const TASK_REGISTRATION_DEDUP_WINDOW_NS: u64 = 60_000_000_000; // 60s
 
 /// Processes excluded from SELF-SPAWN (child side) — frequent legitimate self-spawn
 /// confirmed in lab.
@@ -65,12 +125,14 @@ pub(crate) const SELF_SPAWN_PARENT_EXCLUSIONS: &[&str] = &["RuntimeBroker.exe"];
 /// 2s per enabled channel — ~60 spawns/30s across the default four channels, well
 /// past `SELF_SPAWN_THRESHOLD`. `auditpol.exe`: run once at startup per channel
 /// needing an audit subcategory enabled. Both false-positived on the agent itself
-/// in the 2026-09-23 live lab validation of #391. Never a blanket "ignore every
+/// in the 2026-09-23 live lab validation of #391. `logman.exe`: the ETW sensor's
+/// startup orphan sweep (#408) — one `logman query -ets` plus one `logman stop` per
+/// orphan, so two orphans already reach `SELF_SPAWN_THRESHOLD`. Never a blanket "ignore every
 /// child of the agent": `ppid` alone is spoofable
 /// (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), so `check_self_spawn` also requires
 /// the image to live at a trusted system path (`policy::name_exclusion_applies`),
 /// same pairing as `SELF_SPAWN_EXCLUSIONS`.
-pub(crate) const AGENT_CHILD_EXCLUSIONS: &[&str] = &["wevtutil.exe", "auditpol.exe"];
+pub(crate) const AGENT_CHILD_EXCLUSIONS: &[&str] = &["wevtutil.exe", "auditpol.exe", "logman.exe"];
 
 /// `LOLBins` abused for shellcode injection or executing unsigned code (T1218/T1127).
 pub(crate) const LOLBINS: &[&str] = &[

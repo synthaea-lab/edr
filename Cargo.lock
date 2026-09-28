@@ -2437,7 +2437,9 @@ name = "sensor-windows-eventlog"
 version = "0.1.0"
 dependencies = [
  "schema",
+ "tempfile",
  "tracing",
+ "tracing-subscriber",
  "windows-sys 0.61.2",
 ]
 

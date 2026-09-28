@@ -3,7 +3,8 @@
 use schema::{
     ExecEvent, FLAG_PERSISTENCE_ACCOUNT_ARTIFACT, FLAG_PERSISTENCE_ARTIFACT,
     FLAG_PERSISTENCE_BTM_ARTIFACT, FLAG_PERSISTENCE_SYSTEMD_ARTIFACT,
-    FLAG_PERSISTENCE_TASK_ARTIFACT, FileOpenEvent,
+    FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN, FLAG_PERSISTENCE_TASK_ARTIFACT,
+    FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT, FileOpenEvent,
 };
 
 use crate::{Alert, has_write_intent};
@@ -130,7 +131,64 @@ pub fn evaluate_exec(event: &ExecEvent) -> Vec<Alert> {
         .chain(check_masquerading(event))
         .chain(check_recovery_inhibit(event))
         .chain(check_log_clear_exec(event))
+        .chain(check_memfd_exec(event))
         .collect()
+}
+
+/// T1620 — Reflective Code Loading: executing a payload that never touches disk via
+/// `memfd_create(2)` + `execveat(fd, "", ..., AT_EMPTY_PATH)` (issue #85's Linux
+/// scope; `schema::MemfdCreateEvent`, #265, is the creation-time telemetry — this
+/// check does not correlate to it, see below).
+///
+/// `ExecEvent::image_path` is `bprm->filename` at the kernel's `sched_process_exec`
+/// tracepoint (`crates/sensors/linux/ebpf`, #111) — **not** `/proc/<pid>/exe`.
+/// Traced against a live kernel (Alpine 6.18.50, #85 review) with a memfd copy of
+/// `/bin/true`:
+/// - `execveat(fd, "", AT_EMPTY_PATH)` (the memfd-exec primitive): `bprm->filename`
+///   is `/dev/fd/<n>`, and the kernel names the task after the memfd dentry, so
+///   `comm` starts with `memfd:`.
+/// - `execv` via `/proc/self/fd/<n>`: `bprm->filename` is `/proc/self/fd/<n>` (or
+///   `/proc/<pid>/fd/<n>`); `comm` is whatever the caller set.
+///
+/// Neither shape ever produces `/memfd:<name> (deleted)` — that string is only what
+/// `readlink /proc/<pid>/exe` shows, which the sensor doesn't read. An earlier
+/// version of this check matched on that string and never fired on real telemetry.
+///
+/// Correlating to `MemfdCreateEvent` instead of matching the exec shape directly was
+/// considered and rejected: `memfd_create` alone is common in legitimate code
+/// (glibc, systemd, browser sandboxing) — the *exec* is the technique, not the
+/// creation, so creation-only telemetry stays undispatched rather than becoming a
+/// noisy signal on its own.
+#[must_use]
+pub(crate) fn check_memfd_exec(event: &ExecEvent) -> Option<Alert> {
+    if !event.meta.comm.starts_with("memfd:") && !is_fd_exec_path(&event.image_path) {
+        return None;
+    }
+    Some(Alert {
+        technique: "T1620",
+        message: format!(
+            "pid={} comm={}: executed from a file descriptor ({}), not a real path — \
+             no payload ever touched disk",
+            event.meta.pid, event.meta.comm, event.image_path,
+        ),
+    })
+}
+
+/// Matches `/dev/fd/<n>` or `/proc/(self|<pid>)/fd/<n>` — exec via a file
+/// descriptor (`fexecve`/`execveat` with `AT_EMPTY_PATH`, or exec via
+/// `/proc/self/fd`) rather than a real on-disk path.
+fn is_fd_exec_path(path: &str) -> bool {
+    let is_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if let Some(fd) = path.strip_prefix("/dev/fd/") {
+        return is_digits(fd);
+    }
+    let Some(rest) = path.strip_prefix("/proc/") else {
+        return false;
+    };
+    let Some((pid_or_self, fd)) = rest.split_once("/fd/") else {
+        return false;
+    };
+    (pid_or_self == "self" || is_digits(pid_or_self)) && is_digits(fd)
 }
 
 /// T1611 — Escape to Host: a containerized process opening `/proc/<pid>/root` reaches
@@ -202,6 +260,84 @@ pub(crate) fn check_scheduled_task_persistence(event: &FileOpenEvent) -> Option<
         technique: "T1053.005",
         message: format!(
             "task={} pid={}: scheduled task persistence created — action path: {}",
+            event.meta.comm, event.meta.pid, event.path,
+        ),
+    })
+}
+
+/// Action-path fragments (lowercase) that make a scheduled-task *update* worth an
+/// alert: user-writable staging directories, and script hosts / proxy-execution
+/// binaries a hijacked task is typically repointed at. Uncalibrated against fleet
+/// traffic (first cut, 2026-09-23) — revisit once real 4702 volume is observed.
+///
+/// Matched against the path with `/` normalized to `\`. Task actions are stored
+/// as written, so the directories also appear as their unexpanded `%VAR%` tokens
+/// — the usual shape of a user-level task. The agent runs as SYSTEM and cannot
+/// expand per-user variables reliably, so the tokens are matched as-is (#399
+/// review).
+const TASK_HIJACK_ACTION_PATTERNS: &[&str] = &[
+    r"\appdata\",
+    r"\temp\",
+    r"\downloads\",
+    r"\users\public\",
+    r"\programdata\",
+    "%temp%",
+    "%tmp%",
+    "%appdata%",
+    "%localappdata%",
+    "%public%",
+    "%userprofile%",
+    "%programdata%",
+    "cmd.exe",
+    "powershell",
+    "pwsh",
+    "mshta",
+    "wscript",
+    "cscript",
+    "rundll32",
+    "regsvr32",
+];
+
+/// T1053.005 — Scheduled Task/Job: Scheduled Task, task-hijack sub-case: an
+/// *existing* scheduled task's action was rewritten (Security log event 4702, "A
+/// scheduled task was updated"). Sibling of [`check_scheduled_task_persistence`]
+/// (4698, creation), distinct marker `FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT`.
+///
+/// Unlike the creation rule, the flag alone is not enough: Windows rewrites its own
+/// tasks routinely, and `schtasks /create` itself emits 4702 as part of its
+/// registration (lab, 2026-09-22) — alerting on every 4702 would bury the signal.
+/// The rule therefore also requires the new action path to match
+/// `TASK_HIJACK_ACTION_PATTERNS`. A benign creation that also matches still fires
+/// the 4698 rule on its own event, so the pair can double-report one `schtasks
+/// /create` pointed at a suspicious path — accepted: correlation groups them.
+///
+/// `event.path` joins **every** action of the new definition (#443), so the gate
+/// matches a malicious second action behind a benign first one. An update whose
+/// action the sensor could not read (`FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN`)
+/// alerts without the gate: routine rewrites keep a readable `Exec`/`ComHandler`,
+/// and the placeholder path would otherwise let an unreadable action slip past
+/// the pattern check — same stance as #422 for creation.
+///
+/// Alert content carries the task's leaf name (`event.meta.comm`) and its new
+/// action path (`event.path`), for triage via `schtasks /Query /TN <name> /XML`.
+#[must_use]
+pub(crate) fn check_scheduled_task_update_persistence(event: &FileOpenEvent) -> Option<Alert> {
+    if event.flags & FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT == 0 {
+        return None;
+    }
+    let reason = if event.flags & FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN == 0 {
+        let path_lower = event.path.to_ascii_lowercase().replace('/', r"\");
+        *TASK_HIJACK_ACTION_PATTERNS
+            .iter()
+            .find(|pattern| path_lower.contains(*pattern))?
+    } else {
+        "action unreadable"
+    };
+    Some(Alert {
+        technique: "T1053.005",
+        message: format!(
+            "task={} pid={}: existing scheduled task repointed ({reason}) — new action \
+             path: {}",
             event.meta.comm, event.meta.pid, event.path,
         ),
     })
@@ -342,13 +478,16 @@ pub(crate) fn check_btm_launch_item_persistence(event: &FileOpenEvent) -> Option
     })
 }
 
-/// Evaluates all stateless rules applicable to a `FileOpenEvent`.
+/// Evaluates all stateless rules applicable to a `FileOpenEvent`. T1053.005
+/// creation ([`check_scheduled_task_persistence`]) is not among them: one
+/// registration arrives twice (4698 and 106), so `RuleState::on_file_open`
+/// reports it, deduplicated (#422).
 #[must_use]
 pub fn evaluate_file_open(event: &FileOpenEvent) -> Vec<Alert> {
     check_persistence_write(event)
         .into_iter()
         .chain(check_proc_root_escape(event))
-        .chain(check_scheduled_task_persistence(event))
+        .chain(check_scheduled_task_update_persistence(event))
         .chain(check_service_install_persistence(event))
         .chain(check_account_creation_persistence(event))
         .chain(check_systemd_service_persistence(event))
@@ -527,25 +666,31 @@ pub(crate) fn check_recovery_inhibit(event: &ExecEvent) -> Option<Alert> {
     })
 }
 
-/// T1070.002 — Indicator Removal: Clear Logs (the exec-side half; the
-/// file-deletion half is [`check_log_file_delete`]). Platform log-wipe
-/// commands: Windows event-log clearing, the macOS unified-log erase, and
-/// journald vacuuming to nothing.
+/// ATT&CK splits log clearing by platform: T1070.001 is Windows event logs,
+/// T1070.002 is Linux and macOS system logs. The first cut tagged everything
+/// `.002`, Windows included (#424).
+const CLEAR_WINDOWS_EVENT_LOGS: &str = "T1070.001";
+const CLEAR_UNIX_SYSTEM_LOGS: &str = "T1070.002";
+
+/// T1070.001 / T1070.002 — Indicator Removal: Clear Logs (the exec-side half;
+/// the file-deletion half is [`check_log_file_delete`]). Platform log-wipe
+/// commands: Windows event-log clearing (`.001`), the macOS unified-log erase
+/// and journald vacuuming to nothing (`.002`).
 #[must_use]
 pub(crate) fn check_log_clear_exec(event: &ExecEvent) -> Option<Alert> {
-    const PATTERNS: &[&[&str]] = &[
-        &["wevtutil", "cl"],
-        &["wevtutil", "clear-log"],
-        &["clear-eventlog"],
-        &["log", "erase"],
-        &["journalctl", "--vacuum"],
+    const PATTERNS: &[(&str, &[&str])] = &[
+        (CLEAR_WINDOWS_EVENT_LOGS, &["wevtutil", "cl"]),
+        (CLEAR_WINDOWS_EVENT_LOGS, &["wevtutil", "clear-log"]),
+        (CLEAR_WINDOWS_EVENT_LOGS, &["clear-eventlog"]),
+        (CLEAR_UNIX_SYSTEM_LOGS, &["log", "erase"]),
+        (CLEAR_UNIX_SYSTEM_LOGS, &["journalctl", "--vacuum"]),
     ];
     let cmdline = event.cmdline.to_ascii_lowercase();
-    PATTERNS
+    let &(technique, _) = PATTERNS
         .iter()
-        .find(|tokens| tokens.iter().all(|t| cmdline.contains(t)))?;
+        .find(|(_, tokens)| tokens.iter().all(|t| cmdline.contains(t)))?;
     Some(Alert {
-        technique: "T1070.002",
+        technique,
         message: format!(
             "pid={} comm={}: log-clearing command: {}",
             event.meta.pid, event.meta.comm, event.cmdline,
@@ -554,19 +699,27 @@ pub(crate) fn check_log_clear_exec(event: &ExecEvent) -> Option<Alert> {
 }
 
 /// Log locations whose deletion is the anti-forensics signal
-/// ([`check_log_file_delete`]). Substring/prefix matches, same tolerance as
-/// [`check_persistence_write`]'s patterns.
-const LOG_PATH_PATTERNS: &[&str] = &["/var/log/", "/private/var/log/", "/log/journal/", ".evtx"];
+/// ([`check_log_file_delete`]), each with its technique. Substring/prefix
+/// matches, same tolerance as [`check_persistence_write`]'s patterns.
+const LOG_PATH_PATTERNS: &[(&str, &str)] = &[
+    (CLEAR_UNIX_SYSTEM_LOGS, "/var/log/"),
+    (CLEAR_UNIX_SYSTEM_LOGS, "/private/var/log/"),
+    (CLEAR_UNIX_SYSTEM_LOGS, "/log/journal/"),
+    (CLEAR_WINDOWS_EVENT_LOGS, ".evtx"),
+];
 
-/// T1070.002 — the file-deletion half: a log file removed outright. Consumes
+/// T1070.001 / T1070.002 — the file-deletion half: a log file removed outright
+/// (`.evtx` event logs are `.001`, Unix system logs `.002`). Consumes
 /// [`schema::FileDeleteEvent`]s (Linux unlink tracing, macOS ES `UNLINK`;
 /// Windows deletions arrive with the minifilter, #136).
 #[must_use]
 pub(crate) fn check_log_file_delete(event: &schema::FileDeleteEvent) -> Option<Alert> {
     let path = &event.path;
-    let matched = LOG_PATH_PATTERNS.iter().find(|p| path.contains(*p))?;
+    let &(technique, matched) = LOG_PATH_PATTERNS
+        .iter()
+        .find(|(_, pattern)| path.contains(*pattern))?;
     Some(Alert {
-        technique: "T1070.002",
+        technique,
         message: format!(
             "pid={} comm={}: log file deleted ({matched}): {path}",
             event.meta.pid, event.meta.comm,

@@ -11,8 +11,9 @@ tools/gauntlet.sh          # fmt, deps, clippy (host + linux target + windows se
 tools/gauntlet.sh --fast   # skips the cross-target and docs passes
 ```
 
-While CI is billing-blocked (`workflow_dispatch` only — issue #318), the
-gauntlet **is** the gate: run it before every push, or opt into the pre-push
+CI (`ci.yml`) runs on every push and pull request and is the gate (#318).
+The gauntlet runs the same checks on one machine, so a failure shows up before
+the push instead of on the PR: run it before pushing, or opt into the pre-push
 hook with `git config core.hooksPath tools/hooks`.
 
 ## Test taxonomy

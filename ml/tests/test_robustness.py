@@ -155,12 +155,22 @@ def test_run_robustness_evaluation_missing_scenario() -> None:
 
 
 def test_run_robustness_evaluation_t1_not_implemented(dummy_model, dummy_scenario_yaml) -> None:
-    """T1 tier raises NotImplementedError."""
+    """T1 tier raises NotImplementedError (deferred until combined features scoring)."""
     with pytest.raises(NotImplementedError, match="T1"):
         run_robustness_evaluation(
             model=dummy_model,
             scenario_yaml=dummy_scenario_yaml,
             tier="T1",
+        )
+
+
+def test_run_robustness_evaluation_t2_not_implemented(dummy_model, dummy_scenario_yaml) -> None:
+    """T2 tier raises NotImplementedError."""
+    with pytest.raises(NotImplementedError, match="T2"):
+        run_robustness_evaluation(
+            model=dummy_model,
+            scenario_yaml=dummy_scenario_yaml,
+            tier="T2",
         )
 
 

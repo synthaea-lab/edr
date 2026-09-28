@@ -169,11 +169,19 @@ pub mod time;
 /// number first: 22 → 23 (#262 Phase 3 xattr), 23 → 24 (#297 `PolicyDenial`),
 /// 24 → 25 (#264), 25 → 26 → 27 (#265, #266).
 ///
-/// Bumped 27 → 28 for [`detection::Detection::techniques`] (#74): structured ATT&CK
+/// Bumped 27 → 29 for [`CapSetEvent`]'s capability sets widening from `u32`
+/// to `u64` and the new optional [`KernelModuleEvent::path`] (#457). A v27
+/// reader rejects a capability mask above `u32::MAX` (`CAP_BPF` is bit 39),
+/// so the widening is serialization-visible even though every value below
+/// 2^32 still serializes identically. 28 was claimed by #469 (ATT&CK technique
+/// ids) while both branches were open; #457 merged first, so #469 renumbers
+/// below — same coordination note as v13 and ADR-0005.
+///
+/// Bumped 29 → 30 for [`detection::Detection::techniques`] (#74): structured ATT&CK
 /// technique identifiers on a detection, additive `Vec<String>` alongside
 /// `attributions`, no new variant. Same serialization-visible reasoning as every
 /// field addition since v13.
-pub const SCHEMA_VERSION: u32 = 28;
+pub const SCHEMA_VERSION: u32 = 30;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -289,6 +297,57 @@ pub const FLAG_PERSISTENCE_BTM_ARTIFACT: u32 = 0x0400_0000;
 /// A distinct bit from every other `FLAG_*` constant, so no two techniques
 /// cross-fire off a single event.
 pub const FLAG_APPLICATION_BLOCKED: u32 = 0x0100_0000;
+
+/// Same principle as [`FLAG_PERSISTENCE_ARTIFACT`], for a Windows **scheduled task
+/// update** (event 4702, "A scheduled task was updated") — still ATT&CK T1053.005,
+/// but the task-hijack sub-case: an attacker repoints an *existing*, possibly
+/// already-trusted task at a malicious action instead of registering a new one
+/// (the 4698 / [`FLAG_PERSISTENCE_TASK_ARTIFACT`] case). Set by
+/// `sensor-windows-eventlog`.
+///
+/// Unlike the other `FLAG_PERSISTENCE_*` bits, the flag alone is **not** the
+/// signal: Windows rewrites its own tasks routinely (servicing, maintenance), and
+/// `schtasks /create` was observed in lab (2026-09-22) to emit 4702 as part of its
+/// own registration too. `rules::check_scheduled_task_update_persistence`
+/// therefore also requires a suspicious action path — see that function's doc.
+///
+/// A distinct bit from every other `FLAG_*` constant, so no two techniques
+/// cross-fire off a single event. Not a serialization-visible schema change (same
+/// reasoning as [`FLAG_PERSISTENCE_ARTIFACT`]).
+pub const FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT: u32 = 0x0080_0000;
+
+/// Every synthetic `FLAG_*` bit above, checked pairwise-disjoint at compile time.
+/// A new flag goes here in the same edit (a unit test fails if a `pub const
+/// FLAG_*` is missing). Lives next to the constants, not in a
+/// consumer's test: the first cut of [`FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT`]
+/// took `0x0200_0000`, already [`FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN`], and the
+/// hardcoded list in `rules`' collision test missed it (#399 review).
+const SYNTHETIC_FLAGS: [u32; 8] = [
+    FLAG_PERSISTENCE_ARTIFACT,
+    FLAG_PERSISTENCE_TASK_ARTIFACT,
+    FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN,
+    FLAG_PERSISTENCE_ACCOUNT_ARTIFACT,
+    FLAG_PERSISTENCE_SYSTEMD_ARTIFACT,
+    FLAG_PERSISTENCE_BTM_ARTIFACT,
+    FLAG_APPLICATION_BLOCKED,
+    FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT,
+];
+
+const _: () = {
+    let mut i = 0;
+    while i < SYNTHETIC_FLAGS.len() {
+        assert!(SYNTHETIC_FLAGS[i] != 0, "synthetic flag is zero");
+        let mut j = i + 1;
+        while j < SYNTHETIC_FLAGS.len() {
+            assert!(
+                SYNTHETIC_FLAGS[i] & SYNTHETIC_FLAGS[j] == 0,
+                "two synthetic FLAG_* constants share a bit"
+            );
+            j += 1;
+        }
+        i += 1;
+    }
+};
 
 /// Identity of the user a process runs as, per platform.
 ///
@@ -1250,14 +1309,17 @@ pub struct GatekeeperVerdictEvent {
     pub result_code: u32,
 }
 
-/// macOS download provenance — the `com.apple.quarantine` extended attribute
-/// was set on a file, marking it as downloaded from the network. Emitted by
-/// `sensor-macos` (#96) on `SETEXTATTR`, with the quarantine string and the
-/// `kMDItemWhereFroms` origin URLs read back from the file at event time.
+/// Download provenance — a file was marked as downloaded from the network.
+/// Emitted by `sensor-macos` (#96) when the `com.apple.quarantine` extended
+/// attribute is set (`SETEXTATTR`, with the quarantine string and the
+/// `kMDItemWhereFroms` origin URLs read back at event time), and by
+/// `sensor-windows` (#365) when a `Zone.Identifier` stream — the
+/// mark-of-the-web — is written (`HostUrl`/`ReferrerUrl` read back; `agent`
+/// is the writing process, Windows records no downloader name).
 ///
 /// This is the network→file link: a later exec of `path` joins this event to
-/// answer "where did that binary come from" — the macOS mark-of-the-web
-/// (cross-platform note in `docs/sensors/sources.md`).
+/// answer "where did that binary come from" (cross-platform note in
+/// `docs/sensors/sources.md`).
 ///
 /// `agent`/`origin_url`/`referrer_url` are `None` when the writing application
 /// did not (or had not yet) recorded them — the quarantine mark alone is still
@@ -1417,11 +1479,17 @@ pub struct KernelModuleEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The already-open file descriptor [`KernelModuleAction::LoadFd`] loads
-    /// from. Resolving it to a path is deferred — same "sensor reports the
-    /// syscall boundary, not an enriched path" posture as `FileWriteEvent`'s
-    /// fd-only shape.
+    /// from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fd: Option<i32>,
+    /// The file [`KernelModuleAction::LoadFd`]'s `fd` refers to, e.g.
+    /// `/usr/lib/modules/<release>/kernel/drivers/net/dummy.ko.xz` (v29,
+    /// #457). Resolved in userspace from `/proc/<pid>/fd/<fd>` when the event
+    /// is drained, so it is best effort: `None` if the loader already closed
+    /// the fd or exited. The module name itself still lives inside the image
+    /// and is not decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Size in bytes of the raw module image [`KernelModuleAction::Load`]
     /// receives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1479,10 +1547,11 @@ pub struct IdentityChangeEvent {
     pub saved: Option<u32>,
 }
 
-/// Linux capability set change (issue #266): `capset(2)`. Only the low 32
-/// capability bits are decoded — see `sensor-linux-wire::CapSetEvent`'s doc
-/// for why that already covers every capability an attacker plausibly wants
-/// (`CAP_SYS_ADMIN`, `CAP_SETUID`, `CAP_NET_ADMIN`, `CAP_DAC_OVERRIDE`, ...).
+/// Linux capability set change (issue #266): `capset(2)`. Each set is the full
+/// 64-bit capability mask (bit N = capability N) since v29 (#457): the low 32
+/// bits alone missed `CAP_PERFMON` (38), `CAP_BPF` (39) and
+/// `CAP_CHECKPOINT_RESTORE` (40), which is what loading eBPF without full
+/// `CAP_SYS_ADMIN` takes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapSetEvent {
     pub meta: EventMeta,
@@ -1490,9 +1559,9 @@ pub struct CapSetEvent {
     /// `capset(2)`'s own documented meaning for pid 0, not an absent value,
     /// so it stays a plain `u32` rather than `Option<u32>`.
     pub target_pid: u32,
-    pub effective: u32,
-    pub permitted: u32,
-    pub inheritable: u32,
+    pub effective: u64,
+    pub permitted: u64,
+    pub inheritable: u64,
 }
 
 /// Which namespace syscall produced a [`NamespaceEvent`].
@@ -1633,6 +1702,20 @@ impl Event {
             // the defining crate, so a new variant without its arm here is a
             // compile error — the reminder the doc comment above promises.
         }
+    }
+}
+
+#[cfg(test)]
+mod synthetic_flag_tests {
+    #[test]
+    fn every_pub_flag_constant_is_in_synthetic_flags() {
+        // The compile-time disjointness check only sees what the list holds; a
+        // new `pub const FLAG_*` left out of it would skip the check silently.
+        let declared = include_str!("lib.rs")
+            .lines()
+            .filter(|line| line.starts_with("pub const FLAG_"))
+            .count();
+        assert_eq!(declared, super::SYNTHETIC_FLAGS.len());
     }
 }
 

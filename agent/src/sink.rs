@@ -323,15 +323,25 @@ impl DetectionSink {
     /// `FileOpen` events: stateless rules, downloader-write history, and the
     /// budgeted YARA queue on write intent (off the event path).
     fn detect_file_open(&self, event: &schema::FileOpenEvent) {
-        for alert in rules::evaluate_file_open(event) {
+        let state_alerts = self.rule_state.lock().unwrap().on_file_open(event);
+        for alert in rules::evaluate_file_open(event)
+            .into_iter()
+            .chain(state_alerts)
+        {
             self.emit(alert.technique, &alert.message);
         }
-        self.rule_state.lock().unwrap().on_file_open(event);
         if let Some(yara) = &self.yara
             && event.flags & 0o103 != 0
         {
             yara.enqueue(std::path::PathBuf::from(&event.path));
         }
+    }
+
+    /// `FileQuarantine` events (macOS quarantine xattr, Windows
+    /// `Zone.Identifier`): recorded for the T1204.002 download→exec join, no
+    /// alert on their own (#365).
+    fn detect_file_quarantine(&self, event: &schema::FileQuarantineEvent) {
+        self.rule_state.lock().unwrap().on_file_quarantine(event);
     }
 
     /// Connect events: beacon detection.
@@ -364,7 +374,7 @@ impl DetectionSink {
         }
     }
 
-    /// `FileDelete` events: log-tamper detection (T1070.002, pack #379).
+    /// `FileDelete` events: log-tamper detection (T1070.001/.002, pack #379).
     fn detect_file_delete(&self, event: &schema::FileDeleteEvent) {
         for alert in rules::evaluate_file_delete(event) {
             self.emit(alert.technique, &alert.message);
@@ -376,6 +386,21 @@ impl DetectionSink {
         for alert in rules::evaluate_signal(event) {
             self.emit(alert.technique, &alert.message);
         }
+    }
+
+    /// `FileRename` events: mass-rename ransomware detection (T1486, issue #262) +
+    /// write-volume corroboration (issue #82).
+    fn detect_file_rename(&self, event: &schema::FileRenameEvent) {
+        for alert in self.rule_state.lock().unwrap().on_file_rename(event) {
+            self.emit(alert.technique, &alert.message);
+        }
+    }
+
+    /// `FileWrite` events: no alert on their own — tracks per-pid write volume for
+    /// the ransomware write-volume corroboration signal (T1486, issue #82),
+    /// consumed on the next `FileRename`.
+    fn detect_file_write(&self, event: &schema::FileWriteEvent) {
+        self.rule_state.lock().unwrap().on_file_write(event);
     }
 
     /// Writes one alert to the shared log and highlighted stderr. `pub(crate)`
@@ -519,6 +544,9 @@ impl EventSink for DetectionSink {
             Event::Auth(e) => self.detect_auth(e),
             Event::FileDelete(e) => self.detect_file_delete(e),
             Event::Signal(e) => self.detect_signal(e),
+            Event::FileQuarantine(e) => self.detect_file_quarantine(e),
+            Event::FileRename(e) => self.detect_file_rename(e),
+            Event::FileWrite(e) => self.detect_file_write(e),
             // New telemetry categories reach the engines as they land; until a rule
             // consumes them, logging below is the whole treatment.
             _ => {}
@@ -595,7 +623,9 @@ impl EventSink for BaselineSink {
             }
             // File events feed the stateful rules' history (download tracking) so
             // exclusion decisions stay accurate; connects are irrelevant here.
-            Event::FileOpen(e) => self.rule_state.lock().unwrap().on_file_open(e),
+            Event::FileOpen(e) => {
+                self.rule_state.lock().unwrap().on_file_open(e);
+            }
             _ => {}
         }
     }

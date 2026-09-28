@@ -6,22 +6,34 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A new push to a PR branch cancels that branch's run still in progress. Runs on
-# main are never cancelled, so every merge commit gets a complete result.
+# A new push to a PR branch cancels that branch's run still in progress. Each
+# main commit gets its own group, so every merge commit gets a complete result:
+# with one shared group, GitHub keeps a single pending run and cancels the older
+# pending one even with cancel-in-progress off (two runs were lost that way on
+# 25/09 when merges landed back to back).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
+
+# Read-only token for every job: nothing here writes to the repo, and a
+# compromised step or dependency then can't push, tag or touch PRs.
+permissions:
+  contents: read
 
 jobs:
   # Formatting and dependency direction — cheap, one OS.
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
+        with:
+          toolchain: stable
       - name: rustfmt
         # rustfmt.toml sets unstable options (group_imports, imports_granularity);
         # stable rustfmt silently ignores them, so the check must run on nightly.
@@ -32,6 +44,8 @@ jobs:
         run: python3 tools/check-deps.py
       - name: attack coverage matrix up to date
         run: python3 tools/attack-coverage.py --check
+      - name: PowerShell scripts ASCII-only
+        run: python3 tools/check-ps1-ascii.py
       - name: docs build clean
         run: cargo doc --workspace --exclude sensor-linux-ebpf --no-deps
         env:
@@ -41,8 +55,10 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
 
@@ -56,15 +72,69 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
+        with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: clippy
         run: cargo clippy --workspace --exclude sensor-linux-ebpf --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace --exclude sensor-linux-ebpf
 
-  # The eBPF probe crate is excluded from the workspace and gets its own job
-  # once it contains code (bpf-linker toolchain, Linux only).
+  # Linux with the eBPF probes embedded, the configuration we actually ship.
+  # The `test` runner has no bpf-linker, so there build.rs skips the probes: the
+  # eBPF crate itself never compiles, and clippy only sees the probe-less variant
+  # of sensor-linux (#448: code that was dead only in that variant). This job
+  # installs the same toolchain as lab/provisioning/linux-toolchain.sh (the nightly
+  # pinned in ebpf-toolchain.txt + rust-src for aya-build, prebuilt bpf-linker at
+  # the same pin) and fails if the
+  # probes did not get embedded. No `cargo test` here: loading them needs a
+  # privileged kernel, which is what the lab VMs are for.
+  linux-ebpf:
+    runs-on: ubuntu-latest
+    env:
+      # Keep both in sync with lab/provisioning/linux-toolchain.sh. The hash is the
+      # x86_64 musl tarball's: a replaced release asset must fail here, not run.
+      BPF_LINKER_VERSION: v0.11.1
+      BPF_LINKER_SHA256: e058a6aecc9e65fa4c977b298a8e4b738424d7629769fd352eed409fb57e16e8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
+        with:
+          toolchain: stable
+          components: clippy
+      - name: pinned nightly + rust-src (aya-build compiles the probes with it)
+        run: rustup toolchain install "$(tr -d '[:space:]' < ebpf-toolchain.txt)" --profile minimal --component rust-src
+      - name: bpf-linker (prebuilt, musl-static, bundled LLVM, SHA-256 pinned)
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/bpf-linker.tar.zst" \
+            "https://github.com/aya-rs/bpf-linker/releases/download/${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
+          echo "${BPF_LINKER_SHA256}  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$RUNNER_TEMP"
+          install -m755 "$(find "$RUNNER_TEMP" -type f -name bpf-linker -print -quit)" "$HOME/.cargo/bin/bpf-linker"
+          bpf-linker --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Never share a cache with the probe-less `test` job: a restored build
+          # script output from there would skip the probes (see the stale-build
+          # note in lab/provisioning/linux-toolchain.sh).
+          key: ebpf-embedded
+      - name: clippy (embedded probes)
+        run: cargo clippy -p sensor-linux -p sensor-linux-uprobes -p agent --all-targets -- -D warnings
+      - name: probes are embedded
+        run: |
+          for crate in sensor-linux sensor-linux-uprobes; do
+            obj=$(find target/debug/build -regextype posix-extended \
+              -regex ".*/build/${crate}-[0-9a-f]{16}/out/sensor-linux-ebpf" -type f -print -quit)
+            if [ -z "$obj" ]; then
+              echo "::error::${crate} was built WITHOUT embedded eBPF probes"
+              exit 1
+            fi
+            ls -la "$obj"
+          done

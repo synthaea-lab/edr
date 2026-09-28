@@ -9,10 +9,10 @@
     this scenario creates.
 
     Shape: this script creates N one-shot scheduled tasks via `schtasks.exe
-    /Create` — the canonical MITRE ATT&CK T1053.005 tradecraft path. The
+    /Create` -- the canonical MITRE ATT&CK T1053.005 tradecraft path. The
     tasks execute `notepad.exe` at a far-future time (so they never actually
     run during the scenario), then are deleted at the end. No destructive
-    action, no lateral movement, no outbound network — benign by
+    action, no lateral movement, no outbound network -- benign by
     construction, for detection validation only.
 
     The scenario intentionally uses `schtasks.exe /Create` rather than the
@@ -25,11 +25,11 @@
     Usage:
         1) terminal A (as Administrator):
              target\release\agent.exe run
-        2) terminal B (as Administrator — schtasks.exe /Create requires it):
-             pwsh -File lab\scenarios\scheduled-task-persistence.ps1
-        3) expected: exactly one alert per iteration —
-             T1053.005 — task=SynthaeaDemoTask<N> pid=<id>: scheduled task
-             persistence created — action path: C:\Windows\System32\notepad.exe
+        2) terminal B (as Administrator -- schtasks.exe /Create requires it):
+             powershell -ExecutionPolicy Bypass -File lab\scenarios\scheduled-task-persistence.ps1
+        3) expected: exactly one alert per iteration --
+             T1053.005 -- task=SynthaeaDemoTask<N> pid=<id>: scheduled task
+             persistence created -- action path: C:\Windows\System32\notepad.exe
 
     No alert means either:
         - The 4698 audit subcategory is not enabled and the sensor's own
@@ -45,20 +45,21 @@
 
     Scope: this asserts capture fidelity + rule matching for the canonical
     `schtasks.exe /Create` invocation. The PowerShell `New-ScheduledTask*`
-    cmdlet path is a documented v2 widening — Windows emits the same 4698
+    cmdlet path is a documented v2 widening -- Windows emits the same 4698
     for both, but a scenario-side proof of that would need a second script.
 
 .LINK
-    ATT&CK T1053.005 — https://attack.mitre.org/techniques/T1053/005/
+    ATT&CK T1053.005 -- https://attack.mitre.org/techniques/T1053/005/
 #>
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "common.ps1")
 
 $Iterations = 3
 $TaskNamePrefix = "SynthaeaDemoTask"
 # notepad.exe: a benign, always-present Windows binary. The tasks are set to
 # run at a far-future time and deleted before they trigger, so nothing
-# actually executes — only the 4698 registration event matters here.
+# actually executes -- only the 4698 registration event matters here.
 $ActionPath = "C:\Windows\System32\notepad.exe"
 
 Write-Host "Creating $Iterations scheduled tasks via schtasks.exe /Create..."
@@ -66,17 +67,11 @@ $CreatedTaskNames = @()
 try {
     for ($i = 1; $i -le $Iterations; $i++) {
         $taskName = "${TaskNamePrefix}${i}"
-        # /SC ONCE /ST 23:59 /SD 12/31/2099 : one-shot, never fires in practice.
+        # /SC ONCE /ST 23:59 /SD <far future> : one-shot, never fires in practice.
         # /RL LIMITED : runs under the invoking user, no privilege escalation.
         # /F : overwrite if a stale task from a previous run remains.
-        & schtasks.exe /Create `
-            /TN $taskName `
-            /TR $ActionPath `
-            /SC ONCE `
-            /ST 23:59 `
-            /SD 12/31/2099 `
-            /RL LIMITED `
-            /F | Out-Null
+        Invoke-Native schtasks.exe @("/Create", "/TN", $taskName, "/TR", $ActionPath,
+            "/SC", "ONCE", "/ST", "23:59", "/SD", (Get-FarFutureDate), "/RL", "LIMITED", "/F")
         $CreatedTaskNames += $taskName
         Write-Host "  iteration $i done ($taskName)"
         Start-Sleep -Seconds 1
@@ -89,10 +84,9 @@ try {
 }
 finally {
     Write-Host ""
-    Write-Host "Cleanup — deleting scheduled tasks..."
+    Write-Host "Cleanup -- deleting scheduled tasks..."
     foreach ($taskName in $CreatedTaskNames) {
-        & schtasks.exe /Delete /TN $taskName /F | Out-Null
-        Write-Host "  deleted $taskName"
+        Invoke-NativeCleanup $taskName schtasks.exe @("/Delete", "/TN", $taskName, "/F")
     }
 }
 

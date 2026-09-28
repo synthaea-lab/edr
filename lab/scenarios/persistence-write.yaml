@@ -1,0 +1,31 @@
+name: persistence-write
+platform: linux
+script: persistence-write.sh
+simulates: >
+  A write-intent open to a known shell-profile persistence path (~/.bashrc) —
+  T1037.004, Boot or Logon Initialization Scripts. One of the oldest, plainest Linux
+  malware persistence moves: appending a line to a shell profile needs no special
+  privilege beyond what the compromised user already has, and survives every new
+  interactive shell. The scenario appends a clearly marked, harmless comment line,
+  never sourced as a command, and removes it again in cleanup.
+expected_detections:
+  - technique: "T1037.004/T1053.003"
+    rule: check_persistence_write   # crates/rules/src/stateless.rs —
+                                     # PERSISTENCE_PATH_PATTERNS substring match on
+                                     # .bashrc, gated on has_write_intent(flags)
+    min_count: 2
+    tolerance: 0
+notes: >
+  Targets ~/.bashrc specifically (not /etc/cron.d/ or /etc/systemd/system/, also in
+  PERSISTENCE_PATH_PATTERNS) to avoid touching real system-level persistence
+  mechanisms in the lab — a shell-profile append is the lowest-risk member of the
+  pattern list to exercise live. None of PERSISTENCE_PATH_PATTERNS' paths fall under
+  FILTERED_PATH_PREFIXES (issue #325/#426), so this scenario is unaffected by that
+  regression.
+
+  min_count is 2, not 1 (#431 review): the marker append is the first alert, and
+  cleanup's restore-on-exit is itself a write-intent open on a path containing
+  ".bashrc", so it alerts a second time — expected, not a bug, since restoring a
+  persistence path is genuinely indistinguishable from writing to it. This assumes
+  ~/.bashrc exists before the script runs, true on every image in the VM matrix; if
+  it doesn't, cleanup removes the file instead of restoring it (no second alert).

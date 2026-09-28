@@ -159,6 +159,24 @@ fn agent_own_wevtutil_child_does_not_alert() {
 }
 
 #[test]
+fn agent_own_logman_orphan_sweep_does_not_alert() {
+    // #408's startup sweep: one `logman query -ets` + one `logman stop` per
+    // orphan, all within milliseconds — two orphans already reach the threshold.
+    let mut state = RuleState::new();
+    state.seed_own_pid(1084);
+    let mut alerts = Vec::new();
+    for i in 0..SELF_SPAWN_THRESHOLD + 2 {
+        let mut e = exec_event_win(7000 + i, 1084, "logman.exe", "logman.exe", u64::from(i));
+        e.image_path = "C:\\Windows\\System32\\logman.exe".to_string();
+        alerts.extend(state.on_exec(&e));
+    }
+    assert!(
+        alerts.is_empty(),
+        "the agent's own logman.exe orphan-sweep children must not self-alert (#408)"
+    );
+}
+
+#[test]
 fn agent_own_auditpol_child_does_not_alert() {
     let mut state = RuleState::new();
     state.seed_own_pid(1084);
@@ -459,4 +477,77 @@ fn beacon_outside_window_resets_counter() {
         90_000_000_000,
     ));
     assert!(alerts.is_empty());
+}
+
+// ── Download-then-exec (T1105) on Windows paths (#442) ──────────────────────
+
+/// A Windows download by `downloader` of `path`, then an exec of `comm` 5s later.
+fn windows_download_then_exec(downloader: &str, path: &str, comm: &str) -> Vec<crate::Alert> {
+    let mut state = RuleState::new();
+    let _ = state.on_file_open(&file_open_event_full(
+        50,
+        downloader,
+        path,
+        O_WRONLY | O_CREAT,
+        0,
+    ));
+    state.on_exec(&exec_event_win(51, 1, comm, path, 5_000_000_000))
+}
+
+#[test]
+fn curl_exe_download_then_exec_matches_on_windows() {
+    // Regression (#442): the downloader list said `curl` (the ETW comm is
+    // `curl.exe`) and the leaf was cut on `/`, so the rule never fired on Windows.
+    let alerts = windows_download_then_exec(
+        "curl.exe",
+        r"C:\Users\victim\AppData\Local\Temp\payload.exe",
+        "payload.exe",
+    );
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert_eq!(alerts[0].technique, "T1105");
+}
+
+#[test]
+fn certutil_download_then_exec_matches() {
+    let alerts = windows_download_then_exec("certutil.exe", r"C:\ProgramData\p.exe", "p.exe");
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+}
+
+#[test]
+fn windows_leaf_match_ignores_case_like_ntfs() {
+    let alerts = windows_download_then_exec("curl.exe", r"C:\Temp\PAYLOAD.EXE", "payload.exe");
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+}
+
+#[test]
+fn unc_path_download_then_exec_matches() {
+    let alerts = windows_download_then_exec("curl.exe", r"\\share\drop\p.exe", "p.exe");
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+}
+
+#[test]
+fn powershell_writes_do_not_feed_the_download_join() {
+    // Deliberately not a downloader: powershell.exe writes far too many files.
+    let alerts = windows_download_then_exec("powershell.exe", r"C:\Temp\p.exe", "p.exe");
+    assert!(alerts.iter().all(|a| a.technique != "T1105"), "{alerts:?}");
+}
+
+#[test]
+fn a_linux_leaf_match_stays_case_sensitive() {
+    let mut state = RuleState::new();
+    let _ = state.on_file_open(&file_open_event_full(
+        50,
+        "curl",
+        "/tmp/Payload",
+        O_WRONLY | O_CREAT,
+        0,
+    ));
+    let alerts = state.on_exec(&exec_event_full(
+        51,
+        1,
+        "payload",
+        "/tmp/payload",
+        5_000_000_000,
+    ));
+    assert!(alerts.iter().all(|a| a.technique != "T1105"), "{alerts:?}");
 }

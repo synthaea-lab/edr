@@ -320,10 +320,10 @@ the `0.1.0` entries.
   `manifest.json` — the schema/ml golden fixtures are read semantically
   (whitespace-insensitive JSON parsing), don't hash their own bytes, and
   don't need the same pinning.
-- **GitHub Actions billing is currently blocked at the `synthaea-lab` org
-  level** (see the comment in `.github/workflows/ml.yml`). Until it is
-  restored, `SYNTHAEA_STRICT_PROVENANCE=1` runs locally only. Every PR
-  touching `ml/**` must document a local `verify_onnx` run in its checklist.
+- **No CI job runs `verify_onnx` yet.** `ml.yml` runs again on every push
+  and PR (#318), but only lint and tests, so `SYNTHAEA_STRICT_PROVENANCE=1`
+  runs locally only. Every PR touching `ml/**` must document a local
+  `verify_onnx` run in its checklist.
 - **`verify_onnx` runs Windows sanity samples against every model**
   (issue #191). The hardcoded `SANITY_CHECK_SAMPLES` in `verify_onnx.py` is
   imported from `train_windows`, so a Linux model shows all five Windows

@@ -211,7 +211,7 @@ this project holds as rules:
 | `// SAFETY:` on every unsafe block | `undocumented_unsafe_blocks` = deny |
 | Docs: backticks, `# Errors`, `# Panics`, `#[must_use]` | `doc_markdown`, `missing_errors_doc`, `missing_panics_doc`, `must_use_candidate` |
 | Dependency direction | `tools/check-deps.py` (CI) |
-| The whole matrix, locally | `tools/gauntlet.sh` (the enforcement while CI is billing-blocked — issue #318) |
+| The whole matrix, locally | `tools/gauntlet.sh` (pre-push convenience; CI is the enforcement — issue #318) |
 | License/advisory hygiene | `cargo deny` (CI) |
 | Shipped content compiles and fires | content suites (`sigma`, `yara` tests, CI) |
 

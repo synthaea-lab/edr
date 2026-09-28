@@ -115,14 +115,32 @@ pub struct ScheduledTaskEvent {
 /// Parses one 4698 `<Event>` block.
 #[must_use]
 pub fn parse_scheduled_task_block(block: &str) -> Option<ScheduledTaskEvent> {
+    parse_task_block_with_content_field(block, "TaskContent")
+}
+
+/// Parses one 4702 ("A scheduled task was updated") `<Event>` block — same shape
+/// as 4698 and reuses [`ScheduledTaskEvent`] (with `task_content` holding the
+/// task's *new* definition), but the content field is named `TaskContentNew`, not
+/// `TaskContent`. Confirmed against a real 4702 emitted by `schtasks /change`
+/// (lab, 2026-09-22): every other field keeps its 4698 name.
+#[must_use]
+pub fn parse_scheduled_task_update_block(block: &str) -> Option<ScheduledTaskEvent> {
+    parse_task_block_with_content_field(block, "TaskContentNew")
+}
+
+fn parse_task_block_with_content_field(
+    block: &str,
+    content_field: &str,
+) -> Option<ScheduledTaskEvent> {
     let record_id = extract_between(block, "<EventRecordID>", "</EventRecordID>")?
         .parse()
         .ok()?;
     let task_name = extract_between(block, "<Data Name='TaskName'>", "</Data>")
         .unwrap_or_default()
         .to_string();
+    let content_marker = format!("<Data Name='{content_field}'>");
     let task_content_escaped =
-        extract_between(block, "<Data Name='TaskContent'>", "</Data>").unwrap_or_default();
+        extract_between(block, &content_marker, "</Data>").unwrap_or_default();
     let task_content = unescape_xml_entities(task_content_escaped);
     let pid = extract_between(block, "<Data Name='ClientProcessId'>", "</Data>")
         .and_then(|s| s.parse().ok())
@@ -572,6 +590,48 @@ pub struct TaskSchedulerOpRegisteredEvent {
     pub user_context: String,
 }
 
+/// Largest task definition file [`decode_task_definition`] is fed: a real one is
+/// a few KiB, and the file is attacker-writable content, so the read is capped.
+pub const MAX_TASK_DEFINITION_BYTES: u64 = 256 * 1024;
+
+/// Path of task `task_name`'s definition file, relative to
+/// `%SystemRoot%\System32\Tasks` (Task Scheduler stores one file per task,
+/// mirroring the task tree: `\Folder\Name` → `Folder\Name`). An event 106
+/// carries no action, so the sensor reads the actions back from this file.
+///
+/// `None` unless `task_name` is rooted (`\…`) and every component is a plain
+/// file name: the name comes from the event log, and must not be able to walk
+/// the read out of the Tasks directory (`..`, a drive or stream `:`, an empty
+/// component from `\\`), nor rely on Win32 stripping trailing dots and spaces.
+#[must_use]
+pub fn task_definition_relative_path(task_name: &str) -> Option<String> {
+    let components: Vec<&str> = task_name.strip_prefix('\\')?.split('\\').collect();
+    let plain = |c: &&str| {
+        !c.is_empty()
+            && !c.ends_with(['.', ' '])
+            && !c.chars().any(|ch| {
+                ch.is_control() || matches!(ch, '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+            })
+    };
+    components.iter().all(plain).then(|| components.join("\\"))
+}
+
+/// Text of a task definition file: UTF-16LE with a BOM as Task Scheduler writes
+/// them, UTF-8 (BOM optional) otherwise. Lossy — the result only feeds
+/// [`task_actions_display`], which tolerates any input.
+#[must_use]
+pub fn decode_task_definition(bytes: &[u8]) -> String {
+    if let Some(utf16) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = utf16
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let utf8 = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(utf8).into_owned()
+}
+
 /// Parses one 106 `<Event>` block. `None` if the block is missing
 /// `EventRecordID` (same convention as the other parsers).
 #[must_use]
@@ -605,6 +665,11 @@ mod tests {
     /// Same shape for a real 4698 event (`wevtutil qe Security /f:xml`, 2026-09-03),
     /// `TaskContent` escaped as `wevtutil` renders it (nested XML inside XML).
     const SCHEDULED_TASK_XML: &str = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Microsoft-Windows-Security-Auditing' Guid='{54849625-5478-4994-a5ba-3e3b0328c30d}'/><EventID>4698</EventID><Version>1</Version><Level>0</Level><Task>12804</Task><Opcode>0</Opcode><Keywords>0x8020000000000000</Keywords><TimeCreated SystemTime='2026-09-03T10:20:00.000000000Z'/><EventRecordID>777</EventRecordID><Correlation/><Execution ProcessID='4' ThreadID='8'/><Channel>Security</Channel><Computer>LAB-VM</Computer><Security/></System><EventData><Data Name='SubjectUserSid'>S-1-5-21-1-2-3-1001</Data><Data Name='SubjectUserName'>victim</Data><Data Name='TaskName'>\EvilTask</Data><Data Name='TaskContent'>&lt;?xml version="1.0" encoding="UTF-16"?&gt;&lt;Task&gt;&lt;Actions&gt;&lt;Exec&gt;&lt;Command&gt;C:\Users\victim\AppData\Roaming\payload.exe&lt;/Command&gt;&lt;Arguments&gt;-silent&lt;/Arguments&gt;&lt;/Exec&gt;&lt;/Actions&gt;&lt;/Task&gt;</Data><Data Name='ClientProcessId'>2468</Data></EventData></Event>"#;
+
+    /// Real 4702 event (`wevtutil qe Security /f:xml`, lab, 2026-09-22, captured
+    /// via `schtasks /change`) — trimmed to the fields this module reads. The one
+    /// real difference from 4698: the content field is `TaskContentNew`.
+    const SCHEDULED_TASK_UPDATE_XML: &str = r#"<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System><Provider Name='Microsoft-Windows-Security-Auditing' Guid='{54849625-5478-4994-a5ba-3e3b0328c30d}'/><EventID>4702</EventID><Version>1</Version><Level>0</Level><Task>12804</Task><Opcode>0</Opcode><Keywords>0x8020000000000000</Keywords><TimeCreated SystemTime='2026-09-22T08:57:54.8691097Z'/><EventRecordID>1293003</EventRecordID><Correlation ActivityID='{0d9dacec-4a69-0002-40ae-9d0d694add01}'/><Execution ProcessID='1552' ThreadID='1736'/><Channel>Security</Channel><Computer>SOFREXS</Computer><Security/></System><EventData><Data Name='SubjectUserSid'>S-1-5-21-773117704-2304876226-3118202801-1001</Data><Data Name='SubjectUserName'>chouc</Data><Data Name='SubjectDomainName'>SOFREXS</Data><Data Name='SubjectLogonId'>0xd8c6d</Data><Data Name='TaskName'>\ClaudeTest</Data><Data Name='TaskContentNew'>&lt;?xml version="1.0" encoding="UTF-16"?&gt;&lt;Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"&gt;&lt;Actions Context="Author"&gt;&lt;Exec&gt;&lt;Command&gt;cmd.exe&lt;/Command&gt;&lt;Arguments&gt;/c echo hi&lt;/Arguments&gt;&lt;/Exec&gt;&lt;/Actions&gt;&lt;/Task&gt;</Data><Data Name='ClientProcessId'>25132</Data><Data Name='ParentProcessId'>25440</Data></EventData></Event>"#;
 
     #[test]
     fn splits_a_single_event_block() {
@@ -686,6 +751,34 @@ mod tests {
         let parsed = parse_scheduled_task_block(block).unwrap();
         let path = task_actions_display(&parsed.task_content).expect("should have an action");
         assert_eq!(path, r"C:\Users\victim\AppData\Roaming\payload.exe -silent");
+    }
+
+    #[test]
+    fn parses_a_real_scheduled_task_update_block() {
+        let block = split_event_blocks(SCHEDULED_TASK_UPDATE_XML)[0];
+        let parsed = parse_scheduled_task_update_block(block).expect("should parse");
+        assert_eq!(parsed.record_id, 1_293_003);
+        assert_eq!(parsed.task_name, r"\ClaudeTest");
+        assert_eq!(parsed.pid, 25132);
+        assert!(parsed.task_content.contains("<Command>cmd.exe</Command>"));
+        assert!(!parsed.task_content.contains("&lt;"));
+    }
+
+    #[test]
+    fn task_update_actions_read_task_content_new() {
+        let block = split_event_blocks(SCHEDULED_TASK_UPDATE_XML)[0];
+        let parsed = parse_scheduled_task_update_block(block).expect("should parse");
+        let path = task_actions_display(&parsed.task_content).expect("should have an action");
+        assert_eq!(path, "cmd.exe /c echo hi");
+    }
+
+    #[test]
+    fn creation_parser_does_not_pick_up_the_update_content_field() {
+        // The marker includes the closing quote, so `TaskContent` never matches
+        // `TaskContentNew`: a 4702 fed to the 4698 parser yields empty content.
+        let block = split_event_blocks(SCHEDULED_TASK_UPDATE_XML)[0];
+        let parsed = parse_scheduled_task_block(block).expect("record id still parses");
+        assert!(parsed.task_content.is_empty());
     }
 
     #[test]
@@ -1092,5 +1185,65 @@ mod tests {
     fn task_scheduler_op_106_missing_record_id_does_not_parse() {
         let block = "<Event><EventData><Data Name='TaskName'>x</Data></EventData></Event>";
         assert!(parse_task_scheduler_op_registered_block(block).is_none());
+    }
+
+    // ── Task definition read-back for event 106 (#422) ───────────────────
+
+    #[test]
+    fn task_definition_path_mirrors_the_task_tree() {
+        assert_eq!(
+            task_definition_relative_path(r"\atomic-r").as_deref(),
+            Some("atomic-r")
+        );
+        assert_eq!(
+            task_definition_relative_path(r"\Microsoft\Windows\Backup\Daily task").as_deref(),
+            Some(r"Microsoft\Windows\Backup\Daily task")
+        );
+    }
+
+    #[test]
+    fn task_definition_path_refuses_to_leave_the_tasks_directory() {
+        for name in [
+            r"\..\..\Windows\win.ini",
+            r"\Folder\..",
+            r"\.",
+            r"\x...",
+            r"\trailing ",
+            r"\\server\share",
+            r"\C:\x",
+            r"\x:stream",
+            r"\a/b",
+            "relative",
+            "",
+            r"\",
+            "\\bad\u{0}name",
+        ] {
+            assert_eq!(task_definition_relative_path(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn task_definition_decodes_utf16le_with_bom() {
+        let text = "<Task><Actions><Exec><Command>C:\\x.exe</Command></Exec></Actions></Task>";
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(decode_task_definition(&bytes), text);
+        assert_eq!(
+            task_actions_display(&decode_task_definition(&bytes)).as_deref(),
+            Some(r"C:\x.exe")
+        );
+    }
+
+    #[test]
+    fn task_definition_decodes_utf8_with_or_without_bom() {
+        assert_eq!(decode_task_definition(b"\xEF\xBB\xBF<Task/>"), "<Task/>");
+        assert_eq!(decode_task_definition(b"<Task/>"), "<Task/>");
+    }
+
+    #[test]
+    fn task_definition_decoding_never_panics_on_odd_input() {
+        for bytes in [&[][..], &[0xFF, 0xFE, 0x41][..], &[0xFF][..], &[0xC3][..]] {
+            let _ = decode_task_definition(bytes);
+        }
     }
 }
