@@ -56,7 +56,11 @@ Write-Host "[ok] test-signing on, kernel debugger on COM1 (115200)"
 
 $filter = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Debug Print Filter"
 New-Item -Path $filter -Force | Out-Null
-New-ItemProperty -Path $filter -Name "DEFAULT" -PropertyType DWord -Value 0xF -Force | Out-Null
+# One mask per component: DEFAULT covers plain DbgPrint, IHVDRIVER the
+# driver's DbgPrintEx(DPFLTR_IHVDRIVER_ID, ...) traces (#508).
+foreach ($component in @("DEFAULT", "IHVDRIVER")) {
+    New-ItemProperty -Path $filter -Name $component -PropertyType DWord -Value 0xF -Force | Out-Null
+}
 $crash = "HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl"
 Set-ItemProperty -Path $crash -Name "CrashDumpEnabled" -Value 2   # kernel memory dump
 Set-ItemProperty -Path $crash -Name "AutoReboot" -Value 0

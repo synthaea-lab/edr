@@ -102,12 +102,29 @@ try {
     Write-Step "installing from $($inf[0].Name)"
     $section = "DefaultInstall"
     if ((Get-Content -LiteralPath $localInf) -match '^\s*\[DefaultInstall\.NTamd64\]') { $section = "DefaultInstall.NTamd64" }
-    # InstallHinfSection reports nothing through its exit code; the service is the proof.
-    Start-Process -FilePath rundll32.exe -ArgumentList @("setupapi.dll,InstallHinfSection", $section, "132", "`"$localInf`"") -Wait
-    if (-not (Get-Service -Name $FilterName -ErrorAction SilentlyContinue)) {
-        throw "the INF install created no '$FilterName' service (section [$section])"
+    $installedBy = $null
+    # Build 25952+ INFs (the nullFilter template, #508) install into the driver
+    # store (%13%) through pnputil, which also picks the OS-decorated section
+    # and checks the catalog. The legacy InstallHinfSection path stays as the
+    # fallback for an INF without a catalog or without that section.
+    if (@(Get-ChildItem -LiteralPath $local -Filter *.cat).Count -eq 1) {
+        $ErrorActionPreference = "Continue"
+        $pnp = & pnputil.exe /add-driver $localInf /install 2>&1
+        $pnpExit = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if (Get-Service -Name $FilterName -ErrorAction SilentlyContinue) {
+            $installedBy = "pnputil"
+        } else {
+            Write-Host "     pnputil did not create the service (exit $pnpExit): $($pnp -join ' ')"
+        }
     }
-    Write-Ok "service $FilterName installed"
+    if (-not $installedBy) {
+        # InstallHinfSection reports nothing through its exit code; the service is the proof.
+        Start-Process -FilePath rundll32.exe -ArgumentList @("setupapi.dll,InstallHinfSection", $section, "132", "`"$localInf`"") -Wait
+        if (Get-Service -Name $FilterName -ErrorAction SilentlyContinue) { $installedBy = "InstallHinfSection [$section]" }
+    }
+    if (-not $installedBy) { throw "neither pnputil nor InstallHinfSection [$section] created a '$FilterName' service" }
+    Write-Ok "service $FilterName installed ($installedBy)"
 
     Write-Step "fltmc load $FilterName"
     Invoke-Fltmc @("load", $FilterName) | Out-Null
