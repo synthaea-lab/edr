@@ -26,6 +26,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1543.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.002 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/persistence.yml` |
 | T1543.003 | 3 | `rules:crates/rules/src/stateless.rs` |
+| T1546.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1547.015 | 3 | `rules:crates/rules/src/stateless.rs` |
 
 ## Privilege Escalation
@@ -43,6 +44,8 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1036 | 3 | `sigma:rules/sigma/linux/susp_tmp_exec.yml`, `sigma:rules/sigma/windows/susp_appdata_exec.yml` |
 | T1036.005 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1055 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1070.001 | 3 | `rules:crates/rules/src/stateless.rs` |
+| T1070.002 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1127 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218.011 | 3 | `sigma:rules/sigma/windows/lolbas_rundll32.yml` |
