@@ -1,0 +1,23 @@
+name: ld-preload-hijack
+platform: linux
+script: ld-preload-hijack.sh
+simulates: >
+  LD_PRELOAD set to a shared object outside the dynamic linker's trusted search
+  path (T1574.006, Hijack Execution Flow: Dynamic Linker Hijacking) — the library
+  itself only proves its constructor ran (writes a marker file), no hooked symbols
+  or hiding behavior.
+expected_detections:
+  - technique: "T1574.006"
+    rule: check_ld_preload_hijack   # crates/rules/src/stateless.rs — gated on
+                                     # ExecEvent::env_security actually carrying
+                                     # LD_PRELOAD/LD_AUDIT (issue #363)
+    min_count: 1
+    tolerance: 0
+notes: >
+  Depends on issue #363's env_security capture (PR #401). A bare filename (no
+  leading /) in LD_PRELOAD is trusted (resolved via the linker's own search path)
+  and does NOT fire; only an explicit path outside the trust set does, which is
+  what this scenario uses. The trust set is two layers (crates/rules/src/ld_trust.rs):
+  the built-in LD_TRUST_PREFIXES baseline plus whatever /etc/ld.so.conf (and its
+  includes) declares — minus /tmp, /var/tmp and /dev/shm, never trusted even if
+  listed there. Exactly one alert: `sleep` is the only exec carrying LD_PRELOAD.

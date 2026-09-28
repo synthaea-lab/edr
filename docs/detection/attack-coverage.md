@@ -59,7 +59,7 @@ own tags (pipeline: #73); YARA/intel content is #60/#82 territory.
 | T1053 Scheduled Task | 🟢 | 🟢 | 🟡 | as above |
 | T1136 Create Account | 📋 | 🟢 | 📋 | 4720 (W) live; Linux useradd content work; macOS OD events #356 |
 | T1546 Event-Triggered Execution | 🟡 | 🟡 | 🟡 | WMI subscriptions (W, via inventory #286-adjacent), shell-rc writes (L/M patterns partial) — pack below |
-| T1574 Hijack Execution Flow | 🟢 | 🟡 | 🟡 | LD_PRELOAD/LD_AUDIT capture + trust-set rule #363 (L); DLL side-load visible via image loads (W); dylib content work (M) |
+| T1574 Hijack Execution Flow | 🟢 | 🟡 | 🟡 | LD_PRELOAD/LD_AUDIT capture + trust-set rule #363 (L, lab: `ld-preload-hijack.sh`); DLL side-load visible via image loads (W); dylib content work (M) |
 
 ## Privilege Escalation (TA0004)
 
