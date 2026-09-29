@@ -13,13 +13,33 @@
 //! Composed here rather than in `crates/updater` because `updater` is a LEAF
 //! crate and may not depend on `transport` (`tools/check-deps.py`) — see that
 //! crate's module doc.
+//!
+//! **`--content-dir`/`--state` must resolve under `storage.state_dir`** (PR
+//! #520 review): [`resolve_content_paths`] enforces this before any network
+//! or filesystem work starts. `ContentState` is the only thing standing
+//! between the agent and a replayed old signed manifest — a caller-chosen
+//! path anywhere on disk would let anyone able to delete or rewrite that
+//! file reset anti-rollback protection. This is a narrower mitigation than
+//! real ACL enforcement (tracked separately as issue #103), not a
+//! replacement for it.
 
 use std::{
     collections::BTreeMap,
+    io::Write as _,
     path::{Path, PathBuf},
 };
 
 use updater::{ContentEntry, ContentManifest, UpdaterError, hash::hash_bytes};
+
+/// Hard ceiling on a single content artifact's declared `size` (PR #520
+/// review): `get_bytes` already bounds the *response* to the manifest's
+/// declared size, but a manifest whose signed `size` field is itself huge
+/// would still allocate that much before the SHA-256 check ever runs. Real
+/// content is far smaller — ADR-0016's design notes put models around 10MB
+/// and rules around 10KB — so 100MB leaves generous headroom for a larger
+/// model without accepting an unbounded allocation driven by a single
+/// manifest field.
+const MAX_CONTENT_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
 
 /// What this agent has already applied for one ring — the local half of the
 /// anti-rollback/dedup check. Persisted as plain JSON next to the agent's other
@@ -185,6 +205,82 @@ fn artifact_dest(root: &Path, entry_path: &str) -> PathBuf {
     dest
 }
 
+/// Refuses if `path`, or any of its already-existing ancestor components, is
+/// a symlink — checked with [`std::fs::symlink_metadata`] (never follows a
+/// symlink, unlike [`std::fs::metadata`]). This agent can run with elevated
+/// rights (PR #520 review), so a symlink planted anywhere under a content
+/// directory it writes into — not just at the leaf — could otherwise
+/// redirect a write outside that directory entirely.
+///
+/// # Errors
+///
+/// Returns an error naming the offending path if any existing component is
+/// a symlink.
+fn reject_symlink_components(path: &Path) -> std::io::Result<()> {
+    let mut probe = PathBuf::new();
+    for component in path.components() {
+        probe.push(component);
+        if let Ok(meta) = std::fs::symlink_metadata(&probe)
+            && meta.file_type().is_symlink()
+        {
+            return Err(std::io::Error::other(format!(
+                "refusing to write: {} is a symlink",
+                probe.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to `dest` atomically: to a same-directory temporary file
+/// first (so the eventual `rename` stays on one filesystem), `fsync`ed, then
+/// renamed over `dest` (PR #520 review). A `rename` onto an existing path
+/// replaces it in one filesystem operation — a reader (or a re-run of this
+/// same command after a crash) only ever sees the complete old file or the
+/// complete new one, never a truncated one. [`reject_symlink_components`] is
+/// checked both before and after creating any missing parent directories
+/// (the latter guards a symlink race in between; `create_dir_all` itself
+/// cannot produce a symlink, since it only creates plain directories).
+/// `rename` does not follow a symlink at `dest` itself on any platform this
+/// agent targets — it replaces the link, never writes through it — so this
+/// covers the parent-directory case that actually mattered.
+///
+/// The temp file's name includes this process's PID so two different
+/// processes targeting the same destination cannot collide; two invocations
+/// of the very same process racing each other is not a threat model this
+/// one-shot CLI command needs to defend against.
+///
+/// # Errors
+///
+/// Returns an error if any existing path component is a symlink, or if any
+/// filesystem operation fails.
+fn write_atomically(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    reject_symlink_components(dest)?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    reject_symlink_components(dest)?;
+
+    let file_name = dest.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "destination path has no file name",
+        )
+    })?;
+    let tmp_path = dest.with_file_name(format!(
+        "{}.tmp-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+
+    let mut tmp_file = std::fs::File::create(&tmp_path)?;
+    tmp_file.write_all(bytes)?;
+    tmp_file.sync_all()?;
+    drop(tmp_file);
+    std::fs::rename(&tmp_path, dest)?;
+    Ok(())
+}
+
 /// Downloads every entry in `fetch_plan.to_fetch` from the (already-real)
 /// `/api/content/artifact` endpoint, verifies its SHA-256 against the
 /// manifest's declared hash, and writes it under `content_dir`. Persists
@@ -202,7 +298,8 @@ fn artifact_dest(root: &Path, entry_path: &str) -> PathBuf {
 ///
 /// Returns an error if a download fails, a downloaded artifact's hash
 /// doesn't match the manifest's declared value
-/// ([`UpdaterError::StagedFileMismatch`]), or a filesystem write fails.
+/// ([`UpdaterError::StagedFileMismatch`]), a declared `size` exceeds
+/// [`MAX_CONTENT_ARTIFACT_BYTES`], or a filesystem write fails.
 fn download_and_apply(
     client: &transport::TransportClient,
     fetch_plan: &FetchPlan,
@@ -214,6 +311,15 @@ fn download_and_apply(
     std::fs::create_dir_all(content_dir)?;
 
     for entry in &fetch_plan.to_fetch {
+        if entry.size > MAX_CONTENT_ARTIFACT_BYTES {
+            anyhow::bail!(
+                "entry {} declares size {} bytes, exceeding the {}-byte cap",
+                entry.path,
+                entry.size,
+                MAX_CONTENT_ARTIFACT_BYTES
+            );
+        }
+
         let url = client.config().content_artifact_url();
         let bytes = client.get_bytes(
             &url,
@@ -235,22 +341,123 @@ fn download_and_apply(
         }
 
         let dest = artifact_dest(content_dir, &entry.path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&dest, &bytes)?;
+        write_atomically(&dest, &bytes)?;
 
         state
             .entries
             .insert(entry.path.clone(), entry.sha256.clone());
-        std::fs::write(state_path, serde_json::to_vec(&state)?)?;
+        write_atomically(state_path, &serde_json::to_vec(&state)?)?;
     }
 
     state
         .release_version
         .insert(ring.to_string(), fetch_plan.release_version);
-    std::fs::write(state_path, serde_json::to_vec(&state)?)?;
+    write_atomically(state_path, &serde_json::to_vec(&state)?)?;
     Ok(())
+}
+
+/// Resolves `path`'s furthest already-existing ancestor via
+/// [`Path::canonicalize`] (undoing `..` components and symlinks up to that
+/// point), then rejoins whatever of `path` doesn't exist yet onto it
+/// lexically — the non-existent tail can't be canonicalized, so this is the
+/// closest containment check available before every directory involved is
+/// guaranteed to exist yet. A path with no existing ancestor at all (a bare
+/// relative path on an otherwise-empty filesystem) resolves against the
+/// current working directory, matching how a relative path would actually
+/// be interpreted.
+///
+/// Documented limitation: a component created *after* this check runs (a
+/// TOCTOU symlink swap) is not caught here — [`reject_symlink_components`]
+/// is the check that actually runs at write time and is what closes that
+/// gap for content this agent writes.
+fn resolve_as_far_as_possible(path: &Path) -> std::io::Result<PathBuf> {
+    let mut existing = path;
+    let mut remainder: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(mut base) => {
+                for part in remainder.into_iter().rev() {
+                    base.push(part);
+                }
+                return Ok(base);
+            }
+            Err(_) => {
+                let Some(parent) = existing.parent() else {
+                    return Ok(std::env::current_dir()?.join(path));
+                };
+                if let Some(name) = existing.file_name() {
+                    remainder.push(name);
+                }
+                existing = parent;
+            }
+        }
+    }
+}
+
+/// Refuses `path` unless it resolves under `state_dir` (PR #520 review:
+/// `--state`/`--content-dir` were free-form caller-chosen paths, and the
+/// content-state file is the only thing standing between a replayed old
+/// signed manifest and the agent accepting it as new — anyone able to point
+/// either flag outside the agent's own protected state directory, or delete
+/// the file there, resets that protection). `state_dir` is
+/// `cfg.storage.state_dir`, already documented as the one directory
+/// "agent-writable... not operator-editable at runtime" (`StorageConfig`).
+/// This is a narrower mitigation than real ACL enforcement (tracked
+/// separately as issue #103) — it stops an operator or script from
+/// accidentally or carelessly pointing these flags somewhere unprotected,
+/// not a privileged local attacker who can also rewrite `state_dir` itself.
+///
+/// # Errors
+///
+/// Returns an error naming both the given path and `state_dir` if `path`
+/// does not resolve under it.
+fn ensure_within_state_dir(path: &Path, state_dir: &Path, flag_name: &str) -> anyhow::Result<()> {
+    let resolved_root = resolve_as_far_as_possible(state_dir)?;
+    let resolved_path = resolve_as_far_as_possible(path)?;
+    if resolved_path.starts_with(&resolved_root) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "--{flag_name} ({}) must be under storage.state_dir ({}); resolved to {} which is \
+             outside {}",
+            path.display(),
+            state_dir.display(),
+            resolved_path.display(),
+            resolved_root.display()
+        )
+    }
+}
+
+/// Resolves `--content-dir`/`--state` for `apply-content-manifest`: left
+/// unset, each defaults to a fixed name under `state_dir`
+/// (`cfg.storage.state_dir`); given explicitly, each must still resolve
+/// under `state_dir` ([`ensure_within_state_dir`]) — see that function's
+/// doc for why. Checked once, before any network or filesystem work starts.
+///
+/// # Errors
+///
+/// Returns an error if an explicit `content_dir` or `state_path` does not
+/// resolve under `state_dir`.
+pub(crate) fn resolve_content_paths(
+    state_dir: &Path,
+    content_dir: Option<PathBuf>,
+    state_path: Option<PathBuf>,
+) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let content_dir = match content_dir {
+        Some(dir) => {
+            ensure_within_state_dir(&dir, state_dir, "content-dir")?;
+            dir
+        }
+        None => state_dir.join("content"),
+    };
+    let state_path = match state_path {
+        Some(path) => {
+            ensure_within_state_dir(&path, state_dir, "state")?;
+            path
+        }
+        None => state_dir.join("content-state.json"),
+    };
+    Ok((content_dir, state_path))
 }
 
 /// Fetches the content manifest for `ring`, verifies it exactly like
@@ -633,5 +840,155 @@ mod tests {
         assert!(!state.entries.contains_key("rules/second.sigma"));
         // The release isn't marked applied until every entry lands.
         assert!(!state.release_version.contains_key("canary_0"));
+    }
+
+    // ── write_atomically / reject_symlink_components (issue #30, PR #520 review) ──
+
+    #[test]
+    fn write_atomically_writes_the_full_content() {
+        let dir = tmp("atomic-happy-path");
+        let dest = dir.join("rules").join("beacon.sigma");
+        write_atomically(&dest, b"title: beacon\n").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"title: beacon\n");
+        // The temp file used to get there is gone — renamed, not copied.
+        let leftovers: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(leftovers.len(), 1, "only the final file should remain");
+    }
+
+    #[test]
+    fn write_atomically_overwrites_an_existing_file_completely() {
+        let dir = tmp("atomic-overwrite");
+        let dest = dir.join("beacon.sigma");
+        write_atomically(&dest, b"old, much longer content here").unwrap();
+        write_atomically(&dest, b"new").unwrap();
+        // Not "newlonger" or any splice of the two — a full replacement.
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomically_refuses_a_symlinked_destination() {
+        let dir = tmp("atomic-symlink-dest");
+        let real_target = dir.join("outside-content-dir.txt");
+        std::fs::write(&real_target, b"pre-existing, must not be touched").unwrap();
+        let dest = dir.join("content").join("rules").join("beacon.sigma");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_target, &dest).unwrap();
+
+        // `rename` would not actually write through this symlink (it
+        // replaces the link itself), but the explicit refusal is the
+        // documented, auditable behavior rather than relying on that
+        // platform-specific rename semantic.
+        let err = write_atomically(&dest, b"malicious").unwrap_err();
+        assert!(err.to_string().contains("symlink"), "got: {err}");
+        assert_eq!(
+            std::fs::read(&real_target).unwrap(),
+            b"pre-existing, must not be touched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomically_refuses_when_a_parent_directory_is_a_symlink() {
+        let dir = tmp("atomic-symlink-parent");
+        let real_dir = dir.join("real-elsewhere");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        // `content/rules` is a symlink to a directory outside `content/`.
+        std::os::unix::fs::symlink(&real_dir, content_dir.join("rules")).unwrap();
+
+        let dest = content_dir.join("rules").join("beacon.sigma");
+        let err = write_atomically(&dest, b"malicious").unwrap_err();
+        assert!(err.to_string().contains("symlink"), "got: {err}");
+        assert!(
+            !real_dir.join("beacon.sigma").exists(),
+            "must not have written through the symlinked parent"
+        );
+    }
+
+    // ── MAX_CONTENT_ARTIFACT_BYTES (issue #30, PR #520 review) ──────────
+
+    #[test]
+    fn an_entry_declaring_a_size_over_the_cap_is_rejected_before_any_network_call() {
+        let dir = tmp("size-cap");
+        let content_dir = dir.join("content");
+        let state_path = dir.join("content-state.json");
+
+        let mut entry = entry_for("rules/huge.sigma", b"small actual bytes");
+        entry.size = MAX_CONTENT_ARTIFACT_BYTES + 1;
+        let fetch_plan = FetchPlan {
+            release_version: 1,
+            to_fetch: vec![entry],
+        };
+        // No server at all — if this reached `get_bytes` it would fail with
+        // a connection error instead, so a config/network-shaped error here
+        // would mean the cap check didn't run first.
+        let client =
+            transport::TransportClient::new(transport::TransportConfig::new("http://127.0.0.1:1"))
+                .unwrap();
+
+        let err = download_and_apply(
+            &client,
+            &fetch_plan,
+            "canary_0",
+            &content_dir,
+            &state_path,
+            ContentState::default(),
+        )
+        .expect_err("an oversized declared size must be rejected");
+        assert!(err.to_string().contains("exceeding"), "got: {err}");
+    }
+
+    // ── resolve_content_paths / ensure_within_state_dir (issue #30, PR #520 review) ──
+
+    #[test]
+    fn unset_flags_default_to_paths_under_state_dir() {
+        let state_dir = tmp("resolve-defaults");
+        let (content_dir, state_path) = resolve_content_paths(&state_dir, None, None).unwrap();
+        assert_eq!(content_dir, state_dir.join("content"));
+        assert_eq!(state_path, state_dir.join("content-state.json"));
+    }
+
+    #[test]
+    fn an_explicit_path_under_state_dir_is_accepted() {
+        let state_dir = tmp("resolve-explicit-ok");
+        let explicit_content = state_dir.join("my-content");
+        let (content_dir, _) =
+            resolve_content_paths(&state_dir, Some(explicit_content.clone()), None).unwrap();
+        assert_eq!(content_dir, explicit_content);
+    }
+
+    #[test]
+    fn an_explicit_content_dir_outside_state_dir_is_refused() {
+        let state_dir = tmp("resolve-content-outside");
+        let outside = tmp("resolve-content-outside-target");
+        let err = resolve_content_paths(&state_dir, Some(outside), None)
+            .expect_err("a content-dir outside state_dir must be refused");
+        assert!(err.to_string().contains("--content-dir"), "got: {err}");
+    }
+
+    #[test]
+    fn an_explicit_state_path_outside_state_dir_is_refused() {
+        let state_dir = tmp("resolve-state-outside");
+        let outside = tmp("resolve-state-outside-target").join("content-state.json");
+        let err = resolve_content_paths(&state_dir, None, Some(outside))
+            .expect_err("a --state path outside state_dir must be refused");
+        assert!(err.to_string().contains("--state"), "got: {err}");
+    }
+
+    #[test]
+    fn a_not_yet_existing_subdirectory_under_state_dir_still_resolves_within_it() {
+        // `resolve_as_far_as_possible` must not require the directory to
+        // exist yet — the whole point is validating a path before it's
+        // created.
+        let state_dir = tmp("resolve-not-yet-existing");
+        let future_content_dir = state_dir.join("content").join("not-created-yet");
+        let (content_dir, _) =
+            resolve_content_paths(&state_dir, Some(future_content_dir.clone()), None).unwrap();
+        assert_eq!(content_dir, future_content_dir);
     }
 }

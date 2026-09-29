@@ -183,14 +183,21 @@ enum Command {
         #[arg(long)]
         key: Option<std::path::PathBuf>,
         /// Where downloaded content is written, mirroring each entry's
-        /// manifest `path` underneath it (e.g. `rules/beacon.sigma`).
-        #[arg(long, default_value = "content")]
-        content_dir: std::path::PathBuf,
+        /// manifest `path` underneath it (e.g. `rules/beacon.sigma`). Left
+        /// unset, defaults to `content` under `storage.state_dir`. Given
+        /// explicitly, must still resolve under `storage.state_dir` (PR #520
+        /// review) — this agent refuses a path outside it.
+        #[arg(long)]
+        content_dir: Option<std::path::PathBuf>,
         /// Where this agent's own record of already-applied content lives.
         /// Missing means a fresh install — every manifest entry is
-        /// downloaded and applied.
-        #[arg(long, default_value = "content-state.json")]
-        state: std::path::PathBuf,
+        /// downloaded and applied. Left unset, defaults to
+        /// `content-state.json` under `storage.state_dir` — this file is the
+        /// only thing standing between the agent and a replayed old signed
+        /// manifest, so (like `--content-dir`) an explicit value must still
+        /// resolve under `storage.state_dir` or this agent refuses to run.
+        #[arg(long)]
+        state: Option<std::path::PathBuf>,
     },
 }
 
@@ -269,13 +276,17 @@ fn main() -> anyhow::Result<()> {
             key,
             content_dir,
             state,
-        } => content::cmd_apply_content_manifest(
-            &server,
-            &ring,
-            cert.as_deref(),
-            key.as_deref(),
-            &content_dir,
-            &state,
-        ),
+        } => {
+            let (content_dir, state) =
+                content::resolve_content_paths(&cfg.storage.state_dir, content_dir, state)?;
+            content::cmd_apply_content_manifest(
+                &server,
+                &ring,
+                cert.as_deref(),
+                key.as_deref(),
+                &content_dir,
+                &state,
+            )
+        }
     }
 }

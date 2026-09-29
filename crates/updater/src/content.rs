@@ -477,8 +477,13 @@ mod tests {
     fn an_ordinary_dotted_filename_is_still_safe() {
         // The reserved-name/trailing-dot checks above must not turn into a
         // blanket ban on periods in filenames.
-        assert!(entry("models/cmdline-iforest-linux/0.3.0/model.pkl", &"a".repeat(64))
-            .is_safe_relative_path());
+        assert!(
+            entry(
+                "models/cmdline-iforest-linux/0.3.0/model.pkl",
+                &"a".repeat(64)
+            )
+            .is_safe_relative_path()
+        );
         assert!(entry("rules/console-host.sigma", &"a".repeat(64)).is_safe_relative_path());
     }
 
