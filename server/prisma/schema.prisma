@@ -23,6 +23,7 @@ model Tenant {
   caseNarratives  CaseNarrative[]
   auditLogs       AuditLog[]       @relation("TenantAuditLogs")
   contentReleases ContentRelease[]
+  binaryReleases  BinaryRelease[]
   corpusVersions  CorpusVersion[]
   corpusSamples   CorpusSample[]
 
@@ -173,6 +174,28 @@ model ContentRelease {
   @@index([tenantId, ring, status])
   @@index([tenantId, ring, releaseVersion])
   @@map("content_releases")
+}
+
+// Binary release - a signed agent/watchdog/cli release offered to a ring's
+// agents (ADR-0015, issue #30's update trigger). The row points at the signed
+// `ReleaseManifest` JSON (signed offline: the server never holds the private
+// key); artifacts live at `storage/releases/v<releaseVersion>/<path>`.
+model BinaryRelease {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  ring           String // canary_0, canary_1, canary_2, prod
+  releaseVersion Int      @map("release_version") // Monotone per (tenant, ring); equals the manifest's own release_version
+  manifestUrl    String   @map("manifest_url") // Storage URL for the signed manifest JSON
+  manifestSha256 String   @map("manifest_sha256") // SHA-256 of the manifest file
+  status         String   @default("active") // active, halted
+  releasedAt     DateTime @map("released_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, ring, releaseVersion])
+  @@index([tenantId, ring, status])
+  @@map("binary_releases")
 }
 
 // Corpus version - versioned snapshot of site-specific benign corpus
