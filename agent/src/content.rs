@@ -205,20 +205,31 @@ fn artifact_dest(root: &Path, entry_path: &str) -> PathBuf {
     dest
 }
 
-/// Refuses if `path`, or any of its already-existing ancestor components, is
-/// a symlink — checked with [`std::fs::symlink_metadata`] (never follows a
-/// symlink, unlike [`std::fs::metadata`]). This agent can run with elevated
-/// rights (PR #520 review), so a symlink planted anywhere under a content
-/// directory it writes into — not just at the leaf — could otherwise
-/// redirect a write outside that directory entirely.
+/// Refuses if `dest`, or any of its already-existing path components
+/// *under* `root`, is a symlink — checked with [`std::fs::symlink_metadata`]
+/// (never follows a symlink, unlike [`std::fs::metadata`]). This agent can
+/// run with elevated rights (PR #520 review), so a symlink planted anywhere
+/// under the content directory it writes into — not just at the leaf —
+/// could otherwise redirect a write outside that directory entirely.
+///
+/// Deliberately does **not** walk `root`'s own ancestors: real systems
+/// routinely have a symlink somewhere above any given directory (macOS's
+/// `/var` is itself `-> /private/var`, which is exactly what turned this
+/// check into a false positive on every `std::env::temp_dir()`-rooted test
+/// before this fix — CI on macOS caught it) and none of that is under this
+/// agent's control or part of the threat this check defends against. `root`
+/// itself is trusted — it's `content_dir`/`state_dir`, already validated by
+/// [`ensure_within_state_dir`] — only what gets created *under* it, by this
+/// process, is what needs checking.
 ///
 /// # Errors
 ///
-/// Returns an error naming the offending path if any existing component is
-/// a symlink.
-fn reject_symlink_components(path: &Path) -> std::io::Result<()> {
-    let mut probe = PathBuf::new();
-    for component in path.components() {
+/// Returns an error naming the offending path if any existing component
+/// under `root` is a symlink.
+fn reject_symlink_components(root: &Path, dest: &Path) -> std::io::Result<()> {
+    let relative = dest.strip_prefix(root).unwrap_or(dest);
+    let mut probe = root.to_path_buf();
+    for component in relative.components() {
         probe.push(component);
         if let Ok(meta) = std::fs::symlink_metadata(&probe)
             && meta.file_type().is_symlink()
@@ -250,16 +261,19 @@ fn reject_symlink_components(path: &Path) -> std::io::Result<()> {
 /// of the very same process racing each other is not a threat model this
 /// one-shot CLI command needs to defend against.
 ///
+/// `root` bounds the symlink check ([`reject_symlink_components`]) to `dest`'s
+/// components under it — `dest` must be `root` or a descendant of it.
+///
 /// # Errors
 ///
-/// Returns an error if any existing path component is a symlink, or if any
-/// filesystem operation fails.
-fn write_atomically(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    reject_symlink_components(dest)?;
+/// Returns an error if any existing path component under `root` is a
+/// symlink, or if any filesystem operation fails.
+fn write_atomically(root: &Path, dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    reject_symlink_components(root, dest)?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    reject_symlink_components(dest)?;
+    reject_symlink_components(root, dest)?;
 
     let file_name = dest.file_name().ok_or_else(|| {
         std::io::Error::new(
@@ -309,6 +323,10 @@ fn download_and_apply(
     mut state: ContentState,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(content_dir)?;
+    // The symlink check bounds itself to components under this root, not
+    // the whole filesystem ancestry (see `reject_symlink_components`) — for
+    // the state file, that root is its own containing directory.
+    let state_root = state_path.parent().unwrap_or_else(|| Path::new("."));
 
     for entry in &fetch_plan.to_fetch {
         if entry.size > MAX_CONTENT_ARTIFACT_BYTES {
@@ -341,18 +359,18 @@ fn download_and_apply(
         }
 
         let dest = artifact_dest(content_dir, &entry.path);
-        write_atomically(&dest, &bytes)?;
+        write_atomically(content_dir, &dest, &bytes)?;
 
         state
             .entries
             .insert(entry.path.clone(), entry.sha256.clone());
-        write_atomically(state_path, &serde_json::to_vec(&state)?)?;
+        write_atomically(state_root, state_path, &serde_json::to_vec(&state)?)?;
     }
 
     state
         .release_version
         .insert(ring.to_string(), fetch_plan.release_version);
-    write_atomically(state_path, &serde_json::to_vec(&state)?)?;
+    write_atomically(state_root, state_path, &serde_json::to_vec(&state)?)?;
     Ok(())
 }
 
@@ -848,7 +866,7 @@ mod tests {
     fn write_atomically_writes_the_full_content() {
         let dir = tmp("atomic-happy-path");
         let dest = dir.join("rules").join("beacon.sigma");
-        write_atomically(&dest, b"title: beacon\n").unwrap();
+        write_atomically(&dir, &dest, b"title: beacon\n").unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"title: beacon\n");
         // The temp file used to get there is gone — renamed, not copied.
         let leftovers: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
@@ -862,8 +880,8 @@ mod tests {
     fn write_atomically_overwrites_an_existing_file_completely() {
         let dir = tmp("atomic-overwrite");
         let dest = dir.join("beacon.sigma");
-        write_atomically(&dest, b"old, much longer content here").unwrap();
-        write_atomically(&dest, b"new").unwrap();
+        write_atomically(&dir, &dest, b"old, much longer content here").unwrap();
+        write_atomically(&dir, &dest, b"new").unwrap();
         // Not "newlonger" or any splice of the two — a full replacement.
         assert_eq!(std::fs::read(&dest).unwrap(), b"new");
     }
@@ -874,7 +892,8 @@ mod tests {
         let dir = tmp("atomic-symlink-dest");
         let real_target = dir.join("outside-content-dir.txt");
         std::fs::write(&real_target, b"pre-existing, must not be touched").unwrap();
-        let dest = dir.join("content").join("rules").join("beacon.sigma");
+        let content_dir = dir.join("content");
+        let dest = content_dir.join("rules").join("beacon.sigma");
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real_target, &dest).unwrap();
 
@@ -882,7 +901,7 @@ mod tests {
         // replaces the link itself), but the explicit refusal is the
         // documented, auditable behavior rather than relying on that
         // platform-specific rename semantic.
-        let err = write_atomically(&dest, b"malicious").unwrap_err();
+        let err = write_atomically(&content_dir, &dest, b"malicious").unwrap_err();
         assert!(err.to_string().contains("symlink"), "got: {err}");
         assert_eq!(
             std::fs::read(&real_target).unwrap(),
@@ -902,12 +921,28 @@ mod tests {
         std::os::unix::fs::symlink(&real_dir, content_dir.join("rules")).unwrap();
 
         let dest = content_dir.join("rules").join("beacon.sigma");
-        let err = write_atomically(&dest, b"malicious").unwrap_err();
+        let err = write_atomically(&content_dir, &dest, b"malicious").unwrap_err();
         assert!(err.to_string().contains("symlink"), "got: {err}");
         assert!(
             !real_dir.join("beacon.sigma").exists(),
             "must not have written through the symlinked parent"
         );
+    }
+
+    #[test]
+    fn write_atomically_does_not_trip_on_a_symlink_above_root() {
+        // The exact bug this test pins (caught by macOS CI): `root`'s own
+        // ancestors are not checked, only components under it — on macOS
+        // `/var` is itself `-> /private/var`, so `std::env::temp_dir()`
+        // (which every other test in this module is rooted under) sits
+        // below a real, benign symlink that has nothing to do with this
+        // agent's content directory.
+        let dir = tmp("atomic-symlink-above-root");
+        let dest = dir.join("rules").join("beacon.sigma");
+        // `dir` itself is under `std::env::temp_dir()`, which is a symlink
+        // on macOS — this must still succeed.
+        write_atomically(&dir, &dest, b"title: beacon\n").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"title: beacon\n");
     }
 
     // ── MAX_CONTENT_ARTIFACT_BYTES (issue #30, PR #520 review) ──────────
