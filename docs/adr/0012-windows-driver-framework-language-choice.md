@@ -56,9 +56,9 @@ minifilter development assumes this stack.
 
 Cost: breaks the repo's "everything in Rust" convention. The driver becomes
 a second language surface the team maintains, bridged to the Rust agent via
-some IPC mechanism (a named pipe or a custom `DeviceIoControl` interface is
-the standard pattern — FltMgr already gives user-mode communication ports
-(`FltCreateCommunicationPort`) for exactly this).
+FltMgr's communication ports (`FltCreateCommunicationPort` in the driver,
+fltlib on the agent side), which exist for exactly this. The retained
+mechanism is recorded under Acceptance below.
 
 ### Option B — `windows-drivers-rs` (Microsoft's official Rust WDK bindings)
 
@@ -151,7 +151,33 @@ touching the driver follows these rules:
    received on the communication port are validated before use.
 3. **Tooling**: SAL annotations and `/analyze`, CodeQL with Microsoft's driver
    query suite, Driver Verifier enabled on the test VM.
-4. **Two-person review** for any PR that touches C code.
+4. **Two-person review with an independent reviewer.** Any PR that touches C
+   code needs an approval from someone who did not co-author that change.
+   The two owners pair on design, but on a given PR one is the author and the
+   other the reviewer; a change both wrote needs a third reviewer (Florian,
+   or another team member).
+5. **Only the agent may connect to the port.** The communication port is
+   created with a SYSTEM/Administrators-only security descriptor
+   (`FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS)`) and
+   `MaxConnections = 1`; the connect callback rejects any other client. Without
+   this, any local process that connects first could read the telemetry,
+   impersonate the agent or flood the driver.
+6. **The kernel never waits on user mode.** Every send to the agent uses a
+   short timeout, or a post-operation / asynchronous path with a bounded queue.
+   On timeout or a full queue the event is dropped and counted, never waited
+   on, and the agent reads the drop counter so a gap is visible rather than
+   silent. A hung, crashed or suspended agent must not stall file I/O on the
+   machine, and skipping sends must never become silent blindness. Same
+   "bounded and counted shedding" rule as the eBPF sensor's ring buffers and
+   drop counter.
+7. **The kernel-to-user direction is untrusted input too.** The Rust decoder of
+   driver messages gets a never-panic robustness suite in its crate's `tests/`
+   and a `fuzz/` target, like the other byte parsers in the repo.
+8. **Where the user-mode side lives.** The fltlib client is a sensor crate next
+   to `driver/` (for example `crates/sensors/windows/minifilter`, package
+   `sensor-windows-minifilter`) that depends only on `schema`. Its `sensor-`
+   package name is what places it under the sensor rule of
+   `tools/check-deps.py`.
 
 ## References
 
