@@ -48,8 +48,17 @@ Write-Host "[ok] Secure Boot off"
 
 if (-not $CertPath) { $CertPath = Join-Path (Get-DriverOutDir) "cert\synthaea-driver-test.cer" }
 if (-not (Test-Path $CertPath)) { throw "no certificate at $CertPath; run new-test-cert.ps1 on the host first" }
+$CertPath = (Resolve-Path $CertPath).Path
+$thumbprint = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 $CertPath).Thumbprint
+# Import-Certificate into LocalMachine\TrustedPublisher failed with
+# E_ACCESSDENIED from an elevated shell on a VMware guest while Root worked
+# (#516 review); certutil adds to both. The thumbprint check catches a store
+# that exits 0 without holding the certificate.
 foreach ($store in @("Root", "TrustedPublisher")) {
-    Import-Certificate -FilePath $CertPath -CertStoreLocation "Cert:\LocalMachine\$store" | Out-Null
+    Invoke-Native certutil.exe @("-addstore", "-f", $store, $CertPath)
+    if (-not (Test-Path "Cert:\LocalMachine\$store\$thumbprint")) {
+        throw "certutil -addstore $store exited 0 but $thumbprint is not in LocalMachine\$store"
+    }
 }
 Write-Host "[ok] test certificate trusted (Root, TrustedPublisher)"
 
