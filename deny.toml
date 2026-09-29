@@ -14,13 +14,17 @@ ignore = [
     # compiled rule sets, a format we produce and consume ourselves. Revisit when
     # yara-x moves off bincode.
     "RUSTSEC-2025-0141",
-    # Both wasmtime advisories require hostile/attacker-supplied WASM or WASI use.
-    # yara-x's wasmtime executes only the module its own compiler emits from our
-    # signed rule content and exposes no WASI to rules — attacker-controlled input
-    # reaches it as scanned DATA, not as code. Bump wasmtime the moment yara-x's
-    # requirement allows a fixed release.
+    # All three wasmtime advisories require running attacker-supplied WASM
+    # through the component model (RUSTSEC-2026-0316: "dynamic record lifting",
+    # low-severity/availability-only, CVSS 1.0) or WASI use. yara-x's wasmtime
+    # executes only the module its own compiler emits from our signed rule
+    # content and exposes no WASI to rules — attacker-controlled input reaches
+    # it as scanned DATA, not as code. Bump wasmtime the moment yara-x's
+    # requirement allows a fixed release (>=36.0.16, <37.0.0 OR >=48.0.3, <49.0.0
+    # OR >=49.0.1).
     "RUSTSEC-2026-0222",
     "RUSTSEC-2026-0269",
+    "RUSTSEC-2026-0316",
 ]
 
 [licenses]

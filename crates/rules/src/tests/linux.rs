@@ -1057,6 +1057,147 @@ fn burst_write_and_rename_excludes_tmp_path() {
 }
 
 #[test]
+fn burst_write_and_rename_fires_with_realistic_small_writes() {
+    // Regression for #496: the old SlidingSum pushed one entry per
+    // FileWriteEvent, so its 256-entry cap capped the tracked total at
+    // 256 * (bytes per call) — ~16-32MB at real buffered-I/O sizes, never
+    // reaching BURST_WRITE_BYTES_THRESHOLD (100MB) outside a test that (like
+    // the ones above) feeds two unrealistic 60MB single writes. 1700 writes
+    // of 64KB, 1ms apart, is the shape a real bulk-encrypting write loop
+    // actually produces — should still cross the threshold once coalesced.
+    let mut state = RuleState::new();
+    let write_size: u64 = 64 * 1024;
+    let write_count: u32 = 1700; // 1700 * 64KB ~= 106MB, safely over the 100MB threshold
+    for i in 0..write_count {
+        state.on_file_write(&file_write_event_full(
+            7105,
+            "evil",
+            write_size,
+            u64::from(i) * 1_000_000, // 1ms apart
+        ));
+    }
+    let writes_end_ns = u64::from(write_count) * 1_000_000;
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7105,
+            "evil",
+            &format!("/home/u/src{i}.docx"),
+            &format!("/home/u/dst{i}.docx"),
+            writes_end_ns + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "realistic small writes should still cross the byte threshold"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
+fn burst_write_and_rename_excludes_package_manager_temp_rename() {
+    // Regression for #496: a package upgrade staging heavy writes under
+    // `foo.dpkg-new` then renaming each one onto `foo` cleared both of this
+    // rule's gates (rename count, byte volume) with no ransomware behavior at
+    // all — confirmed live (30 files, 120MB).
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7106, "dpkg", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7106,
+            "dpkg",
+            &format!("/usr/lib/libfoo{i}.so.dpkg-new"),
+            &format!("/usr/lib/libfoo{i}.so"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert!(
+        alerts.is_empty(),
+        "package-manager stage-then-rename-over-original is not ransomware"
+    );
+}
+
+#[test]
+fn burst_write_and_rename_still_fires_for_the_dpkg_new_shape_under_a_non_package_manager_comm() {
+    // Regression for #500 (Nikolas's review): the filename convention alone
+    // used to be a free pass — an encryptor naming its own staging files
+    // `<target>.dpkg-new` and renaming onto `<target>` cleared this rule
+    // exactly like a real package manager would. `comm` must also actually
+    // be a package manager now.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7107, "evil", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7107,
+            "evil",
+            &format!("/home/u/doc{i}.docx.dpkg-new"),
+            &format!("/home/u/doc{i}.docx"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the .dpkg-new naming convention alone must not suppress the alert \
+         when comm isn't a real package manager"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
+fn burst_write_and_rename_excludes_the_real_apk_staging_shape() {
+    // Regression for #500 review (Jihair, real `apk fix` reinstall on
+    // Alpine): apk doesn't use the `.apk-new` suffix — it stages each file as
+    // a hidden `.apk.<hex>` name in the *same directory* as the final path
+    // and renames that onto it. Paths are relative (renameat against a
+    // directory fd), not absolute.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7108, "apk", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7108,
+            "apk",
+            &format!("usr/bin/.apk.e9a41015f8b7e04a3f02df6f500e89f18738758051d637{i:02}"),
+            &format!("usr/bin/bin{i}"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert!(
+        alerts.is_empty(),
+        "apk's real staging-file shape is not ransomware"
+    );
+}
+
+#[test]
+fn burst_write_and_rename_still_fires_for_the_apk_staging_shape_under_a_non_package_manager_comm() {
+    // Same shape, arbitrary comm: the directory+prefix convention alone must
+    // not be a free pass, same reasoning as the dpkg-new test above.
+    let mut state = RuleState::new();
+    state.on_file_write(&file_write_event_full(7109, "evil", 200 * 1024 * 1024, 0));
+    let mut alerts = Vec::new();
+    for i in 0..RANSOMWARE_RENAME_THRESHOLD {
+        alerts.extend(state.on_file_rename(&file_rename_event_full(
+            7109,
+            "evil",
+            &format!("home/u/.apk.e9a41015f8b7e04a3f02df6f500e89f18738758051d637{i:02}"),
+            &format!("home/u/doc{i}"),
+            1_000_000_000 + u64::from(i) * 100_000_000,
+        )));
+    }
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the .apk.<hex> staging convention alone must not suppress the alert \
+         when comm isn't a real package manager"
+    );
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
 fn burst_write_and_rename_does_not_realert_within_window() {
     let mut state = RuleState::new();
     state.on_file_write(&file_write_event_full(7104, "evil", 60 * 1024 * 1024, 0));
@@ -1083,64 +1224,201 @@ fn burst_write_and_rename_does_not_realert_within_window() {
     );
 }
 
-// ── T1620 memfd fileless exec (stateless, issue #85) ───────────────────────
+// ── T1620 memfd fileless exec (stateful since #497, issue #85) ─────────────
 // Strings below are what the kernel actually emits (traced on Alpine 6.18.50
 // against a live memfd exec, #85 review) — NOT `/memfd:<name> (deleted)`, which is
 // only what `readlink /proc/<pid>/exe` shows and the sensor never reads.
 
-#[test]
-fn memfd_exec_matches_dev_fd_path() {
-    // execveat(fd, "", AT_EMPTY_PATH): bprm->filename is /dev/fd/<n>.
-    let mut event = exec_event("");
-    event.image_path = "/dev/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn memfd_exec_event(pid: u32, comm: &str, image_path: &str, timestamp_ns: u64) -> ExecEvent {
+    let mut event = exec_event_full(pid, 1, comm, "", timestamp_ns);
+    event.image_path = image_path.to_string();
+    event
 }
 
 #[test]
-fn memfd_exec_matches_proc_self_fd_path() {
-    // execv via /proc/self/fd/<n>.
-    let mut event = exec_event("");
-    event.image_path = "/proc/self/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn memfd_exec_matches_dev_fd_path_with_memfd_comm() {
+    // execveat(fd, "", AT_EMPTY_PATH): bprm->filename is /dev/fd/<n>, and the
+    // kernel names the task after the memfd dentry.
+    let event = memfd_exec_event(100, "memfd:payload", "/dev/fd/3", 0);
+    let alerts = RuleState::new().on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
 }
 
 #[test]
-fn memfd_exec_matches_proc_pid_fd_path() {
-    let mut event = exec_event("");
-    event.image_path = "/proc/12345/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn dev_fd_path_without_memfd_comm_does_not_alert() {
+    // Regression (#497): the first cut treated /dev/fd/<n> alone as
+    // sufficient — a real on-disk binary exec'd via
+    // open()+execveat(fd,"",AT_EMPTY_PATH) produces this exact path shape
+    // too, with an ordinary comm, and isn't fileless.
+    let event = memfd_exec_event(100, "busybox", "/dev/fd/3", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
-fn memfd_exec_matches_via_comm() {
-    // The execveat(AT_EMPTY_PATH) case names the task after the memfd dentry.
-    let mut event = exec_event("");
-    event.meta.comm = "memfd:payload".to_string();
-    event.image_path = "/dev/fd/3".to_string();
-    let alert = check_memfd_exec(&event).unwrap();
-    assert_eq!(alert.technique, "T1620");
+fn proc_self_fd_exec_with_prior_memfd_create_matches() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000); // 10ms later
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn proc_pid_fd_exec_with_prior_memfd_create_matches() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/100/fd/3", 10_000_000);
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn runc_style_proc_self_fd_reexec_without_memfd_create_does_not_alert() {
+    // Regression (#497, live on the lab VM): runc's own CVE-2019-5736
+    // self-protection re-execs "runc init" via /proc/self/fd/<n> on every
+    // container start — comm truncated to the fd number, parent_comm=runc,
+    // no memfd_create anywhere in the picture. `docker run --rm alpine true`
+    // x3 gave 3 false T1620 alerts before this fix.
+    let event = memfd_exec_event(200, "6", "/proc/self/fd/6", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
+}
+
+#[test]
+fn proc_fd_exec_past_the_correlation_window_does_not_alert() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", MEMFD_EXEC_WINDOW_NS + 1);
+    assert!(state.on_exec(&event).is_empty());
+}
+
+#[test]
+fn proc_fd_exec_correlates_only_its_own_pid() {
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(999, 0)); // a different pid
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(state.on_exec(&event).is_empty());
 }
 
 #[test]
 fn normal_exec_does_not_match_memfd() {
     let event = exec_event("/usr/bin/ls -la");
-    assert!(check_memfd_exec(&event).is_none());
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
 fn path_with_fd_in_an_unrelated_location_does_not_false_positive() {
     // Contains "/fd/" but isn't rooted at /dev or /proc — a real user path.
-    let mut event = exec_event("");
-    event.image_path = "/home/user/documents/fd/notes.txt".to_string();
-    assert!(check_memfd_exec(&event).is_none());
+    let event = memfd_exec_event(100, "notes", "/home/user/documents/fd/notes.txt", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
 }
 
 #[test]
 fn proc_fd_path_with_non_numeric_pid_does_not_false_positive() {
-    let mut event = exec_event("");
-    event.image_path = "/proc/self/fd/notanumber".to_string();
-    assert!(check_memfd_exec(&event).is_none());
+    let event = memfd_exec_event(100, "x", "/proc/self/fd/notanumber", 0);
+    assert!(RuleState::new().on_exec(&event).is_empty());
+}
+
+#[test]
+fn memfd_create_arriving_after_a_pending_proc_fd_exec_alerts_retroactively() {
+    // Regression (#503 review, Nikolas): the kernel always creates the memfd
+    // before executing it, but userspace drains the two ring buffers
+    // independently, so the exec event can be processed here first. The exec
+    // must not be silently dropped just because its evidence hasn't arrived
+    // yet.
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(
+        state.on_exec(&exec).is_empty(),
+        "no corroborating evidence yet — held, not alerted, and not dropped"
+    );
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 0)); // "before" the exec, kernel-time
+    assert_eq!(
+        alerts.len(),
+        1,
+        "the held exec must alert once its evidence arrives, even though \
+         the exec was processed first"
+    );
+    assert_eq!(alerts[0].technique, "T1620");
+}
+
+#[test]
+fn memfd_create_outside_the_window_does_not_retroactively_alert() {
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", MEMFD_EXEC_WINDOW_NS + 1);
+    assert!(state.on_exec(&exec).is_empty());
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 0));
+    assert!(
+        alerts.is_empty(),
+        "a creation more than MEMFD_EXEC_WINDOW_NS before the held exec \
+         must not retroactively alert"
+    );
+}
+
+#[test]
+fn pending_proc_fd_exec_is_consumed_and_does_not_double_alert() {
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    assert!(state.on_exec(&exec).is_empty());
+    let first = state.on_memfd_create(&memfd_create_event_full(100, 0));
+    assert_eq!(first.len(), 1);
+    // A second creation for the same pid must not re-match the same
+    // already-consumed pending exec.
+    let second = state.on_memfd_create(&memfd_create_event_full(100, 5_000_000));
+    assert!(second.is_empty());
+}
+
+#[test]
+fn a_memfd_created_after_the_exec_does_not_corroborate_it_via_the_retroactive_path() {
+    // Regression (#503 review, Jihair, caught live on the lab VM): the kernel
+    // always creates the memfd before the exec, so a memfd_create timestamped
+    // *after* the held exec is a different, unrelated call — not late
+    // evidence for it. `saturating_sub` alone can't distinguish "arrived
+    // late but really was earlier" from "really did happen later": both
+    // directions produce a small delta once one timestamp exceeds the other,
+    // so the ordering itself must be checked, not just the window.
+    let mut state = RuleState::new();
+    let exec = memfd_exec_event(100, "3", "/proc/self/fd/3", 0);
+    assert!(state.on_exec(&exec).is_empty());
+    // This memfd_create is stamped 8s *after* the held exec — same shape as
+    // the live false positive (an unrelated memfd_create long after an
+    // on-disk /proc/self/fd re-exec, e.g. a payload using memfd for IPC).
+    let alerts = state.on_memfd_create(&memfd_create_event_full(100, 8_000_000_000));
+    assert!(
+        alerts.is_empty(),
+        "a memfd created after the held exec must not retroactively corroborate it"
+    );
+}
+
+#[test]
+fn a_memfd_created_after_the_exec_does_not_corroborate_it_via_the_forward_path() {
+    // Same bug, other delivery order: the memfd_create is seen first (and
+    // recorded), then an unrelated /proc/fd exec for the same pid arrives
+    // stamped *before* that creation. The creation cannot be evidence for an
+    // exec that (by wall-clock/kernel time) happened first.
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 8_000_000_000));
+    let event = memfd_exec_event(100, "3", "/proc/self/fd/3", 0);
+    assert!(
+        state.on_exec(&event).is_empty(),
+        "a memfd created after this exec must not corroborate it"
+    );
+}
+
+#[test]
+fn proc_fd_shape_alert_does_not_overclaim_the_dev_fd_shapes_disk_free_evidence() {
+    // #503 review: the /proc/fd shape is pid+time correlation, not proof the
+    // executed fd is the created memfd — the message must not claim more
+    // than that.
+    let mut state = RuleState::new();
+    state.on_memfd_create(&memfd_create_event_full(100, 0));
+    let event = memfd_exec_event(100, "4", "/proc/self/fd/3", 10_000_000);
+    let alerts = state.on_exec(&event);
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        !alerts[0].message.contains("no payload ever touched disk"),
+        "the /proc/fd shape can't back that claim, unlike /dev/fd + memfd: comm"
+    );
 }
