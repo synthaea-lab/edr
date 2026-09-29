@@ -177,6 +177,41 @@ self-update are named and deferred, not designed here.
    package-owned and never touched by the updater — rather than refusing to
    start.
 
+### Amendment: the update trigger and its wire contract (issue #30)
+
+Nothing in this ADR said what starts an update. `agent apply-release` does, and
+it is deliberately a one-shot command (run by an operator, a timer or a future
+scheduler), not a resident loop:
+
+1. `GET /api/release/manifest` returns the signed `ReleaseManifest` this agent is
+   offered. There is **no ring in the path**: unlike content, a binary release
+   manifest has no `ring` field, and which release an agent is offered is the
+   server's decision from its mTLS identity. The Ed25519 signature and the
+   monotone `release_version` are what the agent relies on.
+2. Before any download the agent verifies the signature and schema, rejects any
+   entry path that could escape the release directory, refuses a banned release,
+   and applies the anti-rollback check against `current`'s version.
+3. Each artifact is fetched with `GET /api/release/artifact?release_version=N&path=P&sha256=H`,
+   hash-checked against the signed manifest **before it touches disk**, and
+   written (mode `0755`, symlink-safe, atomically) into `versions/.stage-N`. The
+   manifest has no signed per-entry size, so a constant ceiling
+   (`MAX_RELEASE_ARTIFACT_BYTES`, 256 MiB) bounds each download instead.
+4. The staging directory is renamed to `versions/vN` in one step, so a release
+   directory only ever exists complete and a crash mid-download can never leave a
+   half-populated directory that a later rollback might pick as its target.
+   `verify_staged` then re-hashes the tree from disk, the manifest is persisted,
+   and only then is `current` repointed. A complete `vN` from an interrupted run
+   is reused without downloading; one that no longer matches its manifest is
+   refused and left in place for inspection.
+5. The command then runs `systemctl restart synthaea-agent`, which starts the
+   watchdog from the new `current`; a failed restart is a warning, not an error,
+   since a promoted release is safe and simply runs at the next service start.
+   `--no-restart` skips it.
+
+Both the manifest and artifact routes are the contract a server must implement;
+the server side is a separate slice. Windows and macOS remain out of scope: the
+command exits with an explanatory error there.
+
 ## Consequences
 
 - `tamper::integrity::Manifest` gains no new fields or API — the updater's
