@@ -11,8 +11,10 @@
         re-checks it from inside the guest;
       - COM1 exposed on the named pipe \\.\pipe\<Name>-kd for WinDbg kernel
         debugging (prepare-driver-vm.ps1 points the guest debugger at COM1);
-      - the repository shared read-only as \\VBoxSvr\synthaea, so the guest
-        reads the scripts and the signed package without copying them;
+      - lab\ and target\driver shared read-only as \\VBoxSvr\synthaea-lab
+        and \\VBoxSvr\synthaea-driver, so the guest reads the scripts, the
+        certificate and the signed package without copying them, and sees
+        nothing else of the checkout;
       - an unattended install with the Guest Additions, unless -Manual.
 
     VirtualBox rather than Hyper-V: the team's hosts include Windows 11 Home,
@@ -57,7 +59,10 @@ $ErrorActionPreference = "Stop"
 
 $vbm = Get-VBoxManage
 $IsoPath = (Resolve-Path $IsoPath).Path
-$repoRoot = Get-RepoRoot
+$labDir = Join-Path (Get-RepoRoot) "lab"
+# Shared before new-test-cert.ps1 or sign-driver.ps1 may have run.
+$driverOut = Get-DriverOutDir
+New-Item -ItemType Directory -Force -Path $driverOut | Out-Null
 
 $existing = & $vbm list vms
 if ($existing -match ('^"' + [regex]::Escape($Name) + '"')) {
@@ -90,7 +95,8 @@ try {
     Invoke-Native $vbm @("createmedium", "disk", "--filename=$disk", "--size=$($DiskGB * 1024)", "--format=VDI")
     Invoke-Native $vbm @("storagectl", $Name, "--name=SATA", "--add=sata", "--controller=IntelAhci", "--portcount=4", "--bootable=on")
     Invoke-Native $vbm @("storageattach", $Name, "--storagectl=SATA", "--port=0", "--device=0", "--type=hdd", "--medium=$disk")
-    Invoke-Native $vbm @("sharedfolder", "add", $Name, "--name=synthaea", "--hostpath=$repoRoot", "--readonly", "--automount")
+    Invoke-Native $vbm @("sharedfolder", "add", $Name, "--name=$LabShareName", "--hostpath=$labDir", "--readonly", "--automount")
+    Invoke-Native $vbm @("sharedfolder", "add", $Name, "--name=$DriverShareName", "--hostpath=$driverOut", "--readonly", "--automount")
 
     if ($Manual) {
         Invoke-Native $vbm @("storageattach", $Name, "--storagectl=SATA", "--port=1", "--device=0", "--type=dvddrive", "--medium=$IsoPath")
@@ -122,7 +128,7 @@ try {
 
 Write-Host ""
 Write-Host "Next, inside the guest, from an elevated PowerShell:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea\lab\driver\prepare-driver-vm.ps1"
+Write-Host "  powershell -ExecutionPolicy Bypass -File \\VBoxSvr\$LabShareName\driver\prepare-driver-vm.ps1"
 Write-Host "then reboot the guest, and from the host:"
 Write-Host "  .\lab\driver\snapshot-driver-vm.ps1 -Name $Name -Take clean"
 Write-Host "Kernel debugger: windbg -k com:pipe,port=\\.\pipe\$Name-kd,resets=0,reconnect"

@@ -5,7 +5,7 @@
 .DESCRIPTION
     A self-signed code-signing certificate in CurrentUser\My, exported (public
     part only) to target\driver\cert\synthaea-driver-test.cer, where the VM
-    reads it through the \\VBoxSvr\synthaea share. The private key never
+    reads it through the \\VBoxSvr\synthaea-driver share. The private key never
     leaves the host's certificate store.
 
     A driver signed with it loads only where the certificate is trusted AND

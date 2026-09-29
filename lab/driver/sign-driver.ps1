@@ -72,4 +72,4 @@ foreach ($file in Get-ChildItem -LiteralPath $package | Where-Object { $_.Extens
         throw "$($file.Name) is not signed by $($cert.Thumbprint)"
     }
 }
-Write-Host "package ready: $package (in the VM: \\VBoxSvr\synthaea\target\driver\package)"
+Write-Host "package ready: $package (in the VM: \\VBoxSvr\$DriverShareName\package)"

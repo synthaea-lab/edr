@@ -22,9 +22,9 @@
     standard checks. Re-run with it once the name is settled.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea\lab\driver\prepare-driver-vm.ps1
-    (VMware: from the repo's shared folder, e.g. "\\vmware-host\Shared Folders\edr-new\lab\driver\...".
-    The certificate and package paths follow the script's own location.)
+    powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea-lab\driver\prepare-driver-vm.ps1
+    (VMware: "\\vmware-host\Shared Folders\synthaea-lab\driver\...". The
+    certificate is read from the synthaea-driver share next to it.)
 #>
 [CmdletBinding()]
 param(
@@ -46,7 +46,7 @@ if ($secureBoot) {
 }
 Write-Host "[ok] Secure Boot off"
 
-if (-not $CertPath) { $CertPath = Join-Path (Get-DriverOutDir) "cert\synthaea-driver-test.cer" }
+if (-not $CertPath) { $CertPath = Join-Path (Get-GuestDriverDir) "cert\synthaea-driver-test.cer" }
 if (-not (Test-Path $CertPath)) { throw "no certificate at $CertPath; run new-test-cert.ps1 on the host first" }
 $CertPath = (Resolve-Path $CertPath).Path
 $thumbprint = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 $CertPath).Thumbprint

@@ -17,15 +17,16 @@
     pre-load): a bug here bluescreens the VM.
 
 .PARAMETER PackageDir
-    The signed package (sign-driver.ps1). Default: target\driver\package
-    next to this script's repository, i.e. the host's through the VM's
-    shared folder (\\VBoxSvr\synthaea, or VMware's \\vmware-host\Shared Folders\...).
+    The signed package (sign-driver.ps1). Default: the host's
+    target\driver\package through the synthaea-driver share
+    (\\VBoxSvr\synthaea-driver\package, or VMware's
+    \\vmware-host\Shared Folders\synthaea-driver\package).
 
 .PARAMETER FilterName
     The filter's service name. Default: read from the INF's AddService line.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea\lab\driver\driver-load-unload.ps1
+    powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea-lab\driver\driver-load-unload.ps1
 #>
 [CmdletBinding()]
 param(
@@ -74,7 +75,7 @@ Assert-Admin
 Assert-InTestVm
 if (-not (Test-TestSigningOn)) { throw "test-signing is off; run prepare-driver-vm.ps1 and reboot" }
 
-if (-not $PackageDir) { $PackageDir = Join-Path (Get-DriverOutDir) "package" }
+if (-not $PackageDir) { $PackageDir = Join-Path (Get-GuestDriverDir) "package" }
 $inf = @(Get-ChildItem -LiteralPath $PackageDir -Filter *.inf)
 $sys = @(Get-ChildItem -LiteralPath $PackageDir -Filter *.sys)
 if ($inf.Count -ne 1 -or $sys.Count -ne 1) { throw "expected one .inf and one .sys in $PackageDir; run sign-driver.ps1 on the host" }
