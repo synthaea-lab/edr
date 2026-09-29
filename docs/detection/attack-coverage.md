@@ -66,7 +66,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
-| T1071 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/linux/reverse_shell.yml` |
+| T1071 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/reverse_shell.yml` |
 | T1071.004 | 6 | `correlator:crates/correlator/src/rules.rs` |
 | T1105 | 1, 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `yara:rules/yara/lab/synthaea_lab_payload.yar` |
 | T1571 | 3 | `rules:crates/rules/src/state.rs` |
@@ -89,7 +89,9 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1046 | 3 | `rules:crates/rules/src/state.rs` |
+| T1190 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
+| T1505.003 | 1 | `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
 
