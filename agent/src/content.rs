@@ -256,10 +256,9 @@ fn reject_symlink_components(root: &Path, dest: &Path) -> std::io::Result<()> {
 /// agent targets — it replaces the link, never writes through it — so this
 /// covers the parent-directory case that actually mattered.
 ///
-/// The temp file's name includes this process's PID so two different
-/// processes targeting the same destination cannot collide; two invocations
-/// of the very same process racing each other is not a threat model this
-/// one-shot CLI command needs to defend against.
+/// The temp file is opened with `create_new`, so a symlink (or anything else)
+/// pre-planted at its name makes the write fail rather than be followed
+/// (PR #520 review round 3); it is removed if the write or rename fails.
 ///
 /// `root` bounds the symlink check ([`reject_symlink_components`]) to `dest`'s
 /// components under it — `dest` must be `root` or a descendant of it.
@@ -284,15 +283,45 @@ fn write_atomically(root: &Path, dest: &Path, bytes: &[u8]) -> std::io::Result<(
     let tmp_path = dest.with_file_name(format!(
         "{}.tmp-{}",
         file_name.to_string_lossy(),
-        std::process::id()
+        unique_suffix()
     ));
 
-    let mut tmp_file = std::fs::File::create(&tmp_path)?;
-    tmp_file.write_all(bytes)?;
-    tmp_file.sync_all()?;
-    drop(tmp_file);
-    std::fs::rename(&tmp_path, dest)?;
-    Ok(())
+    // `create_new` (O_EXCL / CREATE_NEW) fails on any existing entry —
+    // including a dangling symlink planted at the temp name — instead of
+    // following it, so the write can never land outside `root`.
+    let mut tmp_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)?;
+    let written = tmp_file
+        .write_all(bytes)
+        .and_then(|()| tmp_file.sync_all())
+        .and_then(|()| {
+            drop(tmp_file);
+            std::fs::rename(&tmp_path, dest)
+        });
+    if written.is_err() {
+        // Best effort: the original error is the one worth reporting.
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    written
+}
+
+/// Unpredictable-enough temp-file suffix: PID, wall-clock nanoseconds and a
+/// process-wide counter. Uniqueness is not what protects against planted
+/// links (`create_new` is); it only keeps an attacker from pre-creating the
+/// name cheaply and makes benign collisions vanishingly rare.
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{}-{nanos:x}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Downloads every entry in `fetch_plan.to_fetch` from the (already-real)
@@ -927,6 +956,53 @@ mod tests {
             !real_dir.join("beacon.sigma").exists(),
             "must not have written through the symlinked parent"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomically_never_follows_a_symlink_planted_at_the_temp_name() {
+        let dir = tmp("atomic-symlink-tmp");
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"ORIGINAL").unwrap();
+        let content_dir = dir.join("content");
+        let dest = content_dir.join("rules").join("beacon.sigma");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        // Plant links at every plausible temp name, including the old
+        // predictable `<name>.tmp-<pid>` form.
+        std::os::unix::fs::symlink(
+            &victim,
+            dest.with_file_name(format!("beacon.sigma.tmp-{}", std::process::id())),
+        )
+        .unwrap();
+
+        write_atomically(&content_dir, &dest, b"SIGNED-CONTENT").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"ORIGINAL");
+        assert!(!std::fs::symlink_metadata(&dest).unwrap().is_symlink());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"SIGNED-CONTENT");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn write_atomically_refuses_a_directory_junction_parent() {
+        let dir = tmp("atomic-junction-parent");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let content_dir = dir.join("content");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        let junction = content_dir.join("rules");
+        // Junctions need no privilege, unlike file symlinks.
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "mklink /J failed");
+
+        let dest = junction.join("beacon.sigma");
+        let err = write_atomically(&content_dir, &dest, b"malicious").unwrap_err();
+        assert!(err.to_string().contains("symlink"), "got: {err}");
+        assert!(!outside.join("beacon.sigma").exists());
     }
 
     #[test]

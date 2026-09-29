@@ -54,8 +54,37 @@ pub struct ContentEntry {
 /// Windows device names reserved regardless of extension (`NUL.txt` is just
 /// as reserved as `NUL`) — checked against a segment's stem, case-insensitively.
 const WINDOWS_RESERVED_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+    // Superscript-digit variants and the console handles also resolve to devices.
+    "COM\u{b9}",
+    "COM\u{b2}",
+    "COM\u{b3}",
+    "LPT\u{b9}",
+    "LPT\u{b2}",
+    "LPT\u{b3}",
+    "CONIN$",
+    "CONOUT$",
 ];
 
 /// True if `segment` is safe as one path component on every platform this
@@ -471,6 +500,18 @@ mod tests {
         assert!(!entry("rules/NUL", &"a".repeat(64)).is_safe_relative_path());
         assert!(!entry("rules/nul.sigma", &"a".repeat(64)).is_safe_relative_path());
         assert!(!entry("rules/COM1.txt", &"a".repeat(64)).is_safe_relative_path());
+        // Superscript digits and console handles also reach devices.
+        for name in [
+            "rules/COM\u{b9}.sigma",
+            "rules/LPT\u{b3}",
+            "rules/CONIN$",
+            "rules/CONOUT$",
+        ] {
+            assert!(
+                !entry(name, &"a".repeat(64)).is_safe_relative_path(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
