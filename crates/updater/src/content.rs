@@ -51,6 +51,25 @@ pub struct ContentEntry {
     pub content_type: String,
 }
 
+impl ContentEntry {
+    /// True if [`Self::path`] is safe to join onto a local content root:
+    /// non-empty, relative, forward-slash-only, and free of any `.`/`..`
+    /// component. A signed path only proves who signed the manifest, not
+    /// that it's safe to write — checked before any download happens
+    /// (PR #509 review), not deferred to write time.
+    #[must_use]
+    pub fn is_safe_relative_path(&self) -> bool {
+        !self.path.is_empty()
+            && !self.path.starts_with('/')
+            && !self.path.contains('\\')
+            && !self.path.contains('\0')
+            && self
+                .path
+                .split('/')
+                .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+    }
+}
+
 /// A signed content manifest for one ring (ADR-0016 §1).
 ///
 /// Field order is alphabetical and fixed by declaration — canonicalization
@@ -176,6 +195,23 @@ impl ContentManifest {
             .iter()
             .filter(|e| have.get(&e.path) != Some(&e.sha256))
             .collect()
+    }
+
+    /// Rejects the whole manifest if any entry's path is not safe to join
+    /// onto a local content root ([`ContentEntry::is_safe_relative_path`]) —
+    /// checked once, before anything is downloaded, rather than skipping the
+    /// one bad entry and applying the rest.
+    ///
+    /// # Errors
+    ///
+    /// [`UpdaterError::UnsafeContentPath`] naming the first offending entry.
+    pub fn validate_entry_paths(&self) -> Result<(), UpdaterError> {
+        for entry in &self.entries {
+            if !entry.is_safe_relative_path() {
+                return Err(UpdaterError::UnsafeContentPath(entry.path.clone()));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -334,6 +370,59 @@ mod tests {
         assert_eq!(a.canonical_bytes(), b.canonical_bytes());
         a.signature.clear();
         assert_eq!(a.canonical_bytes(), b.canonical_bytes());
+    }
+
+    #[test]
+    fn ordinary_content_paths_are_safe() {
+        assert!(entry("rules/beacon.sigma", &"a".repeat(64)).is_safe_relative_path());
+        assert!(
+            entry(
+                "models/cmdline-iforest-linux/0.3.0/model.pkl",
+                &"a".repeat(64)
+            )
+            .is_safe_relative_path()
+        );
+    }
+
+    #[test]
+    fn a_dot_dot_component_is_unsafe() {
+        // The concrete attack the PR #509 review named: a signed
+        // `rules/../../etc/cron.d/x` must not be treated as safe.
+        assert!(!entry("rules/../../etc/cron.d/x", &"a".repeat(64)).is_safe_relative_path());
+        assert!(!entry("..", &"a".repeat(64)).is_safe_relative_path());
+    }
+
+    #[test]
+    fn an_absolute_path_is_unsafe() {
+        assert!(!entry("/etc/passwd", &"a".repeat(64)).is_safe_relative_path());
+    }
+
+    #[test]
+    fn a_backslash_is_unsafe() {
+        // Content paths are forward-slash-only by contract (the field's own
+        // doc comment) — a backslash could mean something different to a
+        // Windows path join than it does to the manifest's namespace.
+        assert!(!entry("rules\\..\\evil.sigma", &"a".repeat(64)).is_safe_relative_path());
+    }
+
+    #[test]
+    fn an_empty_path_is_unsafe() {
+        assert!(!entry("", &"a".repeat(64)).is_safe_relative_path());
+    }
+
+    #[test]
+    fn validate_entry_paths_rejects_the_whole_manifest_for_one_bad_entry() {
+        let mut m = signed_manifest(1);
+        m.entries.push(entry("../escape.sigma", &"b".repeat(64)));
+        assert!(matches!(
+            m.validate_entry_paths(),
+            Err(UpdaterError::UnsafeContentPath(path)) if path == "../escape.sigma"
+        ));
+    }
+
+    #[test]
+    fn validate_entry_paths_accepts_a_clean_manifest() {
+        assert!(signed_manifest(1).validate_entry_paths().is_ok());
     }
 }
 
