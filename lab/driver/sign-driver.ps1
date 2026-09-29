@@ -5,9 +5,11 @@
 .DESCRIPTION
     Copies the .sys and .inf from -DriverDir, then:
       - signs the .sys (embedded signature: what the kernel checks at load);
-      - builds the catalog with inf2cat and signs it, when the WDK is
-        installed (the catalog is what an INF-based install checks).
-    Both with this developer's test certificate (new-test-cert.ps1).
+      - builds the catalog with inf2cat and signs it (the catalog is what
+        pnputil checks when driver-load-unload.ps1 installs the INF).
+    Both with this developer's test certificate (new-test-cert.ps1). Needs
+    the WDK for inf2cat: a package without a catalog is refused here rather
+    than left to fail at the install step in the VM (#516 review).
 
     No timestamp: a test certificate's signatures only need to hold inside
     the test VM, and the VM may have no network.
@@ -41,6 +43,8 @@ if (-not $cert) { throw "no test certificate '$DriverCertSubject'; run new-test-
 
 $signtool = Find-KitTool "signtool.exe"
 if (-not $signtool) { throw "signtool.exe not found under Windows Kits\10\bin; install the Windows SDK" }
+$inf2cat = Find-KitTool "inf2cat.exe"
+if (-not $inf2cat) { throw "inf2cat.exe not found under Windows Kits\10\bin; install the WDK (the package needs a signed catalog)" }
 
 $package = Join-Path (Get-DriverOutDir) "package"
 if (Test-Path $package) { Remove-Item -LiteralPath $package -Recurse -Force }
@@ -54,16 +58,11 @@ $sysOut = Join-Path $package $sys[0].Name
 Invoke-Native $signtool ($signArgs + $sysOut)
 Write-Host "signed $($sys[0].Name)"
 
-$inf2cat = Find-KitTool "inf2cat.exe"
-if ($inf2cat) {
-    Invoke-Native $inf2cat @("/driver:$package", "/os:10_x64", "/uselocaltime")
-    $cat = @(Get-ChildItem -LiteralPath $package -Filter *.cat)
-    if ($cat.Count -ne 1) { throw "inf2cat produced $($cat.Count) catalogs; check the INF's CatalogFile entry" }
-    Invoke-Native $signtool ($signArgs + $cat[0].FullName)
-    Write-Host "built and signed $($cat[0].Name)"
-} else {
-    Write-Warning "inf2cat.exe not found (it ships with the WDK): no catalog. fltmc load works on the embedded signature; an INF install may warn."
-}
+Invoke-Native $inf2cat @("/driver:$package", "/os:10_x64", "/uselocaltime")
+$cat = @(Get-ChildItem -LiteralPath $package -Filter *.cat)
+if ($cat.Count -ne 1) { throw "inf2cat produced $($cat.Count) catalogs; check the INF's CatalogFile entry" }
+Invoke-Native $signtool ($signArgs + $cat[0].FullName)
+Write-Host "built and signed $($cat[0].Name)"
 
 # The host doesn't trust the test root, so the status is not Valid here; what
 # matters is that the signer is this developer's certificate.

@@ -15,7 +15,7 @@ run them from the shared folder (`\\vmware-host\Shared Folders\<share>\lab\drive
 | `new-driver-vm.ps1` | host | Creates the VM: Windows 11, EFI, TPM 2.0, Secure Boot off, COM1 on `\\.\pipe\<vm>-kd`, repo shared read-only as `\\VBoxSvr\synthaea`, unattended install with Guest Additions |
 | `prepare-driver-vm.ps1` | guest, elevated, once | Trusts the certificate, `testsigning on`, kernel debugging on COM1, DbgPrint visible, kernel dump kept, optional Driver Verifier |
 | `snapshot-driver-vm.ps1` | host | `-Take <label>` (live, timestamped), `-Restore <label>` (latest match), `-List` |
-| `sign-driver.ps1` | host | Copies the built `.sys`/`.inf` to `target\driver\package`, signs the `.sys`, builds and signs the catalog when the WDK's `inf2cat` is there |
+| `sign-driver.ps1` | host | Copies the built `.sys`/`.inf` to `target\driver\package`, signs the `.sys`, builds and signs the catalog (needs the WDK's `inf2cat`) |
 | `driver-load-unload.ps1` | guest, elevated | Milestone 1 check, replayed at the demo: install from the INF, `fltmc load`, listed, `fltmc unload`, gone |
 
 ## Once
