@@ -941,8 +941,20 @@ fn single_process_burst_yields_exactly_one_alert_not_two() {
 /// Runs the `sed -i.bak`-shaped rename burst (20+ files, one pid) through
 /// `on_file_rename`, with `executable_path` set to `exe_path` on every event.
 fn in_place_edit_burst(exe_path: Option<&str>) -> Vec<crate::Alert> {
+    in_place_edit_burst_after_exec(None, exe_path)
+}
+
+/// Same burst, preceded by an `ExecEvent` for the pid with `exec_image`
+/// (`None` = no exec seen), and `executable_path` = `exe_path` on every rename.
+fn in_place_edit_burst_after_exec(
+    exec_image: Option<&str>,
+    exe_path: Option<&str>,
+) -> Vec<crate::Alert> {
     let mut state = RuleState::new();
     let mut alerts = Vec::new();
+    if let Some(image) = exec_image {
+        state.on_exec(&memfd_exec_event(9200, "sed", image, 0));
+    }
     for i in 0..RANSOMWARE_RENAME_THRESHOLD {
         let mut event = file_rename_event_full(
             9200,
@@ -967,12 +979,40 @@ fn in_place_edit_backup_from_a_trusted_path_does_not_alert() {
 }
 
 #[test]
-fn in_place_edit_backup_without_a_resolved_exe_path_is_still_excluded() {
-    // policy::name_exclusion_applies's own contract: an unresolved path (the
-    // sensor's /proc/<pid>/exe read raced the process exiting) is not
-    // evidence of masquerade, so the exclusion still applies — same as every
-    // other name-keyed exclusion in this crate.
-    assert!(in_place_edit_burst(None).is_empty());
+fn in_place_edit_backup_with_a_trusted_exec_path_is_excluded_even_when_the_rename_time_path_raced()
+{
+    // Real `sed -i.bak` exits right after its renames, so the sensor's rename-time
+    // /proc/<pid>/exe read is None (#513 review, live case C). The exec-time
+    // image_path the kernel handed us is what proves it is /usr/bin/sed.
+    assert!(in_place_edit_burst_after_exec(Some("/usr/bin/sed"), None).is_empty());
+}
+
+#[test]
+fn in_place_edit_backup_from_an_untrusted_exec_path_alerts_even_when_the_rename_time_path_raced() {
+    // #513 review, live case B: a binary under an attacker-chosen path sets
+    // comm=sed, renames with a .bak suffix and exits promptly, so the rename-time
+    // executable_path is None. The exec-time path is untrusted → must alert.
+    let alerts = in_place_edit_burst_after_exec(Some("/root/fs513/A/sed"), None);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1486");
+}
+
+#[test]
+fn in_place_edit_backup_exec_path_wins_over_a_rename_time_path() {
+    // The exec-time path is authoritative: a trusted-looking rename-time value
+    // must not launder an untrusted exec.
+    let alerts = in_place_edit_burst_after_exec(Some("/home/attacker/sed"), Some("/usr/bin/sed"));
+    assert_eq!(alerts.len(), 1);
+}
+
+#[test]
+fn in_place_edit_backup_with_no_known_path_at_all_fails_closed() {
+    // No exec seen for the pid (e.g. a forked child that only set comm=sed) and
+    // no rename-time path: "unknown" is not evidence of /usr/bin/sed, and the
+    // process controls it. Unlike the other name-keyed exclusions, this one alerts.
+    let alerts = in_place_edit_burst(None);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1486");
 }
 
 #[test]
