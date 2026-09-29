@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "metadata": {
+        "technique": "T1071.001"
+      },
+      "path": "rules/beacon.sigma",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 1234,
+      "type": "rule"
+    }
+  ],
+  "release_version": 1,
+  "released_at": "2026-09-23T16:00:00Z",
+  "ring": "canary_0",
+  "schema_version": 1,
+  "signature": "ccf02dfb6693dc204aed7309ae4cb2f25c80575cca493f2a5d5aaa049785b8ec934bf39dbaf497aad6b0a956504c30b47ef18169588baf4f324cd53dc242b70b"
+}

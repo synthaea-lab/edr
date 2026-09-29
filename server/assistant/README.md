@@ -16,3 +16,15 @@ Planned capabilities, in trust order:
 
 Constraints: assistant output is visibly labeled, grounded citations are mandatory,
 prompts/outputs land in the audit log, and tenant data never trains shared models.
+
+## Status
+
+Capability 1 (case narratives) is implemented (issue #50): `evidence-graph.ts` builds
+the allowlisted evidence graph a case's grouped detections project into,
+`llm-client.ts` narrates it against an OpenAI-compatible endpoint (ADR-0017,
+self-hosted by default), `prompt.ts` holds the versioned system prompt. Detections are
+grouped into cases by the `group-detections` cron sweep
+(`app/api/cron/group-detections/route.ts`) — a server-side heuristic (same agent,
+30-minute window, related MITRE technique), standing in for the correlator-side
+`case_id`/attribution plumbing that doesn't exist yet (tracked as a follow-up issue).
+Capabilities 2 and 3 are not started.
