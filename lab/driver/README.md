@@ -57,6 +57,12 @@ powershell -ExecutionPolicy Bypass -File \\VBoxSvr\synthaea-lab\driver\driver-lo
 ```
 
 Kernel debugger from the host: `windbg -k com:pipe,port=\\.\pipe\<vm>-kd,resets=0,reconnect`.
+`new-driver-vm.ps1` sets up that pipe on VirtualBox. On VMware, add it by hand with the VM
+powered off: VM Settings > Add > Serial Port, "Use named pipe" `\\.\pipe\<vm>-kd`,
+"This end is the server", "The other end is an application", and tick "Yield CPU on
+poll". `prepare-driver-vm.ps1` points the debugger at COM1. If the new port shows up
+under another number in the guest's Device Manager (Ports), run
+`bcdedit /dbgsettings serial debugport:<n> baudrate:115200` after it.
 A bugcheck leaves `%SystemRoot%\MEMORY.DMP` in the guest (no auto-reboot).
 
 The test certificate only works where it is trusted **and** test-signing is
