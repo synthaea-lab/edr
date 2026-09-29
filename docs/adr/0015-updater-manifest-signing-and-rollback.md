@@ -200,6 +200,13 @@ that outlives the agent and can act on a failure:
 On success the watchdog writes `.healthy` into the release directory and deletes
 every release older than the one it would roll back to (Decision 8).
 
+The rollback target is the newest older release that is **known good**: it has its
+own `.healthy` marker and is not on the ban list. With none, the target is
+`bootstrap`. A release that never proved itself, or that failed, is never a target,
+and rolling back also deletes the failed release's directory (the ban list keeps
+`apply-release` from re-staging it), so two bad releases in a row both land on the
+last proven one and a later good release cannot prune it away.
+
 Guards: rollback is skipped when `current` no longer points at the watchdog's own
 release (a stale watchdog must not undo a newer promotion), and a rollback that
 itself fails is reported and leaves the release running rather than crash-looping.
