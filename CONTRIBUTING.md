@@ -131,6 +131,8 @@ A PR must pass all of it:
   fix them or carry a narrowly scoped `#[allow]` with a comment saying why.
 - **`cargo test`** across the workspace on all three OSes (platform sensors compile to stubs on
   foreign targets; the eBPF probes build and validate on lab machines).
+- **Server Vitest unit and PostgreSQL integration suites** in the path-filtered
+  [server workflow](.github/workflows/server.yml) when `server/` changes.
 - **`ruff check` + `ruff format --check` + `pytest`** on `ml/` (config in
   [`ml/pyproject.toml`](ml/pyproject.toml)).
 
