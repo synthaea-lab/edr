@@ -1,0 +1,82 @@
+name: Server
+
+# The control plane (`server/`, Next.js + PostgreSQL, ADR-0001) has its own
+# suites, and `ci.yml` is all Rust: a server-only PR used to show every check
+# green without any of its code being run (#552). #541 and the cron/agent-path
+# bugs found in review stayed latent for the same reason: the integration tests
+# call route handlers directly against a real database, and nobody ran them.
+#
+# A separate workflow with `paths:` rather than a job in `ci.yml`: a job-level
+# path filter there needs a third-party action, and a workflow-level one would
+# skip the Rust jobs. The cost is that a path-filtered workflow reports nothing
+# on PRs that do not touch `server/`, so it cannot be a required check. That
+# suits "informational until it has been green on main for a while" (#449).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - ".github/workflows/server.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: server-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server
+    env:
+      # `docker-compose.test.yml`'s database and credentials, on the same port,
+      # so the suites see exactly what they see locally (tests/setup.ts default).
+      DATABASE_URL: postgresql://synthaea:synthaea_test@localhost:5433/synthaea_test
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: synthaea_test
+          POSTGRES_USER: synthaea
+          POSTGRES_PASSWORD: synthaea_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U synthaea"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Node 20: what server/Dockerfile ships.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: install
+        run: npm ci
+      - name: prisma client
+        run: npx prisma generate
+      # `db push`, not `migrate`: server/.gitignore excludes prisma/migrations, so
+      # there are none to apply. A fresh database each run makes data loss moot.
+      - name: create the schema
+        run: npx prisma db push --skip-generate --accept-data-loss
+      - name: unit tests
+        run: npx vitest run tests/unit
+      # One file at a time (`fileParallelism: false` in vitest.config.ts, #541):
+      # every integration file clears the same database.
+      - name: integration tests (PostgreSQL)
+        run: npm run test:integration
