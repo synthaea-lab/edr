@@ -35,7 +35,8 @@ whose API is semi-frozen.
 - the fragment (OAuth implicit-flow tokens live there);
 - the value of every query parameter whose name marks it as a secret:
   exact names (`sig`, `code`, `sid`, …), name fragments (`signature`, `token`,
-  `secret`, `credential`, `session`, …) and suffixes (`key`, `keyid`).
+  `secret`, `credential`, `session`, …) and suffixes (`key`, `keyid`, and
+  `auth`, which catches SharePoint/OneDrive's `tempauth` bearer token).
 
 Parameter names stay (`X-Amz-Signature=REDACTED` still reads as "pre-signed
 S3"), and so do scheme, host, path and every other parameter. Redacting *all*
@@ -55,11 +56,22 @@ consumer, including detection, only ever sees the redacted URL.
   when policy distribution lands.
 - Lab captures are redacted too, since `capture-events` goes through the same
   funnel.
-- Best-effort by construction. A secret in the path (`/dl/<token>/x.exe`), a
-  one-time link keyed by a generic name (`?id=`), or a percent-encoded
-  parameter name passes through. These URLs are written by browsers and
-  download tools, so the goal is not storing benign credentials, not beating
-  an adversary who controls the URL.
+- Best-effort by construction. Known gaps, all probed against real download
+  URLs in review (#550):
+  - a secret in the path (`/dl/<token>/x.exe`), including a matrix parameter
+    (`;jsessionid=`) and `;`-separated query parameters;
+  - short, host-specific names, too generic for a name-only rule: Slack's
+    `t=` (`xoxe-` user token), Google Drive's `at=`, Discord's `hm=`, a
+    one-time `?id=`. Covering them means a host-aware table, which is a
+    follow-up, not a tweak to the name lists;
+  - the first parameter of an unencoded URL nested in a value
+    (`?next=https://idp/cb?access_token=…` reads as `next`'s value);
+  - a name whose secret part is itself percent-encoded (`%74oken`). An
+    encoded separator (`Access%5FToken`) is still caught by the substring
+    match.
+
+  These URLs are written by browsers and download tools, so the goal is not
+  storing benign credentials, not beating an adversary who controls the URL.
 - Detection loses nothing it used: no rule reads query values, and the
   T1204.002 join keys on the path.
 - The raw URL exists only in process memory between the sensor and the
