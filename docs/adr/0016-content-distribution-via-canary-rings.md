@@ -119,6 +119,12 @@ model ContentRelease {
 6. Agent: Applies content (loads new rules/models)
 7. Agent: Reports success/failure in next heartbeat
 
+**Applied-content layout and reload (issue #530)**:
+- Applied content lives under one content directory, `<storage.state_dir>/content` by default. Artifact `path` values are relative to it: Sigma rules under `rules/sigma/<platform>/`, YARA under `rules/yara/`. `agent apply-content-manifest` writes there and `agent run` loads from there; both share the same default and the same `--content-dir` override.
+- Step 6 is a hot reload, not a restart: after a successful apply, `apply-content-manifest` sends the running agent an IPC `ReloadContent` request (local socket, protocol v2), and the detection sink re-reads Sigma and YARA and swaps them in. No running agent is not an error: the content is on disk and loads at the next start. `SIGHUP` is not used; it already means graceful shutdown.
+- A reload never disarms detection: an absent content subdirectory unloads that engine, but a present one that fails to load leaves the previous engine running and is reported (`*_reload_failed`). YARA fails the whole set on one bad rule; Sigma skips a bad rule with a warning, so a partly broken Sigma set shows up as a lower rule count.
+- Not covered yet: model swap (the ML scorer still loads once at startup) and ring-driven fetch scheduling.
+
 **Failure Handling**:
 - Signature verification failure → reject manifest, report to server
 - Hash mismatch → reject artifact, report to server
@@ -284,6 +290,6 @@ Agents **reject** manifests with `schema_version > max_supported`.
 **Next Steps (Issue #30 Phase 2)**:
 1. ✅ Content manifest format (this ADR)
 2. ⏳ Server API implementation (Task #15)
-3. ⏳ Agent integration (fetch + verify + apply content)
+3. 🚧 Agent integration (fetch + verify + apply content): manifest fetch/verify and artifact download/apply merged (#509, #520); Sigma/YARA hot reload in review (#530); model swap and periodic fetch pending
 4. ⏳ Ring health monitoring + auto-halt
 5. ⏳ Integration tests + lab scenario
