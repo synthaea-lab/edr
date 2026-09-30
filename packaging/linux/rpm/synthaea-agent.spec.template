@@ -23,13 +23,16 @@ ML-based anomaly detection, and response capabilities.
 %setup -q
 
 %build
-cargo build --release --bins --exclude sensor-linux-ebpf
+# --exclude needs --workspace. Honour CARGO_TARGET_DIR (a small build host may keep
+# its target directory elsewhere); %install reads the same variable.
+cargo build --release --workspace --bins --exclude sensor-linux-ebpf
 
 %install
 # Binaries to bootstrap directory
-install -D -m 0755 target/release/agent %{buildroot}/var/lib/synthaea/bootstrap/agent
-install -D -m 0755 target/release/watchdog %{buildroot}/var/lib/synthaea/bootstrap/watchdog
-install -D -m 0755 target/release/cli %{buildroot}/var/lib/synthaea/bootstrap/cli
+T="${CARGO_TARGET_DIR:-target}/release"
+install -D -m 0755 "$T/agent" %{buildroot}/var/lib/synthaea/bootstrap/agent
+install -D -m 0755 "$T/watchdog" %{buildroot}/var/lib/synthaea/bootstrap/watchdog
+install -D -m 0755 "$T/cli" %{buildroot}/var/lib/synthaea/bootstrap/cli
 
 # systemd integration
 install -D -m 0644 packaging/linux/systemd/synthaea-agent.service \
