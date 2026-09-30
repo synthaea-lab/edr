@@ -8,6 +8,9 @@ export async function middleware(req: NextRequest) {
   // routes.
   if (
     req.nextUrl.pathname.startsWith("/api/ingest") ||
+    // The agent's versioned ingest paths (`transport::DEFAULT_INGEST_ENDPOINT`,
+    // `DEFAULT_HEARTBEAT_ENDPOINT`); same model as /api/ingest.
+    req.nextUrl.pathname.startsWith("/api/v1/ingest/") ||
     req.nextUrl.pathname.startsWith("/api/auth") ||
     req.nextUrl.pathname.startsWith("/api/health") ||
     // Agent release download (issue #30): authenticated by nginx proxy secret

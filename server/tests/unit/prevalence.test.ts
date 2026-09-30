@@ -74,9 +74,9 @@ describe("extractObservations", () => {
 describe("recordObservations", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("issues one upsert per observation", async () => {
+  it("writes an event's observations in one statement", async () => {
     await recordObservations(db as never, "t1", "a1", new Date(0), extractObservations(exec()));
-    expect(db.$executeRaw).toHaveBeenCalledTimes(3);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it("does nothing for an event with no observations", async () => {
@@ -178,7 +178,7 @@ describe("detection ingest feeds prevalence", () => {
 
   it("records the event's observations for the agent's tenant", async () => {
     expect((await ingest()).status).toBe(200);
-    expect(db.$executeRaw).toHaveBeenCalledTimes(3);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   // Regression guard: the detection is already stored when counters run, and a

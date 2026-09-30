@@ -49,6 +49,8 @@ describe("middleware identity headers", () => {
       "/api/release/artifact",
       "/api/content/manifest/canary_0",
       "/api/content/artifact",
+      "/api/v1/ingest/events",
+      "/api/v1/ingest/heartbeat",
     ]) {
       const res = await middleware(spoofedRequest(path));
       const names = forwardedNames(res);
