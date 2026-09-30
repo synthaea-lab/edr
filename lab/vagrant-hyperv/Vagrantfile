@@ -23,6 +23,12 @@ LINUX_MACHINES = {
   "ubuntu2404" => { box: "jtarpley/ubuntu2404_base" },          # 6.8  — current LTS
   "debian13"   => { box: "shekeriev/debian-13" },               # 6.12 — Debian trixie
   "arch"       => { box: "generic/arch", provision: "../provisioning/arch-toolchain.sh" }, # rolling — #124
+  # RPM family, SELinux Enforcing out of the box — deliberately left that way
+  # (no `setenforce 0` in provisioning): this is the row that runs the eBPF/LSM/
+  # audit sensors under a real RHEL-family security policy. The box ships the
+  # Fedora 41 kernel line (6.11); check `uname -r` after `up`, a `dnf upgrade`
+  # moves it. `linux-toolchain.sh` already has the dnf branch.
+  "fedora41"   => { box: "jtarpley/fedora41_base" },            # 6.11 — Fedora, SELinux enforcing
 }.freeze
 
 # Makes any box able to build the toolchain and the agent without OOM kills,

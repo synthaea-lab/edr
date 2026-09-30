@@ -14,6 +14,7 @@ was originally found needs an arm64 host (the `../vagrant` harness).
 | `debian12` | 6.1 | Debian stable | `generic/debian12` |
 | `ubuntu2404` | 6.8 | current Ubuntu LTS | `jtarpley/ubuntu2404_base` — see [Community boxes](#community-boxes-68--612) |
 | `debian13` | 6.12 | Debian trixie | `shekeriev/debian-13` — see [Community boxes](#community-boxes-68--612) |
+| `fedora41` | 6.11 | RPM family, SELinux enforcing | `jtarpley/fedora41_base` — not validated yet |
 
 ## Host setup — once, ELEVATED PowerShell
 
