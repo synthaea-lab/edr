@@ -29,16 +29,20 @@ rest of the server (`lib/prevalence.ts`, `app/api/prevalence/route.ts`,
   `GREATEST`), so a spool flushed after an outage cannot make something look newer.
 - **Normalization:** Windows paths and domains are case-insensitive keys; POSIX paths are
   not. Keys are capped at 1024 characters.
-- **Feed:** `POST /api/ingest/detection` records the observations of the detection's event.
-  A counter failure never rejects the detection.
+- **Feed:** `POST /api/ingest/events` (the agent's `/api/v1/ingest/events`) records the
+  observations of every uploaded event, aggregated per batch into one multi-row upsert,
+  so counters see the fleet's full event stream and not just what alerted.
+  `POST /api/ingest/detection` also records its event's observations. A counter failure
+  never rejects the request. See `docs/architecture/control-plane.md` for the contract.
 - **Read:** `GET /api/prevalence?kind=&key=` (session, tenant-scoped) returns
   `seen: false` for an unknown key.
 
-**Known limit:** ingest carries detections only, so today's counters only see events that
-already fired a rule. That biases rarity (everything counted is already suspicious) and is
-not the fleet baseline the feature needs. The counters take any serialized event, so a
-bulk or sampled event feed plugs into the same `recordObservations`; that feed is the
-prerequisite for the "Done when" boxes.
+**Known limits:** the bias of the first slice (counters fed only by detections) is
+gone for agents that upload events, but two things remain. Every event is
+counted, so the table grows with the fleet's distinct paths/hashes/domains (keys are
+capped in length, not in number; no retention or eviction yet). And the raw events
+are not kept anywhere: the lake (`server/datalake`) doesn't exist, so prevalence
+cannot be rebuilt from history if the counting rules change.
 
 Not done yet: the console triage line, the "first seen on fleet" correlator evidence,
 the rarity feature into per-site recalibration, and opt-in k-anonymous global statistics.
