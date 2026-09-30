@@ -1,0 +1,58 @@
+name: Server
+
+on:
+  push:
+    branches: [main]
+    paths: ["server/**", ".github/workflows/server.yml", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["server/**", ".github/workflows/server.yml", ".github/workflows/ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DATABASE_URL: postgresql://synthaea:synthaea_test@localhost:5433/synthaea_test
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: synthaea_test
+          POSTGRES_USER: synthaea
+          POSTGRES_PASSWORD: synthaea_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U synthaea -d synthaea_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Prepare test database
+        run: npx prisma db push --skip-generate
+      - name: Unit tests
+        run: npx vitest run tests/unit
+      - name: PostgreSQL integration tests
+        run: npm run test:integration

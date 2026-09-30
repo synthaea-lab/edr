@@ -12,6 +12,9 @@ tools/gauntlet.sh --fast   # skips the cross-target and docs passes
 ```
 
 CI (`ci.yml`) runs on every push and pull request and is the gate (#318).
+The path-filtered `server.yml` runs the server's Vitest unit and PostgreSQL
+integration suites whenever `server/` changes (#552). It uses the same
+`postgres:15-alpine` database and port 5433 as `server/docker-compose.test.yml`.
 The gauntlet runs the same checks on one machine, so a failure shows up before
 the push instead of on the PR: run it before pushing, or opt into the pre-push
 hook with `git config core.hooksPath tools/hooks`.
