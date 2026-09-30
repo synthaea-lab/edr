@@ -37,7 +37,6 @@ install -D -m 0755 "$T/cli" %{buildroot}/var/lib/synthaea/bootstrap/cli
 # systemd integration
 install -D -m 0644 packaging/linux/systemd/synthaea-agent.service \
     %{buildroot}%{_unitdir}/synthaea-agent.service
-%{_bindir}/synthaea-ctl
 install -D -m 0644 packaging/linux/systemd/synthaea.sysusers \
     %{buildroot}%{_sysusersdir}/synthaea.conf
 install -D -m 0644 packaging/linux/systemd/synthaea.tmpfiles \
@@ -106,6 +105,7 @@ fi
 /var/lib/synthaea/bootstrap/watchdog
 /var/lib/synthaea/bootstrap/cli
 %{_unitdir}/synthaea-agent.service
+%{_bindir}/synthaea-ctl
 %{_sysusersdir}/synthaea.conf
 %{_tmpfilesdir}/synthaea.conf
 %dir %attr(0750,synthaea,synthaea) /var/lib/synthaea
