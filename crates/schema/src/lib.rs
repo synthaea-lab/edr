@@ -206,7 +206,13 @@ pub mod time;
 /// time alone. 32 was claimed by #513 (`FileRenameEvent::executable_path`) while
 /// both branches were open; #513 merged first, so this one renumbers — same
 /// coordination note as v13, v28→29 and v30→31 above.
-pub const SCHEMA_VERSION: u32 = 33;
+///
+/// Bumped 33 → 34 for [`Event::Prctl`] (#457): the two `prctl(2)` options that
+/// reshape a process tree's privilege ceiling, `PR_SET_SECUREBITS` and
+/// `PR_CAPBSET_DROP`, filtered at the source. Linux-only, no cross-platform
+/// reuse (same posture as `Ptrace`/`Namespace`). Same serialization-visible
+/// reasoning as v13-v33.
+pub const SCHEMA_VERSION: u32 = 34;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -311,9 +317,14 @@ pub const FLAG_PERSISTENCE_BTM_ARTIFACT: u32 = 0x0400_0000;
 /// signal — a known-bad payload was stopped at the OS boundary — that the
 /// EDR still forwards so operators see the attempt.
 ///
-/// Reuses [`FileOpenEvent`] like the other Windows persistence flags (see
-/// ADR-0004): `path` carries `FilePath` from the event's `RuleAndFileData`
-/// section, `meta::comm` carries its leaf name.
+/// **No longer emitted** (#427): `sensor-windows-eventlog` now reports 8004
+/// (and the 8003 audit-mode twin) as [`Event::PolicyDenial`] with
+/// [`POLICY_MECHANISM_APPLOCKER`]. The constant stays so the bit is never
+/// reassigned to another technique — a stale reader must not misread it.
+///
+/// Historically reused [`FileOpenEvent`] like the other Windows persistence
+/// flags (see ADR-0004): `path` carried `FilePath` from the event's
+/// `RuleAndFileData` section, `meta::comm` its leaf name.
 ///
 /// Not a persistence-family flag — the executable never ran, so nothing was
 /// installed — but it lives in the same reserved high-bit space because the
@@ -1442,6 +1453,14 @@ pub struct XpcConnectEvent {
 /// (`sensor-linux-audit`, #297).
 pub const POLICY_MECHANISM_SELINUX: &str = "selinux";
 
+/// [`PolicyDenialEvent::mechanism`] value for Windows `AppLocker` verdicts
+/// (`sensor-windows-eventlog`, #427): event 8004 (blocked, `enforced: true`)
+/// and 8003 (audit mode, would have been blocked, `enforced: false`) on the
+/// `Microsoft-Windows-AppLocker/EXE and DLL` channel. A new value of an
+/// existing `String` field — not a schema version bump (see
+/// [`PolicyDenialEvent`]'s doc on why `mechanism` is not a closed enum).
+pub const POLICY_MECHANISM_APPLOCKER: &str = "applocker";
+
 /// An OS security mechanism denied a subject an action on an object —
 /// `SELinux`/`AppArmor` on Linux, AppLocker/WDAC on Windows, TCC/Gatekeeper on
 /// macOS all report the same underlying shape (issue #297). A dedicated,
@@ -1466,7 +1485,8 @@ pub const POLICY_MECHANISM_SELINUX: &str = "selinux";
 pub struct PolicyDenialEvent {
     pub meta: EventMeta,
     /// Which security mechanism denied the action — see
-    /// [`POLICY_MECHANISM_SELINUX`] for the one value emitted today.
+    /// [`POLICY_MECHANISM_SELINUX`] and [`POLICY_MECHANISM_APPLOCKER`] for the
+    /// values emitted today.
     pub mechanism: String,
     /// The acting subject's security context (`SELinux` `scontext`, e.g.
     /// `system_u:system_r:httpd_t:s0`). Opaque per-mechanism label syntax —
@@ -1559,6 +1579,35 @@ pub struct BpfEvent {
     /// filtered commands above; not decoded to a name here, same
     /// "sensor reports, detection interprets" split as `PtraceEvent::request`.
     pub cmd: u32,
+}
+
+/// `prctl(2)` option: drop a capability from the calling thread's bounding set
+/// (`arg` is the capability number). Irreversible for the thread.
+pub const PR_CAPBSET_DROP: u32 = 24;
+
+/// `prctl(2)` option: set the calling thread's securebits (`arg` is the
+/// `SECBIT_*` bitmask, e.g. `SECBIT_NOROOT`, `SECBIT_NO_SETUID_FIXUP`, and the
+/// `*_LOCKED` bits that make them permanent).
+pub const PR_SET_SECUREBITS: u32 = 28;
+
+/// Capability-model tampering via `prctl(2)` (issue #457, from #266): the two
+/// options that change *which privileges a process tree can ever hold*,
+/// [`PR_SET_SECUREBITS`] and [`PR_CAPBSET_DROP`]. Filtered at the source — every
+/// other `prctl` option (dozens, some very hot, e.g. `PR_SET_NAME`) never reaches
+/// this event stream (see `sensor-linux-wire::PrctlEvent`'s doc). Legitimate
+/// users exist (systemd's `CapabilityBoundingSet=`, container runtimes dropping
+/// their bounding set at start), so this is telemetry for the detection layer to
+/// interpret, not a verdict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrctlEvent {
+    pub meta: EventMeta,
+    /// Raw `prctl` option: always [`PR_SET_SECUREBITS`] or [`PR_CAPBSET_DROP`];
+    /// not decoded to a name here, same "sensor reports, detection interprets"
+    /// split as [`BpfEvent::cmd`].
+    pub option: u32,
+    /// The option's `arg2`: the `SECBIT_*` mask for [`PR_SET_SECUREBITS`], the
+    /// capability number for [`PR_CAPBSET_DROP`].
+    pub arg: u64,
 }
 
 /// Which user/group identity syscall produced an [`IdentityChangeEvent`].
@@ -1695,6 +1744,7 @@ pub enum Event {
     IdentityChange(IdentityChangeEvent),
     CapSet(CapSetEvent),
     Namespace(NamespaceEvent),
+    Prctl(PrctlEvent),
 }
 
 impl Event {
@@ -1748,6 +1798,7 @@ impl Event {
             Event::IdentityChange(e) => &e.meta,
             Event::CapSet(e) => &e.meta,
             Event::Namespace(e) => &e.meta,
+            Event::Prctl(e) => &e.meta,
             // No wildcard arm, on purpose: #[non_exhaustive] has no effect inside
             // the defining crate, so a new variant without its arm here is a
             // compile error — the reminder the doc comment above promises.
