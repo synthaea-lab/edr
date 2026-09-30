@@ -49,6 +49,20 @@ export type StoredDetectionPayload = {
   meta: Record<string, any>;
 };
 
+function sourceIdentity(source: z.infer<typeof SourceSchema>): Record<string, string> {
+  switch (source.engine) {
+    case "rule":
+    case "sigma":
+      return { rule_id: source.rule_id };
+    case "ml":
+      return { model_id: source.model_id };
+    case "correlator":
+      return { case_id: source.case_id };
+    case "yara":
+      return { rule_id: source.rule_name };
+  }
+}
+
 /** Validate both wire formats and project the structured one into current storage. */
 export function parseDetectionPayload(body: unknown): StoredDetectionPayload {
   if (typeof body === "object" && body !== null && "source" in body) {
@@ -62,6 +76,8 @@ export function parseDetectionPayload(body: unknown): StoredDetectionPayload {
       meta: {
         title: detection.title,
         source,
+        // The evidence graph reads these allowlisted fields directly from meta.
+        ...sourceIdentity(source),
         score: detection.score ?? null,
         attributions,
         techniques,

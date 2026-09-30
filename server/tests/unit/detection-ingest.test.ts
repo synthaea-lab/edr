@@ -46,6 +46,7 @@ describe("POST /api/ingest/detection", () => {
       technique: "ML",
       meta: expect.objectContaining({
         source: { engine: "ml", tier: 0, model_id: "t0-cmdline-linux", model_version: "2026.09.0" },
+        model_id: "t0-cmdline-linux",
         attributions: [
           { feature: "entropy", value: 5.83, contribution: 0.41 },
           { feature: "max_token_length", value: 812, contribution: 0.27 },
@@ -79,6 +80,7 @@ describe("POST /api/ingest/detection", () => {
       meta: {
         title: "Unusual process chain",
         source: { engine: "correlator", case_id: "42:python" },
+        case_id: "42:python",
         score: 0.91,
         attributions: [{ feature: "connect_count", value: 3, contribution: 0.4 }],
         techniques: ["T1059", "T1071"],
