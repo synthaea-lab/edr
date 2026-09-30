@@ -17,14 +17,16 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  agents          Agent[]
-  detections      Detection[]
-  cases           Case[]
-  caseNarratives  CaseNarrative[]
-  auditLogs       AuditLog[]       @relation("TenantAuditLogs")
-  contentReleases ContentRelease[]
-  corpusVersions  CorpusVersion[]
-  corpusSamples   CorpusSample[]
+  agents              Agent[]
+  detections          Detection[]
+  cases               Case[]
+  caseNarratives      CaseNarrative[]
+  auditLogs           AuditLog[]           @relation("TenantAuditLogs")
+  contentReleases     ContentRelease[]
+  binaryReleases      BinaryRelease[]
+  corpusVersions      CorpusVersion[]
+  corpusSamples       CorpusSample[]
+  prevalenceSightings PrevalenceSighting[]
 
   @@map("tenants")
 }
@@ -175,6 +177,28 @@ model ContentRelease {
   @@map("content_releases")
 }
 
+// Binary release - a signed agent/watchdog/cli release offered to a ring's
+// agents (ADR-0015, issue #30's update trigger). The row points at the signed
+// `ReleaseManifest` JSON (signed offline: the server never holds the private
+// key); artifacts live at `storage/releases/v<releaseVersion>/<path>`.
+model BinaryRelease {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  ring           String // canary_0, canary_1, canary_2, prod
+  releaseVersion Int      @map("release_version") // Monotone per (tenant, ring); equals the manifest's own release_version
+  manifestUrl    String   @map("manifest_url") // Storage URL for the signed manifest JSON
+  manifestSha256 String   @map("manifest_sha256") // SHA-256 of the manifest file
+  status         String   @default("active") // active, halted
+  releasedAt     DateTime @map("released_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, ring, releaseVersion])
+  @@index([tenantId, ring, status])
+  @@map("binary_releases")
+}
+
 // Corpus version - versioned snapshot of site-specific benign corpus
 model CorpusVersion {
   id              String    @id @default(uuid())
@@ -218,4 +242,26 @@ model CorpusSample {
   @@index([agentId, timestamp])
   @@index([eventType])
   @@map("corpus_samples")
+}
+
+// Fleet prevalence (issue #76, Layer 5): one row per (tenant, kind, key, agent).
+// "Seen on N hosts, first <date>" is derived by aggregating the rows for a key,
+// so the host count is exact without a separate distinct-set. Per-tenant only;
+// nothing here is ever joined across tenants.
+model PrevalenceSighting {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  agentId   String   @map("agent_id")
+  // sha256 | image_path | transition | domain (lib/prevalence.ts)
+  kind      String
+  key       String
+  firstSeen DateTime @map("first_seen")
+  lastSeen  DateTime @map("last_seen")
+  count     Int      @default(1)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, key, agentId])
+  @@index([tenantId, kind, key])
+  @@map("prevalence_sightings")
 }

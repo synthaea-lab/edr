@@ -93,7 +93,7 @@ cargo build --release -p agent -p watchdog
 To stage a build (from this VM or another) for a scenario run without rebuilding —
 useful once one Windows machine has built and the others just need to run —
 `../provisioning/agent-install.ps1` copies the binaries (+ `rules/sigma`,
-`rules/yara` if present) into place and can optionally register the watchdog service:
+`rules/yara` if present, under `-StateDir` (default `C:\ProgramData\Synthaea\state`, which must match `storage.state_dir` in `agent.toml`) as `content\rules\...`) into place and can optionally register the watchdog service:
 
 ```powershell
 .\agent-install.ps1 -SourceDir target\release -InstallService

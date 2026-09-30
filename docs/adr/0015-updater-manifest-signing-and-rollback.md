@@ -177,6 +177,79 @@ self-update are named and deferred, not designed here.
    package-owned and never touched by the updater — rather than refusing to
    start.
 
+### Amendment: the update trigger and its wire contract (issue #30)
+
+Nothing in this ADR said what starts an update. `agent apply-release` does, and
+it is deliberately a one-shot command (run by an operator, a timer or a future
+scheduler), not a resident loop:
+
+1. `GET /api/release/manifest` returns the signed `ReleaseManifest` this agent is
+   offered. There is **no ring in the path**: unlike content, a binary release
+   manifest has no `ring` field, and which release an agent is offered is the
+   server's decision from its mTLS identity. The Ed25519 signature and the
+   monotone `release_version` are what the agent relies on.
+2. Before any download the agent verifies the signature and schema, rejects any
+   entry path that could escape the release directory, refuses a banned release,
+   and applies the anti-rollback check against `current`'s version.
+3. Each artifact is fetched with `GET /api/release/artifact?release_version=N&path=P&sha256=H`,
+   hash-checked against the signed manifest **before it touches disk**, and
+   written (mode `0755`, symlink-safe, atomically) into `versions/.stage-N`. The
+   manifest has no signed per-entry size, so a constant ceiling
+   (`MAX_RELEASE_ARTIFACT_BYTES`, 256 MiB) bounds each download instead.
+4. The staging directory is renamed to `versions/vN` in one step, so a release
+   directory only ever exists complete and a crash mid-download can never leave a
+   half-populated directory that a later rollback might pick as its target.
+   `verify_staged` then re-hashes the tree from disk, the manifest is persisted,
+   and only then is `current` repointed. A complete `vN` from an interrupted run
+   is reused without downloading; one that no longer matches its manifest is
+   refused and left in place for inspection.
+5. The command then runs `systemctl restart synthaea-agent`, which starts the
+   watchdog from the new `current`; a failed restart is a warning, not an error,
+   since a promoted release is safe and simply runs at the next service start.
+   `--no-restart` skips it.
+
+Both the manifest and artifact routes are the contract a server must implement;
+the server side is a separate slice. Windows and macOS remain out of scope: the
+command exits with an explanatory error there.
+
+### Amendment: how the Decision 6 health gate is implemented (issue #30)
+
+Decision 6 said the updater registers the new process with `SilenceMonitor`. The
+implementation differs in two ways, both because the *watchdog* is the one process
+that outlives the agent and can act on a failure:
+
+- **The watchdog runs the probation, not the updater.** A watchdog started from
+  `versions/vN/` (its own executable's path says so; `bootstrap/` and development
+  binaries never qualify) puts `vN` on probation unless `versions/vN/.healthy`
+  exists. The proof of life is the progress-backed heartbeat file (#102) advancing
+  at least once within 120s of the watchdog starting: the same deadline as
+  `NO_CANARY_SILENCE_DEADLINE_NS`, and the same signal the watchdog already polls,
+  rather than a second liveness mechanism. The clock covers agent crashes and
+  refused spawns too, so a release whose agent never starts still runs out its
+  probation.
+- **Failure ends the watchdog process.** After `updater::rollback` (repoint
+  `current` at the previous release, or `bootstrap` for the first release; ban the
+  failed one) the watchdog exits non-zero and the service manager restarts it from
+  the rolled-back `current`. Nothing re-execs in place.
+
+On success the watchdog writes `.healthy` into the release directory and deletes
+every release older than the one it would roll back to (Decision 8).
+
+The rollback target is the newest older release that is **known good**: it has its
+own `.healthy` marker and is not on the ban list. With none, the target is
+`bootstrap`. A release that never proved itself, or that failed, is never a target,
+and rolling back also deletes the failed release's directory (the ban list keeps
+`apply-release` from re-staging it), so two bad releases in a row both land on the
+last proven one and a later good release cannot prune it away.
+
+Guards: rollback is skipped when `current` no longer points at the watchdog's own
+release (a stale watchdog must not undo a newer promotion), and a rollback that
+itself fails is reported and leaves the release running rather than crash-looping.
+
+Not covered (still open under #30): a release whose *watchdog* binary fails to
+start never reaches this code, so the service manager just restarts it; that case
+needs the Decision 9 fallback at the unit level.
+
 ## Consequences
 
 - `tamper::integrity::Manifest` gains no new fields or API — the updater's
@@ -228,6 +301,19 @@ self-update are named and deferred, not designed here.
   out-of-band revocation path (e.g. a second, offline-held key, or a hardcoded
   ban list shipped via the package rather than the updater channel) — real
   design work, not a gap this slice can close.
+
+  **Interim guard, and when it must go away.** The embedded key's seed is public,
+  so while `SYNTHAEA_UPDATER_TEST_KEY` is `true` anyone who can serve
+  `/api/release/*` can sign a release the agent will accept, and `apply-release`
+  promotes it and restarts onto it: root code execution from a public key. The
+  only thing standing in the way is that the command is manual. So it refuses to
+  run unless the operator passes `--allow-test-key` (lab and dev use), and warns
+  when they do. **The constant must flip to `false`, with a real key embedded,
+  before `apply-release` is scheduled, packaged as a timer, or documented for
+  operators**; the flag is a lab acknowledgement, not a production setting. The
+  content path (`apply-content-manifest`) verifies against the same key and is
+  not yet guarded; a forged content release can only weaken detection, not run
+  code, but it needs the same flip.
 - **Preflight disk-space checks before staging a download** — Decision 8
   leaves this unimplemented; failure is safe (rejected at manifest
   verification) but not diagnosed ahead of time.

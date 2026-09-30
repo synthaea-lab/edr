@@ -41,7 +41,15 @@ describe("middleware identity headers", () => {
     // Regression (#470 review): the public branch returned NextResponse.next()
     // with the client's headers untouched, so a public route calling
     // getTenantId would have trusted a client-chosen tenant.
-    for (const path of ["/api/ingest/events", "/api/auth/session", "/api/health"]) {
+    for (const path of [
+      "/api/ingest/events",
+      "/api/auth/session",
+      "/api/health",
+      "/api/release/manifest",
+      "/api/release/artifact",
+      "/api/content/manifest/canary_0",
+      "/api/content/artifact",
+    ]) {
       const res = await middleware(spoofedRequest(path));
       const names = forwardedNames(res);
       expect(names, `${path}: request passed through unmodified`).not.toBeNull();
@@ -49,6 +57,32 @@ describe("middleware identity headers", () => {
       expect(names, path).not.toContain("x-user-id");
     }
     expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the admin release route behind the session check", async () => {
+    // Only the two agent download paths are public (issue #30); `/api/release`
+    // itself publishes releases and needs a session.
+    getSession.mockResolvedValue(null);
+    for (const path of ["/api/release", "/api/release/manifest/extra"]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
+  });
+
+  it("keeps the admin content routes behind the session check", async () => {
+    // Only the agent download paths are public (issue #30); halt, release and
+    // rollback are operator actions and need a session.
+    getSession.mockResolvedValue(null);
+    for (const path of [
+      "/api/content/halt",
+      "/api/content/release",
+      "/api/content/rollback",
+      "/api/content/manifest",
+      "/api/content/manifest/canary_0/extra",
+    ]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
   });
 
   it("injects the session identity on protected routes", async () => {

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { extractEnrollmentId } from "@/lib/tenant";
+import { authenticateAgent } from "@/lib/agent-auth";
 import { ContentManifest, loadManifestBytes } from "@/lib/content-manifest";
 
 const VALID_RINGS = ["canary_0", "canary_1", "canary_2", "prod"];
@@ -10,7 +10,7 @@ const VALID_RINGS = ["canary_0", "canary_1", "canary_2", "prod"];
  * GET /api/content/manifest/{ring}
  * Agent endpoint: Fetch latest content manifest for assigned ring
  *
- * Authentication: mTLS (X-Client-Cert-Verified + X-Client-Cert-Subject)
+ * Authentication: nginx proxy secret + mTLS + enrolled agent (`authenticateAgent`)
  * Response: ContentManifest JSON (signed)
  */
 export async function GET(
@@ -18,24 +18,9 @@ export async function GET(
   { params }: { params: { ring: string } }
 ) {
   try {
-    // Verify mTLS authentication
-    const certVerified = req.headers.get("X-Client-Cert-Verified");
-    const certSubject = req.headers.get("X-Client-Cert-Subject");
-
-    if (certVerified !== "SUCCESS" || !certSubject) {
-      return NextResponse.json(
-        { error: "Unauthorized - mTLS authentication required" },
-        { status: 401 }
-      );
-    }
-
-    const enrollmentId = extractEnrollmentId(certSubject);
-    if (!enrollmentId) {
-      return NextResponse.json(
-        { error: "Invalid certificate subject" },
-        { status: 400 }
-      );
-    }
+    const authenticated = await authenticateAgent(req);
+    if ("response" in authenticated) return authenticated.response;
+    const { agent } = authenticated;
 
     // Validate ring parameter
     const { ring } = params;
@@ -43,19 +28,6 @@ export async function GET(
       return NextResponse.json(
         { error: "Invalid ring", validRings: VALID_RINGS },
         { status: 400 }
-      );
-    }
-
-    // Find agent to get tenant context
-    const agent = await prisma.agent.findUnique({
-      where: { enrollmentId },
-      select: { id: true, tenantId: true, ring: true },
-    });
-
-    if (!agent) {
-      return NextResponse.json(
-        { error: "Agent not enrolled" },
-        { status: 403 }
       );
     }
 

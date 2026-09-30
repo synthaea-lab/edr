@@ -29,6 +29,14 @@
 .PARAMETER InstallDir
     Where the agent is installed on this machine. Default: C:\Synthaea.
 
+.PARAMETER StateDir
+    The agent's `storage.state_dir` (agent.toml). The rules/sigma and rules/yara
+    content is installed under <StateDir>\content, the directory the agent loads
+    from and `agent apply-content-manifest` writes to. It MUST match the
+    `state_dir` in the agent.toml this machine uses, or the agent starts with no
+    Sigma/YARA rules and nothing but a missing "rules loaded" log line says so.
+    Default: C:\ProgramData\Synthaea\state (the config template's Windows value).
+
 .PARAMETER InstallService
     Also registers the watchdog as a Windows service (`watchdog.exe install`)
     so the agent runs under supervision and survives a reboot - the same
@@ -52,6 +60,8 @@ param(
     [string]$AgentZip,
 
     [string]$InstallDir = "C:\Synthaea",
+
+    [string]$StateDir = "C:\ProgramData\Synthaea\state",
 
     [switch]$InstallService
 )
@@ -117,13 +127,15 @@ Copy-Item $watchdogSrc (Join-Path $InstallDir "watchdog.exe") -Force
 Write-Host "[ok] agent.exe, watchdog.exe"
 
 # rules/sigma and rules/yara are optional (DetectionSink runs fine without
-# either - see agent/src/sink.rs's content_dir doc) - only copied when present
-# next to the binaries, mirroring the executable-relative lookup the agent
-# itself does at runtime.
+# either) - only copied when present in the source. They go under
+# <StateDir>\content, the one directory the agent loads applied content from
+# (default `<storage.state_dir>\content`), not next to the binaries: an
+# absolute content dir gets no executable-relative fallback (#530).
+$contentRoot = Join-Path $StateDir "content"
 foreach ($contentDir in @("rules\sigma", "rules\yara")) {
     $src = Join-Path $SourceDir $contentDir
     if (Test-Path $src) {
-        $dst = Join-Path $InstallDir $contentDir
+        $dst = Join-Path $contentRoot $contentDir
         # Remove any previous copy first: Copy-Item -Recurse onto an
         # already-existing destination directory nests $src *inside* it
         # (...\rules\sigma\sigma\...) instead of replacing it - silently
@@ -133,7 +145,7 @@ foreach ($contentDir in @("rules\sigma", "rules\yara")) {
         }
         New-Item -ItemType Directory -Path (Split-Path $dst -Parent) -Force | Out-Null
         Copy-Item $src $dst -Recurse -Force
-        Write-Host "[ok] $contentDir"
+        Write-Host "[ok] $contentDir -> $dst"
     } else {
         Write-Host "[info] $contentDir not present in source - skipped (agent runs without it)"
     }
