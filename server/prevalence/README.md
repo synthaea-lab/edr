@@ -53,4 +53,4 @@ change. The triage counts include the event that raised the detection, so "seen 
 host" means only this host has shown it.
 
 Open, and waiting on a decision: the correlator evidence, the ML rarity feature and
-opt-in global statistics. ADR-0018 (proposed) lays out the options.
+opt-in global statistics. ADR-0020 (proposed) lays out the options.

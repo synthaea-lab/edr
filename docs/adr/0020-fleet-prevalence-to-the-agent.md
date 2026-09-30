@@ -1,4 +1,4 @@
-# ADR-0018: Getting fleet prevalence to the agent, and out of the tenant
+# ADR-0020: Getting fleet prevalence to the agent, and out of the tenant
 
 - **Status**: proposed
 - **Date**: 2026-09-30
