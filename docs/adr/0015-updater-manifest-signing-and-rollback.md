@@ -301,6 +301,19 @@ needs the Decision 9 fallback at the unit level.
   out-of-band revocation path (e.g. a second, offline-held key, or a hardcoded
   ban list shipped via the package rather than the updater channel) — real
   design work, not a gap this slice can close.
+
+  **Interim guard, and when it must go away.** The embedded key's seed is public,
+  so while `SYNTHAEA_UPDATER_TEST_KEY` is `true` anyone who can serve
+  `/api/release/*` can sign a release the agent will accept, and `apply-release`
+  promotes it and restarts onto it: root code execution from a public key. The
+  only thing standing in the way is that the command is manual. So it refuses to
+  run unless the operator passes `--allow-test-key` (lab and dev use), and warns
+  when they do. **The constant must flip to `false`, with a real key embedded,
+  before `apply-release` is scheduled, packaged as a timer, or documented for
+  operators**; the flag is a lab acknowledgement, not a production setting. The
+  content path (`apply-content-manifest`) verifies against the same key and is
+  not yet guarded; a forged content release can only weaken detection, not run
+  code, but it needs the same flip.
 - **Preflight disk-space checks before staging a download** — Decision 8
   leaves this unimplemented; failure is safe (rejected at manifest
   verification) but not diagnosed ahead of time.
