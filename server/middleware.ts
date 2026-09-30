@@ -10,6 +10,12 @@ export async function middleware(req: NextRequest) {
     req.nextUrl.pathname.startsWith("/api/ingest") ||
     req.nextUrl.pathname.startsWith("/api/auth") ||
     req.nextUrl.pathname.startsWith("/api/health") ||
+    // Agent release download (issue #30): authenticated by nginx proxy secret
+    // + mTLS in the handlers, like ingest, not by a browser session. Exact
+    // paths, so the session-protected admin route `/api/release` stays behind
+    // the session check.
+    req.nextUrl.pathname === "/api/release/manifest" ||
+    req.nextUrl.pathname === "/api/release/artifact" ||
     req.nextUrl.pathname === "/login" ||
     req.nextUrl.pathname === "/"
   ) {
