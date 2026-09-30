@@ -17,15 +17,16 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  agents          Agent[]
-  detections      Detection[]
-  cases           Case[]
-  caseNarratives  CaseNarrative[]
-  auditLogs       AuditLog[]       @relation("TenantAuditLogs")
-  contentReleases ContentRelease[]
-  binaryReleases  BinaryRelease[]
-  corpusVersions  CorpusVersion[]
-  corpusSamples   CorpusSample[]
+  agents              Agent[]
+  detections          Detection[]
+  cases               Case[]
+  caseNarratives      CaseNarrative[]
+  auditLogs           AuditLog[]           @relation("TenantAuditLogs")
+  contentReleases     ContentRelease[]
+  binaryReleases      BinaryRelease[]
+  corpusVersions      CorpusVersion[]
+  corpusSamples       CorpusSample[]
+  prevalenceSightings PrevalenceSighting[]
 
   @@map("tenants")
 }
@@ -241,4 +242,26 @@ model CorpusSample {
   @@index([agentId, timestamp])
   @@index([eventType])
   @@map("corpus_samples")
+}
+
+// Fleet prevalence (issue #76, Layer 5): one row per (tenant, kind, key, agent).
+// "Seen on N hosts, first <date>" is derived by aggregating the rows for a key,
+// so the host count is exact without a separate distinct-set. Per-tenant only;
+// nothing here is ever joined across tenants.
+model PrevalenceSighting {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  agentId   String   @map("agent_id")
+  // sha256 | image_path | transition | domain (lib/prevalence.ts)
+  kind      String
+  key       String
+  firstSeen DateTime @map("first_seen")
+  lastSeen  DateTime @map("last_seen")
+  count     Int      @default(1)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, key, agentId])
+  @@index([tenantId, kind, key])
+  @@map("prevalence_sightings")
 }
