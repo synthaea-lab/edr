@@ -47,6 +47,7 @@ mod journal_cursor;
 #[cfg(target_os = "linux")]
 mod kill_loudness;
 mod protected;
+mod redact;
 mod release;
 mod silence;
 #[cfg_attr(
