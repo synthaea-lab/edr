@@ -37,6 +37,17 @@ Every outcome lands in the agent's alert log (`--alerts`, default
   `--enable-kill` off, so the log never claims something "would have been killed"
   that could not be. The pid comes from telemetry and the kill is a root `SIGKILL`
   by number, so a wrong number has to fail closed.
+- **The kill's trigger is a belief, not a signature.** It fires when the correlator's
+  Bayesian score for a process crosses its threshold, and that score is built from
+  behaviour (a fast connection after exec, repeated connections, destination, path) plus
+  the co-occurrence rules. Through the real correlator with no learned scorer, a
+  short-lived process that execs and then connects out repeatedly crossed it whatever its
+  image path was, `/usr/bin/nc` included, so an ordinary tool with that shape is a
+  candidate. Trial `--enable-kill` observe-only first, read the
+  `RESPONSE-KILL ... (observe-only)` lines it would have acted on, and enable it only for
+  hosts where those are all things you would have wanted killed. The name exclusions
+  (`wget`, `chronyd`) and the ignored-comm list reduce this and were not part of that
+  measurement.
 - **Quarantine never re-quarantines itself.** A file already under the quarantine
   directory is left alone (writing it there is itself a file event the sensor sees).
 - **A kill is a `SIGKILL`**, not `SIGTERM`: a process judged compromised gets no
@@ -80,12 +91,17 @@ hand, and a second `restore` refuses because the original path is occupied.
 - **Host isolation** and the analyst-driven half (`response::live`): blocked on
   server-side analyst auth.
 - **A lab run of the whole chain** ("Done when": the beacon scenario with response
-  enabled kills the process and quarantines the payload, both audited). The unit and
-  sink tests cover each action, its policy gate and its audit line; nothing has run
-  the two together on a VM. The existing beacon scenario raises a Medium `BEACON`
-  alert, which is below the kill threshold, and drops no payload for YARA, so it
-  cannot show either action; a scenario that does needs a deterministic way to reach
-  a `Critical` verdict.
+  enabled kills the process and quarantines the payload, both audited).
+  `lab/scenarios/response.sh` (with `response.yaml` and `response-marker.yar`) is that
+  scenario and has not been run on a VM. The same stream through the real detection path
+  (correlator, YARA queue, filesystem; only the kernel `terminate` call is a recorder) is
+  covered in-process in `agent/src/sink.rs`, with response on and with it off. What only
+  a VM can show is that the eBPF sensor delivers the stream and that the real `SIGKILL`
+  lands. Note that `beacon.sh` itself cannot show a kill: four `nc` connections two
+  seconds apart from four separate pids do not reach the `BAYES` verdict the kill is
+  gated on, while one process reconnecting every second does (measured without a learned
+  scorer; a deployed agent adds the ML contribution, so the crossing point on a real
+  install can differ).
 - **Windows and macOS actions.** The pieces in `crates/response` are platform-neutral;
   the kill call is injected per platform and only Linux injects one.
 - **Non-Linux `quarantine list|restore`** works everywhere (plain file operations)

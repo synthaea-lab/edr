@@ -1,0 +1,47 @@
+name: response
+platform: linux
+script: response.sh
+simulates: >
+  Automated response (issue #25): one process beacons to a local listener once a
+  second while a payload carrying a YARA marker is written to disk. With
+  --enable-kill --enable-quarantine the agent kills the process and quarantines the
+  payload; without them it does neither and audits what it would have done.
+expected_detections:
+  - technique: "BAYES"
+    rule: BeliefState crossing BAYES_THRESHOLD   # crates/correlator (bayes.rs); the kill's trigger
+    min_count: 1
+    tolerance: 2   # fires once per threshold crossing; a decay below it and a re-crossing is a second line
+  - technique: "RESPONSE-KILL"
+    rule: response::kill_process   # crates/response; emitted whether or not policy allowed the kill
+    min_count: 1
+    tolerance: 5
+  - technique: "RESPONSE-QUARANTINE"
+    rule: response::quarantine_file   # crates/response; emitted whether or not policy allowed the move
+    min_count: 1
+    tolerance: 5
+notes: >
+  NOT YET RUN ON A VM (2026-09-30). What is verified: the detection and response chain
+  (correlator -> BAYES -> kill; write-intent FileOpen -> YARA -> quarantine; both
+  audited; observe-only with policy off; restore afterwards) through the real sink
+  in-process, in agent/src/sink.rs (`a_beacon_with_a_dropped_payload_is_killed_and_quarantined_...`
+  and `the_same_beacon_and_payload_with_policy_off_...`, 25/25 repeated runs); and
+  response.sh's own mechanics locally with no agent (single-process implant, the
+  exit-status kill detection, both EXPECT branches, no leaked listener). What only a VM
+  can show: that the eBPF sensor delivers this stream (exec, a connect per second from one
+  pid, the payload's write-intent open) and that the real SIGKILL lands.
+
+  The technique matches by string only, so RESPONSE-KILL and RESPONSE-QUARANTINE pass in
+  both modes: read the message ("killed pid N" / "quarantined ..." versus "...
+  (observe-only)") and run response.sh with the matching EXPECT, which asserts the
+  process and the file. The replay engine does not distinguish the two.
+
+  Measured through the real correlator (no ML scorer): a single process making 8
+  connections 1s apart to loopback crosses BAYES (log_odds 4.29) and is killed
+  mid-loop; 3 connections 2s apart, the shape of beacon.sh (four `nc` pids), do not
+  cross, which is why beacon.sh cannot show a kill. BAYES here is the belief with no
+  learned scorer loaded; a deployed agent adds the ML contribution, so the crossing
+  point on a real install can differ. tolerance 5 on the two RESPONSE lines allows
+  the beacon to keep firing after the first kill attempt.
+
+  Needs root (eBPF) and the marker rule installed under <content-dir>/rules/yara/
+  before the agent starts (lab/scenarios/response-marker.yar).
