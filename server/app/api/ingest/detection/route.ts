@@ -3,15 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
 import { z } from "zod";
 import { extractObservations, recordObservations } from "@/lib/prevalence";
-
-// Validation schema for detection payload
-const DetectionSchema = z.object({
-  timestamp_ns: z.number(),
-  technique: z.string(),
-  severity: z.enum(["low", "medium", "high", "critical"]),
-  event: z.record(z.any()),
-  meta: z.record(z.any()),
-});
+import { parseDetectionPayload } from "@/lib/detection-payload";
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,14 +55,14 @@ export async function POST(req: NextRequest) {
 
     // Parse and validate detection payload
     const body = await req.json();
-    const detection = DetectionSchema.parse(body);
+    const detection = parseDetectionPayload(body);
 
     // Store detection
     await prisma.detection.create({
       data: {
         tenantId: agent.tenantId,
         agentId: agent.id,
-        timestamp: new Date(detection.timestamp_ns / 1_000_000),
+        timestamp: detection.timestamp,
         technique: detection.technique,
         severity: detection.severity,
         event: detection.event,
@@ -86,7 +78,7 @@ export async function POST(req: NextRequest) {
         prisma,
         agent.tenantId,
         agent.id,
-        new Date(detection.timestamp_ns / 1_000_000),
+        detection.timestamp,
         extractObservations(detection.event)
       );
     } catch (error) {
