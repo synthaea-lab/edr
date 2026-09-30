@@ -295,6 +295,13 @@ needs the Decision 9 fallback at the unit level.
 - **Production key generation, storage, and rotation** — ships test-only for
   this slice, same posture ADR-0010 took for policy signing. Needs its own
   decision once there's a real control-plane release process to sign against.
+  Until then `agent apply-release` **refuses to run** while
+  `SYNTHAEA_UPDATER_TEST_KEY` is set unless given `--allow-test-key`: the test
+  seed is public, so a valid signature proves nothing about who produced a
+  release, and the command installs and restarts onto it as root. The flag is for
+  lab and development hosts; the guard disappears with the constant once a
+  production key is embedded, and no scheduler or operator documentation should
+  invoke the command before that.
   Routine rotation is covered by Decision 4 (the key is just another signed
   release), but rotating *away from a compromised key* is not: a compromised
   key can sign a "rotate to this new key" release too, so that case needs an

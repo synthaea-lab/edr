@@ -227,6 +227,13 @@ enum Command {
         /// at the next service start.
         #[arg(long)]
         no_restart: bool,
+        /// Accept releases signed with the bundled TEST key. That key's seed is
+        /// public (it is in the repository), so anyone who can serve the release
+        /// endpoints can sign a release this build will then install and run as
+        /// root. Refused by default while `SYNTHAEA_UPDATER_TEST_KEY` is set;
+        /// for lab and development use only.
+        #[arg(long)]
+        allow_test_key: bool,
     },
 }
 
@@ -329,12 +336,14 @@ fn main() -> anyhow::Result<()> {
             cert,
             key,
             no_restart,
+            allow_test_key,
         } => release::cmd_apply_release(
             &server,
             cert.as_deref(),
             key.as_deref(),
             &cfg.storage.state_dir,
             !no_restart,
+            allow_test_key,
         ),
     }
 }

@@ -31,6 +31,7 @@ pub(crate) fn cmd_apply_release(
     _key: Option<&std::path::Path>,
     _base_dir: &std::path::Path,
     _restart: bool,
+    _allow_test_key: bool,
 ) -> anyhow::Result<()> {
     anyhow::bail!("binary self-update is Linux-only (ADR-0015 Deferred)")
 }
@@ -228,7 +229,9 @@ mod linux {
         key: Option<&Path>,
         base_dir: &Path,
         restart: bool,
+        allow_test_key: bool,
     ) -> anyhow::Result<()> {
+        ensure_signing_key_trusted(updater::key::SYNTHAEA_UPDATER_TEST_KEY, allow_test_key)?;
         let mut config = transport::TransportConfig::new(server);
         if let (Some(cert), Some(key)) = (cert, key) {
             config = config.with_client_cert(PathBuf::from(cert), PathBuf::from(key));
@@ -255,6 +258,31 @@ mod linux {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Refuses to run against the bundled test key unless the operator opted in.
+    /// The test seed is public, so while `test_key` is set the signature proves
+    /// nothing about who produced a release: anyone able to answer the release
+    /// endpoints (a rogue or intercepted server) could have signed it, and this
+    /// command would install it and restart the service onto it. Checked before
+    /// any network access. Flips off by itself once a production key replaces the
+    /// test one (`updater::key::SYNTHAEA_UPDATER_TEST_KEY`).
+    fn ensure_signing_key_trusted(test_key: bool, allow_test_key: bool) -> anyhow::Result<()> {
+        if !test_key {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            allow_test_key,
+            "this build verifies releases against the bundled TEST key, whose seed is public: \
+             anyone who can serve the release endpoints could sign a release this command would \
+             install and run as root. Refusing. For a lab or development host only, pass \
+             --allow-test-key"
+        );
+        eprintln!(
+            "warning: --allow-test-key: releases are verified against the public TEST key; \
+             a valid signature does not prove who produced the release"
+        );
         Ok(())
     }
 
@@ -376,6 +404,40 @@ mod linux {
 
         fn client(url: &str) -> transport::TransportClient {
             transport::TransportClient::new(transport::TransportConfig::new(url)).unwrap()
+        }
+
+        #[test]
+        fn the_public_test_key_is_refused_unless_the_operator_opts_in() {
+            let refused = ensure_signing_key_trusted(true, false).unwrap_err();
+            assert!(
+                refused.to_string().contains("--allow-test-key"),
+                "the error must name the flag: {refused}"
+            );
+            assert!(ensure_signing_key_trusted(true, true).is_ok());
+        }
+
+        #[test]
+        fn a_production_key_needs_no_opt_in() {
+            assert!(ensure_signing_key_trusted(false, false).is_ok());
+            assert!(ensure_signing_key_trusted(false, true).is_ok());
+        }
+
+        /// The command refuses before touching the network or the disk: the
+        /// unreachable server URL and missing state dir would otherwise fail
+        /// with a different error.
+        #[test]
+        fn apply_release_refuses_the_test_key_before_any_io() {
+            if !updater::key::SYNTHAEA_UPDATER_TEST_KEY {
+                return; // a production build has nothing to refuse
+            }
+            let base = tmp("refuse");
+            let err = cmd_apply_release("http://127.0.0.1:9", None, None, &base, false, false)
+                .unwrap_err();
+            assert!(err.to_string().contains("--allow-test-key"), "{err}");
+            assert!(
+                !base.join("versions").exists(),
+                "nothing may be created before the refusal"
+            );
         }
 
         #[test]
