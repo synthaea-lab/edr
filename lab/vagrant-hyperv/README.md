@@ -145,8 +145,9 @@ Disk is fine as shipped. The 1.7 GB of swap is not enough on its own, but the
 
 Validated 2026-09-30: builds natively (Fedora ships clang/LLVM 19, `linux-toolchain.sh`
 fetches the prebuilt `bpf-linker`), 51/51 programs pass the verifier, `lineage.sh`
-3/3 and `argv.sh` fire, SELinux stays **Enforcing** and the agent run raised no AVC
-denial. What to know:
+3/3 and `argv.sh` fire, with SELinux **Enforcing**. That run was started from an SSH
+shell, i.e. in an unconfined domain, so it says nothing about the SELinux policy; the
+packaged service is what exercises it (below). What to know:
 
 - **The kernel is not 6.11.** The box is already updated (`6.17.7-100.fc41`); it
   uses the `__data_loc` `sched_process_fork` layout, like Alpine 6.18. `uname -r`
@@ -159,9 +160,34 @@ denial. What to know:
   it leaves ~4 GB.
 - Run the scenarios against `$CARGO_TARGET_DIR/release/agent`
   (`/var/synthaea/target/release/agent`), not `target/release/agent`.
-- SELinux status of the run: the agent was started from an SSH shell, so it ran in
-  an unconfined domain. Behaviour under its systemd unit and a confined domain is
-  still to be validated (the interesting RPM-family question).
+- **Where SELinux denials are.** `auditd` is not running on this box, so
+  `ausearch` reads a missing `/var/log/audit/audit.log` and always answers "no
+  matches" (an earlier "0 AVC" claim measured with it was wrong). Denials are in the
+  journal: `sudo journalctl _TRANSPORT=audit | grep AVC`.
+- **The packaged systemd unit does not start the agent on this row.** Installing the
+  files the way `synthaea-agent.spec.template` does and starting the real unit under
+  Enforcing, four defects stack, each hiding the next:
+  1. `ExecStartPre` tries `ln -sf ... /usr/bin/synthaea-ctl` under `ProtectSystem=strict`
+     (read-only `/usr`): `Read-only file system`, the unit never starts. The `.deb`
+     `postinst` creates that link, the RPM spec does not.
+  2. The binaries under `/var/lib/synthaea` are labelled `var_lib_t`; `init_t` is
+     denied `execute`, `execute_no_trans` and `map` on them (`status=203/EXEC`,
+     `Permission denied`). `chcon -R -t bin_t /var/lib/synthaea/bootstrap` fixes it
+     (the service then runs as `unconfined_service_t`, no denial). A real fix labels
+     it with `semanage fcontext` so `restorecon` and the updater's `versions/vN` agree.
+  3. The unit runs the agent as the unprivileged `synthaea` user with
+     `NoNewPrivileges` and no `AmbientCapabilities`, so it cannot load eBPF, falls back
+     to the audit socket, gets `EPERM` (`audit socket open: netlink socket error: 1`)
+     and exits 1. With `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE` and
+     `CAP_DAC_READ_SEARCH` ambient, the eBPF sensor and the BPF-LSM hook attach
+     (conntrack still needs `CAP_NET_ADMIN`).
+  4. The watchdog starts the agent with `--alerts` only and forces its working
+     directory to the binary's folder (`/var/lib/synthaea/bootstrap`, root-owned), so
+     the agent's default relative `events.jsonl` fails with `Permission denied`; its
+     output goes to `/var/tmp/synthaea-agent.log`, which `PrivateTmp=true` hides from
+     the host (`nsenter -t <watchdog pid> -m -- cat /var/tmp/synthaea-agent.log`).
+  Defect 1 is RPM-specific and 2 is SELinux-specific; 3 and 4 come from the unit and
+  the watchdog, not from the distro, so they should hit the `.deb` too (not tested here).
 
 ### Check the tracepoint layout on every new row
 
