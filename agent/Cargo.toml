@@ -9,6 +9,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Keep one-command development builds, while release builds can select the
+# source-built static ONNX Runtime with --no-default-features.
+default = ["dynamic-onnx"]
+dynamic-onnx = ["ml/dynamic-onnx"]
+
 [dependencies]
 schema = { path = "../crates/schema" }
 config = { path = "../crates/config" }
@@ -16,7 +22,7 @@ policy = { path = "../crates/policy" }
 rules = { path = "../crates/rules" }
 correlator = { path = "../crates/correlator" }
 verdict = { path = "../crates/verdict" }
-ml = { path = "../crates/ml" }
+ml = { path = "../crates/ml", default-features = false }
 sigma = { path = "../crates/sigma" }
 enrich = { path = "../crates/enrich" }
 yara = { path = "../crates/yara" }

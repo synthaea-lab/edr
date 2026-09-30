@@ -169,5 +169,5 @@ providing real-time behavioral monitoring, threat detection, and automated \
 response capabilities."""
 section = "admin"
 priority = "optional"
-# Note: We target Debian Trixie (13) and Ubuntu 26.04+
+# Linux packages carry static musl binaries; systemd and adduser remain host dependencies.
 depends = "$auto, systemd, adduser"

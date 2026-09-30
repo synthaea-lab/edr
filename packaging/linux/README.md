@@ -3,7 +3,7 @@
 This directory contains packaging infrastructure for distributing the Synthaea EDR agent on Linux distributions.
 
 **Issue:** #36
-**Status:** Complete (Debian + RPM with systemd integration)
+**Status:** Static musl packaging implemented; real-kernel compatibility validation for #456 remains open.
 
 ---
 
@@ -50,39 +50,56 @@ This separation ensures that package managers (apt/dnf) and the updater never co
 
 ## Building Packages
 
-### Prerequisites
+### Build the release binaries
 
-**Debian/Ubuntu (.deb):**
+Build **all three** binaries on the x86-64 Alpine lab host. Provision its Rust
+and eBPF toolchain with `lab/provisioning/alpine-toolchain.sh`, and build ONNX
+Runtime from source there using `lab/provisioning/build-onnxruntime-static.sh`.
+The latter also needs CMake and Python installed on Alpine. From the same repo
+revision that will be packaged:
+
+```bash
+export ORT_LIB_LOCATION="$PWD/onnxruntime/build/Linux/Release"
+./packaging/linux/build-musl.sh
+```
+
+This builds `agent`, `watchdog`, and `cli` under
+`target/x86_64-unknown-linux-musl/release/`. It disables the development ONNX
+download feature, verifies that every binary has no ELF interpreter or shared
+library dependency, requires embedded eBPF probes, and records the source
+revision. Commit tracked changes before this build. Do not replace these
+files with binaries from `target/release/`.
+The build also runs the ML crate's release tests against the source-built
+runtime and smoke-tests each binary with `--help`.
+
+### Build Debian and RPM packages
+
+Use the same checkout/revision for packaging. If packaging on another host,
+copy the three release binaries and `synthaea-source-revision` into the same
+`target/x86_64-unknown-linux-musl/release/` path first.
+
+On Debian/Ubuntu, install `cargo-deb`, `dpkg-deb`, and `readelf` (binutils),
+then run:
+
 ```bash
 cargo install cargo-deb
+./packaging/linux/build-deb.sh
 ```
 
-**RHEL/Fedora (.rpm):**
-```bash
-# RPM tools
-sudo dnf install rpm-build rpmlint
+Output: `target/debian/synthaea-agent_0.1.0-1_amd64.deb` for version 0.1.0.
+The script extracts the package and compares its three binaries byte for byte
+with the checked musl inputs.
 
-# Rust toolchain (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-### Build Debian Package
+On an RPM build host, install `rpm-build`, `rpm2cpio`, `cpio`, `readelf`
+(binutils), and the systemd RPM macros, then run:
 
 ```bash
-cd packaging/linux
-./build-deb.sh
+./packaging/linux/build-rpm.sh
 ```
 
-Output: `target/debian/synthaea-agent_0.1.0-1_amd64.deb`
-
-### Build RPM Package
-
-```bash
-cd packaging/linux
-./build-rpm.sh
-```
-
-Output: `packaging/output/synthaea-agent-0.1.0-1.fc40.x86_64.rpm`
+Output: `packaging/output/synthaea-agent-0.1.0-1.*.x86_64.rpm` for version
+0.1.0. This script performs the same payload comparison. Neither packaging
+script compiles Rust or downloads ONNX Runtime.
 
 ---
 
@@ -181,8 +198,10 @@ cat /var/log/synthaea/alerts.ndjson | grep T1071
 | Distribution | Version | systemd | Status |
 |--------------|---------|---------|--------|
 | Debian | Trixie (13) | 257+ | Primary .deb target |
+| Debian | Bookworm (12) | 252 | #456 userland compatibility; real lab smoke test pending |
 | Ubuntu | 26.04 LTS | 257+ | Primary .deb target |
 | Ubuntu | 24.04 LTS | 255 | Backward compat |
+| Ubuntu | 22.04 LTS | 249 | #456 oldest supported LTS kernel (5.15); real lab smoke test pending |
 | RHEL | 9.x | 252 | Primary .rpm target (Rocky/Alma) |
 | RHEL | 8.x | 239 | Backward compat (CentOS Stream) |
 | Fedora | 40 | 255 | Latest .rpm target |
