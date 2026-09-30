@@ -33,7 +33,10 @@ if ! rustup target list --installed | grep -qx "$target"; then
 fi
 
 # The ort-sys static library list omits libraries produced by ONNX Runtime.
-eval "$(./lab/provisioning/ort-static-link-flags.sh)"
+# Keep this as a separate command: command substitution inside eval would mask
+# a missing/non-executable flags script and silently build without RUSTFLAGS.
+ort_flags=$(./lab/provisioning/ort-static-link-flags.sh)
+eval "$ort_flags"
 cargo test -p ml --release --target "$target" --no-default-features
 cargo build --release --target "$target" --no-default-features \
     -p agent -p watchdog -p cli
