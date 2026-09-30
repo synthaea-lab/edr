@@ -2433,6 +2433,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sensor-windows-driver"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.20",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "sensor-windows-eventlog"
 version = "0.1.0"
 dependencies = [
