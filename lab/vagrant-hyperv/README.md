@@ -14,7 +14,7 @@ was originally found needs an arm64 host (the `../vagrant` harness).
 | `debian12` | 6.1 | Debian stable | `generic/debian12` |
 | `ubuntu2404` | 6.8 | current Ubuntu LTS | `jtarpley/ubuntu2404_base` — see [Community boxes](#community-boxes-68--612) |
 | `debian13` | 6.12 | Debian trixie | `shekeriev/debian-13` — see [Community boxes](#community-boxes-68--612) |
-| `fedora41` | 6.11 | RPM family, SELinux enforcing | `jtarpley/fedora41_base` — not validated yet |
+| `fedora41` | 6.11 GA / 6.17 updated | RPM family, SELinux enforcing | `jtarpley/fedora41_base` — see [`fedora41`](#fedora41--jtarpleyfedora41_base-40-gb-lvm) |
 
 ## Host setup — once, ELEVATED PowerShell
 
@@ -141,10 +141,32 @@ Disk is fine as shipped. The 1.7 GB of swap is not enough on its own, but the
 - No `sysctl` binary (`procps` not installed). Read `/proc/sys/vm/*` directly
   if needed.
 
+### `fedora41` — `jtarpley/fedora41_base` (40 GB LVM)
+
+Validated 2026-09-30: builds natively (Fedora ships clang/LLVM 19, `linux-toolchain.sh`
+fetches the prebuilt `bpf-linker`), 51/51 programs pass the verifier, `lineage.sh`
+3/3 and `argv.sh` fire, SELinux stays **Enforcing** and the agent run raised no AVC
+denial. What to know:
+
+- **The kernel is not 6.11.** The box is already updated (`6.17.7-100.fc41`); it
+  uses the `__data_loc` `sched_process_fork` layout, like Alpine 6.18. `uname -r`
+  after `up` says which row you are validating.
+- **The disk is many small logical volumes**: `/` has ~6 GB free after the LLVM
+  packages, `/home` under 1 GB (rustup dies with "No space left on device"), `/var`
+  ~9 GB. The `prep` provisioner (`FEDORA_PREP` in the `Vagrantfile`) links
+  `~/.cargo` and `~/.rustup` into `/var/synthaea` and sets `CARGO_TARGET_DIR` there.
+  A release build of the agent (~7.5 min at 2 vCPU-equivalent) fits in the ~9 GB;
+  it leaves ~4 GB.
+- Run the scenarios against `$CARGO_TARGET_DIR/release/agent`
+  (`/var/synthaea/target/release/agent`), not `target/release/agent`.
+- SELinux status of the run: the agent was started from an SSH shell, so it ran in
+  an unconfined domain. Behaviour under its systemd unit and a confined domain is
+  still to be validated (the interesting RPM-family question).
+
 ### Check the tracepoint layout on every new row
 
 `sched_process_fork`'s record layout differs across kernels (#415). 5.15, 6.1,
-6.8 and 6.12 all use the inline `char[16]` comm, and Alpine 6.18 uses
+6.8 and 6.12 all use the inline `char[16]` comm, and Alpine 6.18 and Fedora 6.17 use
 `__data_loc`. Since #416 the agent reads it from tracefs at load, but a new row
 should still record it:
 `sudo cat /sys/kernel/tracing/events/sched/sched_process_fork/format`.
