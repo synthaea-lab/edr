@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
 import { z } from "zod";
+import { extractObservations, recordObservations } from "@/lib/prevalence";
 
 // Validation schema for detection payload
 const DetectionSchema = z.object({
@@ -76,6 +77,21 @@ export async function POST(req: NextRequest) {
         meta: detection.meta,
       },
     });
+
+    // Fleet prevalence (issue #76). Best effort: the detection is already
+    // stored, and a counter failure must not make the agent retry and
+    // duplicate it.
+    try {
+      await recordObservations(
+        prisma,
+        agent.tenantId,
+        agent.id,
+        new Date(detection.timestamp_ns / 1_000_000),
+        extractObservations(detection.event)
+      );
+    } catch (error) {
+      console.error("Prevalence update failed:", error);
+    }
 
     // Update agent last-seen timestamp
     await prisma.agent.update({

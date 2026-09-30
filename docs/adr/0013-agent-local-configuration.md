@@ -179,6 +179,17 @@ config-extensible or schema-declared is what ADR-0011's Deferred section
 already reserves for a dedicated future ADR triggered by real operator
 or integrator pain — this ADR does not preempt that decision.
 
+### Amendment: the optional `[updates]` section (issue #30)
+
+`[updates] ring` assigns the install to a content ring (ADR-0016). It is the one
+section that may be absent, added as an additive `#[serde(default)]` field, so it
+needs no `schema_version` bump and existing files keep loading. The Decision 5
+rule still holds where it matters: there is **no default ring**. An absent ring
+means unassigned, and `agent apply-content-manifest` then refuses to run without
+`--ring`, because an agent landing in `prod` by omission would bypass the canary
+rollout. A value outside `canary_0`/`canary_1`/`canary_2`/`prod` fails validation
+with `updates.ring` named.
+
 ## Consequences
 
 - **Three binaries, one source of truth.** `agent`, `watchdog`, and `cli`

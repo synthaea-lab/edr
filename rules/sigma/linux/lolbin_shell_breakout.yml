@@ -8,6 +8,10 @@ tags:
   - attack.t1059.004
   - attack.privilege_escalation
   - attack.t1548
+level: high
+falsepositives:
+  - An admin interactively using a GTFOBins-style breakout for legitimate shell
+    access on a restricted system; uncommon in normal server operation.
 detection:
   selection:
     CommandLine|contains:

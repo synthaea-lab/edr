@@ -5,6 +5,9 @@ description: >
 tags:
   - attack.defense_evasion
   - attack.t1218.011
+level: high
+falsepositives:
+  - "A small number of legitimate installers pass javascript or vbscript URIs, or the listed shell32/url.dll exports, to rundll32; uncommon outside installer activity."
 detection:
   selection:
     Image|endswith: '\rundll32.exe'
