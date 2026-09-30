@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -26,7 +27,8 @@ export async function cleanDatabase() {
 export async function createTestTenant(name?: string) {
   return prisma.tenant.create({
     data: {
-      name: name || `Test Tenant ${Date.now()}`,
+      // Not `Date.now()`: two tenants made in the same millisecond must differ.
+      name: name || `Test Tenant ${randomUUID()}`,
     },
   });
 }
@@ -47,7 +49,10 @@ export async function createTestAgent(
   return prisma.agent.create({
     data: {
       tenantId,
-      enrollmentId: enrollmentId || `agent-test-${Date.now()}`,
+      // A random suffix, not `Date.now()`: `enrollment_id` is unique, and two agents
+      // created back to back share a millisecond on a fast runner (a flaky
+      // `tenancy.test.ts` on CI's first run of the server suite, #552).
+      enrollmentId: enrollmentId || `agent-test-${randomUUID()}`,
       hostname: overrides?.hostname || "test-host",
       version: overrides?.version || "0.1.0",
       ring: overrides?.ring || "prod",
