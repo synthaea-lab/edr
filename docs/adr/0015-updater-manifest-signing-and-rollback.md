@@ -177,6 +177,45 @@ self-update are named and deferred, not designed here.
    package-owned and never touched by the updater — rather than refusing to
    start.
 
+### Amendment: how the Decision 6 health gate is implemented (issue #30)
+
+Decision 6 said the updater registers the new process with `SilenceMonitor`. The
+implementation differs in two ways, both because the *watchdog* is the one process
+that outlives the agent and can act on a failure:
+
+- **The watchdog runs the probation, not the updater.** A watchdog started from
+  `versions/vN/` (its own executable's path says so; `bootstrap/` and development
+  binaries never qualify) puts `vN` on probation unless `versions/vN/.healthy`
+  exists. The proof of life is the progress-backed heartbeat file (#102) advancing
+  at least once within 120s of the watchdog starting: the same deadline as
+  `NO_CANARY_SILENCE_DEADLINE_NS`, and the same signal the watchdog already polls,
+  rather than a second liveness mechanism. The clock covers agent crashes and
+  refused spawns too, so a release whose agent never starts still runs out its
+  probation.
+- **Failure ends the watchdog process.** After `updater::rollback` (repoint
+  `current` at the previous release, or `bootstrap` for the first release; ban the
+  failed one) the watchdog exits non-zero and the service manager restarts it from
+  the rolled-back `current`. Nothing re-execs in place.
+
+On success the watchdog writes `.healthy` into the release directory and deletes
+every release older than the one it would roll back to (Decision 8).
+
+The rollback target is the newest older release that is **known good**: it has its
+own `.healthy` marker and is not on the ban list. With none, the target is
+`bootstrap`. A release that never proved itself, or that failed, is never a target,
+and rolling back also deletes the failed release's directory (the ban list keeps
+`apply-release` from re-staging it), so two bad releases in a row both land on the
+last proven one and a later good release cannot prune it away.
+
+Guards: rollback is skipped when `current` no longer points at the watchdog's own
+release (a stale watchdog must not undo a newer promotion), and a rollback that
+itself fails is reported and leaves the release running rather than crash-looping.
+
+Not covered (still open under #30): nothing yet stages and promotes a release
+(the update trigger), and a release whose *watchdog* binary fails to start never
+reaches this code, so the service manager just restarts it; that case needs the
+Decision 9 fallback at the unit level.
+
 ## Consequences
 
 - `tamper::integrity::Manifest` gains no new fields or API — the updater's
