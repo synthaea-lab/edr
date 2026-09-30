@@ -12,8 +12,13 @@ the same way as one that stops sending events.
 
 ### Request
 
-`POST <server>/api/v1/ingest/heartbeat`, with a JSON body
-(`transport::DEFAULT_HEARTBEAT_ENDPOINT`, sent by `TransportClient::send_heartbeat`).
+`POST <server>/api/ingest/heartbeat`, with a JSON body
+(`transport::DEFAULT_HEARTBEAT_ENDPOINT`, sent by `TransportClient::send_heartbeat`;
+served by `server/app/api/ingest/heartbeat/route.ts`). The `/api/ingest/`
+prefix is load-bearing: it's what nginx's mTLS `location` covers and what the
+server middleware lets through without a console session. Anything else gets
+redirected to `/login`. `transport`'s `the_heartbeat_endpoint_is_a_real_server_route`
+test fails if the constant stops matching a route.
 
 | Aspect | Contract |
 | --- | --- |
