@@ -66,6 +66,15 @@ changing nothing, when:
 The restored file stays read-only: whoever restores a payload for investigation
 should decide explicitly that it is safe to make writable or executable again.
 
+A restore that fails before the file is back changes nothing, including when the
+quarantine directory is on another filesystem and the payload has to be copied: a
+half-written destination is removed, so a retry is not blocked by it. Once the file is
+back at its original path the restore has succeeded, and removing the quarantined copy
+and its sidecar is cleanup. If the quarantine directory refuses that (read-only or
+busy), `restore` still succeeds, prints a warning, and records the leftover in the
+`RESPONSE-UNQUARANTINE` audit line; the payload then stays listed until it is removed by
+hand, and a second `restore` refuses because the original path is occupied.
+
 ## Not built yet
 
 - **Host isolation** and the analyst-driven half (`response::live`): blocked on
