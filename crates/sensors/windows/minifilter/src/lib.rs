@@ -1,4 +1,4 @@
-//! # sensor-windows-driver
+//! # sensor-windows-minifilter
 //!
 //! User-mode side of the `SynthaeaFilter` minifilter's communication port
 //! (#136, ADR-0012). The agent connects to `\SynthaeaPort` with a fixed
@@ -8,8 +8,10 @@
 //! Milestone 2b: connecting only. The driver sends nothing yet (the event
 //! channel is milestone 2c), so there is no receive loop here.
 //!
-//! The protocol constants mirror `minifilter/SynthaeaFilter.c`: a change on
-//! one side is a change on the other.
+//! The protocol constants mirror `driver/minifilter/SynthaeaFilter.c`: a
+//! change on one side is a change on the other. This crate sits next to
+//! `driver/` and depends on no workspace crate (ADR-0012 guardrail 8; it will
+//! depend on `schema` once it decodes events).
 
 /// Name of the driver's communication port.
 pub const PORT_NAME: &str = r"\SynthaeaPort";
@@ -40,7 +42,7 @@ pub fn connect_context() -> [u8; CONTEXT_LEN as usize] {
 }
 
 /// Why connecting to the driver's port failed. Each variant is one HRESULT
-/// the lab checks pin (`driver/test/port-check.ps1`).
+/// the lab checks pin (`crates/sensors/windows/driver/test/port-check.ps1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectError {
     /// No `\SynthaeaPort`: the driver isn't loaded.
