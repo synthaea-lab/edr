@@ -16,6 +16,11 @@ export async function middleware(req: NextRequest) {
     // the session check.
     req.nextUrl.pathname === "/api/release/manifest" ||
     req.nextUrl.pathname === "/api/release/artifact" ||
+    // Agent content download (issue #30): same model as the release routes.
+    // The admin routes under /api/content (halt, release, rollback) are not
+    // listed and stay behind the session check.
+    /^\/api\/content\/manifest\/[^/]+$/.test(req.nextUrl.pathname) ||
+    req.nextUrl.pathname === "/api/content/artifact" ||
     req.nextUrl.pathname === "/login" ||
     req.nextUrl.pathname === "/"
   ) {

@@ -47,6 +47,8 @@ describe("middleware identity headers", () => {
       "/api/health",
       "/api/release/manifest",
       "/api/release/artifact",
+      "/api/content/manifest/canary_0",
+      "/api/content/artifact",
     ]) {
       const res = await middleware(spoofedRequest(path));
       const names = forwardedNames(res);
@@ -62,6 +64,22 @@ describe("middleware identity headers", () => {
     // itself publishes releases and needs a session.
     getSession.mockResolvedValue(null);
     for (const path of ["/api/release", "/api/release/manifest/extra"]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
+  });
+
+  it("keeps the admin content routes behind the session check", async () => {
+    // Only the agent download paths are public (issue #30); halt, release and
+    // rollback are operator actions and need a session.
+    getSession.mockResolvedValue(null);
+    for (const path of [
+      "/api/content/halt",
+      "/api/content/release",
+      "/api/content/rollback",
+      "/api/content/manifest",
+      "/api/content/manifest/canary_0/extra",
+    ]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }

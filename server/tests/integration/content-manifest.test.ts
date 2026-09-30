@@ -9,10 +9,11 @@ import { canonicalJSON, type ContentManifest } from "@/lib/content-manifest";
 import { GET } from "@/app/api/content/manifest/[ring]/route";
 
 const { privateKey } = generateKeyPairSync("ed25519");
+const SECRET = "test-proxy-secret";
 
 function request(enrollmentId: string) {
   return new NextRequest("http://localhost/api/content/manifest/canary_0", {
-    headers: createMtlsHeaders(enrollmentId),
+    headers: { ...createMtlsHeaders(enrollmentId), "X-Proxy-Secret": SECRET },
   });
 }
 
@@ -47,6 +48,7 @@ describe("GET /api/content/manifest/[ring]", () => {
   let sandboxDir: string;
 
   beforeEach(async () => {
+    process.env.NGINX_PROXY_SECRET = SECRET;
     await cleanDatabase();
     // The route reads storage:// manifests from process.cwd()/storage — run
     // each test against a throwaway cwd rather than the real repo's storage/.
