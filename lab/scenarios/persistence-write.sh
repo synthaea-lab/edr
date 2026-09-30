@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shell-profile persistence scenario (T1037.004, check_persistence_write).
+# Shell-profile persistence scenario (T1546.004, check_persistence_write).
 #
 # check_persistence_write (crates/rules/src/stateless.rs) fires on a write-intent
 # FileOpenEvent whose path contains a known persistence location (.bashrc, .zshrc,
@@ -17,7 +17,7 @@
 #   3) expected in terminal A, two alerts (#431 review): the append below, then one
 #      more when cleanup restores the file on exit — restoring is itself a
 #      write-intent open on a path containing ".bashrc":
-#      T1037.004/T1053.003 — pid=...: write to a known persistence path (.bashrc): ...
+#      T1546.004 — pid=...: write to a known persistence path (.bashrc): ...
 
 set -euo pipefail
 
@@ -53,5 +53,5 @@ trap cleanup EXIT
 echo "Appending a marker comment to $TARGET (a real write-intent open, never sourced as a command)..."
 echo "$MARKER" >> "$TARGET"
 
-echo "Done. Check the agent terminal for two T1037.004/T1053.003 alerts: this append,"
+echo "Done. Check the agent terminal for two T1546.004 alerts: this append,"
 echo "and one more when cleanup restores the file on exit."

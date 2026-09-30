@@ -17,13 +17,16 @@ model Tenant {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  agents          Agent[]
-  detections      Detection[]
-  cases           Case[]
-  auditLogs       AuditLog[]       @relation("TenantAuditLogs")
-  contentReleases ContentRelease[]
-  corpusVersions  CorpusVersion[]
-  corpusSamples   CorpusSample[]
+  agents              Agent[]
+  detections          Detection[]
+  cases               Case[]
+  caseNarratives      CaseNarrative[]
+  auditLogs           AuditLog[]           @relation("TenantAuditLogs")
+  contentReleases     ContentRelease[]
+  binaryReleases      BinaryRelease[]
+  corpusVersions      CorpusVersion[]
+  corpusSamples       CorpusSample[]
+  prevalenceSightings PrevalenceSighting[]
 
   @@map("tenants")
 }
@@ -41,11 +44,11 @@ model Agent {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("agents")
   @@index([tenantId, lastSeen])
   @@index([tenantId, ring])
   @@index([tenantId, ring, lastSeen])
   @@index([enrollmentId])
+  @@map("agents")
 }
 
 // Detection storage - events that triggered rules
@@ -53,22 +56,40 @@ model Detection {
   id        String   @id @default(uuid())
   tenantId  String   @map("tenant_id")
   agentId   String   @map("agent_id")
+  // Grouped into a Case by the cron/group-detections sweep (issue #50); null
+  // until grouped, so "caseId: null" is the query for "ungrouped evidence".
+  caseId    String?  @map("case_id")
   timestamp DateTime
-  technique String   // MITRE ATT&CK technique (e.g., T1059.001)
-  severity  String   // low/medium/high/critical
+  technique String // MITRE ATT&CK technique (e.g., T1059.001)
+  severity  String // low/medium/high/critical
 
   // Event data (JSON) - normalized schema::Event
-  event     Json
-  meta      Json
+  event Json
+  meta  Json
 
   createdAt DateTime @default(now()) @map("created_at")
+  // Bumped whenever caseId (or any other field) changes, notably by the
+  // cron/group-detections sweep — the staleness check on a case narrative
+  // compares against this, not createdAt, since a detection can be grouped
+  // into a case well after it was ingested (see GET /api/cases/[id]).
+  //
+  // @default(now()) alongside @updatedAt (review, Jihair54/Sollykhan): without
+  // it, adding this NOT NULL column to a table that already has rows fails —
+  // Postgres has no value to backfill existing rows with. The default only
+  // matters for that one backfill; every write after this migration still
+  // goes through @updatedAt's own bump-on-write behavior.
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // SetNull, not Cascade: deleting a Case must not delete the underlying
+  // evidence it was built from.
+  case   Case?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
-  @@map("detections")
   @@index([tenantId, timestamp])
   @@index([agentId, timestamp])
   @@index([technique])
+  @@index([caseId])
+  @@map("detections")
 }
 
 // Case management - analyst triage workflow
@@ -77,16 +98,45 @@ model Case {
   tenantId    String   @map("tenant_id")
   title       String
   description String?
-  severity    String   // low/medium/high/critical
-  status      String   // open/investigating/resolved/false_positive
+  severity    String // low/medium/high/critical
+  status      String // open/investigating/resolved/false_positive
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  detections Detection[]
+  narratives CaseNarrative[]
 
-  @@map("cases")
   @@index([tenantId, status, createdAt])
   @@index([severity])
+  @@map("cases")
+}
+
+// Case narrative - one row per LLM-generated narration of a case's evidence
+// graph (issue #50). Append-only, not a JSON column on Case: keeps generation
+// history/provenance and avoids coupling regeneration to unrelated Case
+// writes (status/severity triage edits).
+model CaseNarrative {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  caseId        String   @map("case_id")
+  narrative     String
+  // [{ detectionId, claim }] - every detectionId is verified to reference a
+  // Detection actually on this case before the row is written (see
+  // assistant/llm-client.ts); a hallucinated citation is dropped, not stored.
+  citations     Json
+  model         String // e.g. "llama3.1"
+  provider      String // operator-facing label, e.g. "self-hosted"
+  promptVersion Int      @map("prompt_version")
+  generatedBy   String   @map("generated_by") // "system:cron" | "user:<userId>"
+  generatedAt   DateTime @default(now()) @map("generated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, generatedAt])
+  @@index([tenantId, generatedAt])
+  @@map("case_narratives")
 }
 
 // Audit log - all control plane actions
@@ -94,59 +144,81 @@ model AuditLog {
   id        String   @id @default(uuid())
   tenantId  String   @map("tenant_id")
   userId    String   @map("user_id")
-  action    String   // enrollment.create, case.update, policy.deploy, etc.
-  resource  String   // cases/123, agents/456
+  action    String // enrollment.create, case.update, policy.deploy, etc.
+  resource  String // cases/123, agents/456
   details   Json?
   timestamp DateTime @default(now())
 
   tenant Tenant @relation("TenantAuditLogs", fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@map("audit_logs")
   @@index([tenantId, timestamp])
   @@index([userId, timestamp])
   @@index([action])
+  @@map("audit_logs")
 }
 
 // Content release - tracks content manifest versions per ring
 model ContentRelease {
-  id              String   @id @default(uuid())
-  tenantId        String   @map("tenant_id")
-  ring            String   // canary_0, canary_1, canary_2, prod
-  releaseVersion  Int      @map("release_version") // Monotone counter
-  manifestUrl     String   @map("manifest_url") // Storage URL for manifest JSON
-  manifestSha256  String   @map("manifest_sha256") // SHA-256 of manifest file
-  status          String   @default("active") // active, halted, rolled_back
-  releasedAt      DateTime @map("released_at")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  ring           String // canary_0, canary_1, canary_2, prod
+  releaseVersion Int      @map("release_version") // Monotone counter
+  manifestUrl    String   @map("manifest_url") // Storage URL for manifest JSON
+  manifestSha256 String   @map("manifest_sha256") // SHA-256 of manifest file
+  status         String   @default("active") // active, halted, rolled_back
+  releasedAt     DateTime @map("released_at")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, ring, releaseVersion])
-  @@map("content_releases")
   @@index([tenantId, ring, status])
   @@index([tenantId, ring, releaseVersion])
+  @@map("content_releases")
+}
+
+// Binary release - a signed agent/watchdog/cli release offered to a ring's
+// agents (ADR-0015, issue #30's update trigger). The row points at the signed
+// `ReleaseManifest` JSON (signed offline: the server never holds the private
+// key); artifacts live at `storage/releases/v<releaseVersion>/<path>`.
+model BinaryRelease {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  ring           String // canary_0, canary_1, canary_2, prod
+  releaseVersion Int      @map("release_version") // Monotone per (tenant, ring); equals the manifest's own release_version
+  manifestUrl    String   @map("manifest_url") // Storage URL for the signed manifest JSON
+  manifestSha256 String   @map("manifest_sha256") // SHA-256 of the manifest file
+  status         String   @default("active") // active, halted
+  releasedAt     DateTime @map("released_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, ring, releaseVersion])
+  @@index([tenantId, ring, status])
+  @@map("binary_releases")
 }
 
 // Corpus version - versioned snapshot of site-specific benign corpus
 model CorpusVersion {
-  id              String   @id @default(uuid())
-  tenantId        String   @map("tenant_id")
-  version         Int      // Monotone version counter (per tenant)
-  sampleCount     Int      @map("sample_count") // Number of samples in this version
-  exportUrl       String?  @map("export_url") // JSONL export URL (for ML pipeline)
-  exportSha256    String?  @map("export_sha256") // SHA-256 of JSONL export
-  status          String   @default("collecting") // collecting, finalized, archived
-  collectionStart DateTime @map("collection_start") // Start of collection period
+  id              String    @id @default(uuid())
+  tenantId        String    @map("tenant_id")
+  version         Int // Monotone version counter (per tenant)
+  sampleCount     Int       @map("sample_count") // Number of samples in this version
+  exportUrl       String?   @map("export_url") // JSONL export URL (for ML pipeline)
+  exportSha256    String?   @map("export_sha256") // SHA-256 of JSONL export
+  status          String    @default("collecting") // collecting, finalized, archived
+  collectionStart DateTime  @map("collection_start") // Start of collection period
   collectionEnd   DateTime? @map("collection_end") // End of collection period (when finalized)
-  createdAt       DateTime @default(now()) @map("created_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
   tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   samples CorpusSample[]
 
   @@unique([tenantId, version])
-  @@map("corpus_versions")
   @@index([tenantId, status])
   @@index([tenantId, version])
+  @@map("corpus_versions")
 }
 
 // Corpus sample - individual benign telemetry sample for T3 curation
@@ -159,15 +231,37 @@ model CorpusSample {
   eventType       String   @map("event_type") // exec, file_open, connect, etc.
 
   // Event data (JSON) - normalized schema::Event
-  event           Json
+  event Json
 
-  createdAt       DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   corpusVersion CorpusVersion @relation(fields: [corpusVersionId], references: [id], onDelete: Cascade)
 
-  @@map("corpus_samples")
   @@index([tenantId, corpusVersionId])
   @@index([agentId, timestamp])
   @@index([eventType])
+  @@map("corpus_samples")
+}
+
+// Fleet prevalence (issue #76, Layer 5): one row per (tenant, kind, key, agent).
+// "Seen on N hosts, first <date>" is derived by aggregating the rows for a key,
+// so the host count is exact without a separate distinct-set. Per-tenant only;
+// nothing here is ever joined across tenants.
+model PrevalenceSighting {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  agentId   String   @map("agent_id")
+  // sha256 | image_path | transition | domain (lib/prevalence.ts)
+  kind      String
+  key       String
+  firstSeen DateTime @map("first_seen")
+  lastSeen  DateTime @map("last_seen")
+  count     Int      @default(1)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, key, agentId])
+  @@index([tenantId, kind, key])
+  @@map("prevalence_sightings")
 }
