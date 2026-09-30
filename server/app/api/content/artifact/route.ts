@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { extractEnrollmentId } from "@/lib/tenant";
+import { authenticateAgent } from "@/lib/agent-auth";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
@@ -9,7 +8,7 @@ import crypto from "crypto";
  * GET /api/content/artifact?path={path}
  * Agent endpoint: Download content artifact (rule, model, policy)
  *
- * Authentication: mTLS (X-Client-Cert-Verified + X-Client-Cert-Subject)
+ * Authentication: nginx proxy secret + mTLS + enrolled agent (`authenticateAgent`)
  * Query params:
  * - path: Artifact path (e.g., "rules/beacon.sigma")
  * - sha256: Expected SHA-256 hash (hex) for verification
@@ -18,37 +17,8 @@ import crypto from "crypto";
  */
 export async function GET(req: NextRequest) {
   try {
-    // Verify mTLS authentication
-    const certVerified = req.headers.get("X-Client-Cert-Verified");
-    const certSubject = req.headers.get("X-Client-Cert-Subject");
-
-    if (certVerified !== "SUCCESS" || !certSubject) {
-      return NextResponse.json(
-        { error: "Unauthorized - mTLS authentication required" },
-        { status: 401 }
-      );
-    }
-
-    const enrollmentId = extractEnrollmentId(certSubject);
-    if (!enrollmentId) {
-      return NextResponse.json(
-        { error: "Invalid certificate subject" },
-        { status: 400 }
-      );
-    }
-
-    // Find agent to verify enrollment
-    const agent = await prisma.agent.findUnique({
-      where: { enrollmentId },
-      select: { id: true, tenantId: true },
-    });
-
-    if (!agent) {
-      return NextResponse.json(
-        { error: "Agent not enrolled" },
-        { status: 403 }
-      );
-    }
+    const authenticated = await authenticateAgent(req);
+    if ("response" in authenticated) return authenticated.response;
 
     // Parse query parameters
     const { searchParams } = new URL(req.url);
