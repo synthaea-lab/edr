@@ -114,5 +114,5 @@ fi
 %dir /etc/synthaea
 
 %changelog
-* Thu Sep 18 2026 Synthaea Team <noreply@synthaea.io> - 0.1.0-1
+* Fri Sep 18 2026 Synthaea Team <noreply@synthaea.io> - 0.1.0-1
 - Initial RPM release with systemd integration

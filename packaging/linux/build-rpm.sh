@@ -23,7 +23,8 @@ echo "Creating source tarball..."
 tar czf "$RPMBUILD_DIR/SOURCES/synthaea-agent-$VERSION.tar.gz" \
   --transform "s,^,synthaea-agent-$VERSION/," \
   --exclude-vcs --exclude target \
-  agent/ watchdog/ cli/ crates/ Cargo.* LICENSE README.md packaging/linux/systemd/
+  agent/ watchdog/ cli/ crates/ Cargo.* rust-toolchain.toml ebpf-toolchain.txt LICENSE README.md \
+  packaging/linux/systemd/
 
 # Copy spec file
 cp packaging/linux/rpm/synthaea-agent.spec.template \
