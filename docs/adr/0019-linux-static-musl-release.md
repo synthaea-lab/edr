@@ -1,4 +1,4 @@
-# ADR-0018: Ship the Linux agent as a static musl binary
+# ADR-0019: Ship the Linux agent as a static musl binary
 
 - **Status**: accepted
 - **Date**: 2026-09-30
