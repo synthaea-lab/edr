@@ -47,6 +47,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1070.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1070.002 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1127 | 3 | `rules:crates/rules/src/state.rs` |
+| T1197 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218.011 | 3 | `sigma:rules/sigma/windows/lolbas_rundll32.yml` |
 | T1562.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/defender.rs`, `rules:crates/rules/src/stateless.rs` |

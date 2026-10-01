@@ -41,7 +41,7 @@ pending (the coverage packs #376–#381 — see
 | **Network — flows & listeners**<br><sub>TA0011 C2 · TA0008 Lateral</sub> | ✅ eBPF + netlink | ✅ ETW · ✅ IP Helper listen | 🔨 NE · ✅ libproc listen |
 | **Mounts & volumes**<br><sub>staging · TA0005 Evasion</sub> | 📋 #362 | 📋 #136 raw-volume | ✅ ES |
 | **DNS**<br><sub>TA0011 C2</sub> | 📋 #267 | ✅ ETW | 🔨 NE |
-| **Lateral-movement services**<br><sub>TA0008</sub> | 🟡* SSH-out content | ✅ SMB + WMI · 📋 #284 BITS | 🟡* SSH-out content |
+| **Lateral-movement services**<br><sub>TA0008</sub> | 🟡* SSH-out content | ✅ SMB + WMI + BITS | 🟡* SSH-out content |
 | **Encrypted traffic**<br><sub>TA0011 C2 · TA0010 Exfil</sub> | ✅ uprobes · 📋 JA4 #86 | 📋 #373 | 📋 #360 |
 | **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | 📋 #374 (evaluate) |
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
@@ -159,7 +159,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **OS security verdicts** | WEL · Defender/Operational | verdicts 1116 (detected) / 1117 (action taken) and tamper traces 5001/5010/5012 (protection turned off) and 5007 (setting changed) → `DefenderEvent`. The channel is **localized**, so only numeric ids and `Threat Name` are read. 5007 is 42 % of the channel (start-up progress): only exclusions, the `Disable*` protection switches and Tamper Protection are forwarded. Alerts: protection turned off, an exclusion added (High for `C:\Users\Public`, `Temp`, `Downloads`, `AppData`, a drive root, code extensions, interpreters; else Medium), a protection switch turned on, Tamper Protection turned off. The events name no process; verdicts raise no alert yet (they need a host-wide correlator signal) | ✅ used | T1562.001 | #283 |
 | **OS security verdicts** | WEL · TaskScheduler/Operational | task registered 106 (already covered, #422) | ✅ used | T1053.005 | #283 |
 | **Lateral-movement services** | ETW · WMI-Activity | WQL queries (EID 23) + method invocations (EID 24, `Win32_Process.Create`) | ✅ used | T1047 | #21 |
-| **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
+| **Lateral-movement services** | ETW · BITS-Client | BITS jobs → v40 `BitsJob`: file added (client pid, URL, local path; EID 16403), completed (4), cancelled (5), transfer error (61), the service's records attributed through the job id; jobs fetching from Microsoft update hosts dropped at the sensor (counted). Consumed by the T1197 download→exec join | ✅ used | T1197 | #284 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
 | **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone); consumed by the T1204.002 download→exec join. Strip/tamper of the mark needs the minifilter (#136) | ✅ used | T1204.002 | #365 |
 | **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
