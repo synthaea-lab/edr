@@ -68,8 +68,16 @@ pub(crate) const QUARANTINE_EXEC_WINDOW_NS: u64 = 600_000_000_000; // 10 min
 
 // ── Windows constants (ETW rules — T1059/T1218/T1071) ───────────────────────
 
-/// SELF-SPAWN threshold and window (T1059): N spawns of the same name in X seconds.
-pub(crate) const SELF_SPAWN_THRESHOLD: u32 = 3;
+/// SELF-SPAWN threshold and window (T1059): N spawns of the same name, by one
+/// parent, in X seconds. Calibrated on the 2026-09-07 Windows Server captures
+/// (`lab/captures/`) and the #391 Win11 validation (#432): ordinary activity
+/// peaks at exactly 3 (`taskhostw.exe` and `MusNotification.exe` under
+/// svchost, `slui.exe`, an operator running `cli.exe` three times, a scenario
+/// creating three tasks with `schtasks.exe`), while the one real loop captured
+/// (malware3 respawning `powershell.exe`) sustains 19-20 and crosses 10 within
+/// 13 s of its first spawn. Not measured: multi-process apps whose children
+/// share one name (browsers, Electron) on a desktop fleet.
+pub(crate) const SELF_SPAWN_THRESHOLD: u32 = 10;
 pub(crate) const SELF_SPAWN_WINDOW_NS: u64 = 30_000_000_000; // 30s
 
 /// BEACON threshold and window (T1071/T1041): N connections to the same dest in X seconds.
@@ -294,7 +302,7 @@ pub(crate) const SELF_SPAWN_PARENT_EXCLUSIONS: &[&str] = &["RuntimeBroker.exe"];
 /// needing an audit subcategory enabled. Both false-positived on the agent itself
 /// in the 2026-09-23 live lab validation of #391. `logman.exe`: the ETW sensor's
 /// startup orphan sweep (#408) — one `logman query -ets` plus one `logman stop` per
-/// orphan, so two orphans already reach `SELF_SPAWN_THRESHOLD`. Never a blanket "ignore every
+/// orphan, so a host with enough orphans reaches `SELF_SPAWN_THRESHOLD`. Never a blanket "ignore every
 /// child of the agent": `ppid` alone is spoofable
 /// (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), so `check_self_spawn` also requires
 /// the image to live at a trusted system path (`policy::name_exclusion_applies`),

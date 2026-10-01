@@ -39,14 +39,80 @@ fn self_spawn_below_threshold_does_not_alert() {
     }
 }
 
+/// Spawns `n` same-name children of ppid 1, `spacing_ns` apart from `start_ns`,
+/// and returns every alert raised.
+fn spawn_burst(
+    state: &mut RuleState,
+    comm: &str,
+    n: u32,
+    start_ns: u64,
+    spacing_ns: u64,
+) -> Vec<crate::Alert> {
+    (0..n)
+        .flat_map(|i| {
+            state.on_exec(&exec_event_win(
+                200 + i,
+                1,
+                comm,
+                comm,
+                start_ns + u64::from(i) * spacing_ns,
+            ))
+        })
+        .collect()
+}
+
 #[test]
-fn self_spawn_third_spawn_triggers_alert() {
+fn self_spawn_alerts_on_the_threshold_spawn() {
     let mut state = RuleState::new();
-    state.on_exec(&exec_event_win(200, 1, "cmd.exe", "cmd.exe", 0));
-    state.on_exec(&exec_event_win(201, 1, "cmd.exe", "cmd.exe", 1_000_000_000));
-    let alerts = state.on_exec(&exec_event_win(202, 1, "cmd.exe", "cmd.exe", 2_000_000_000));
+    assert!(
+        spawn_burst(
+            &mut state,
+            "cmd.exe",
+            SELF_SPAWN_THRESHOLD - 1,
+            0,
+            1_000_000_000
+        )
+        .is_empty()
+    );
+    let alerts = state.on_exec(&exec_event_win(
+        999,
+        1,
+        "cmd.exe",
+        "cmd.exe",
+        20_000_000_000,
+    ));
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].technique, "T1059");
+}
+
+#[test]
+fn three_same_name_children_in_30s_is_ordinary_windows_activity() {
+    // #432, all seen at exactly 3 on lab hosts: an operator running `cli.exe`
+    // three times from a shell, a scenario creating three tasks, svchost
+    // starting `taskhostw.exe`.
+    let mut state = RuleState::new();
+    for comm in ["cli.exe", "schtasks.exe", "taskhostw.exe"] {
+        assert!(
+            spawn_burst(&mut state, comm, 3, 0, 1_000_000_000).is_empty(),
+            "{comm}"
+        );
+    }
+}
+
+#[test]
+fn a_powershell_respawn_loop_alerts_within_15s() {
+    // The pace of the malware3 capture (2026-09-07): ~1.4 s between respawns
+    // until the 10th, at 13 s.
+    let mut state = RuleState::new();
+    let alerts = spawn_burst(&mut state, "powershell.exe", 11, 0, 1_400_000_000);
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        alerts[0]
+            .message
+            .contains(&format!("spawned {SELF_SPAWN_THRESHOLD}x")),
+        "{}",
+        alerts[0].message
+    );
 }
 
 #[test]
@@ -86,50 +152,53 @@ fn excluded_name_from_system_path_stays_excluded() {
 #[test]
 fn self_spawn_window_slides_instead_of_resetting() {
     // Review finding: the reset-bucket scheme dropped in-window events at the
-    // boundary — spawns at t=0s, 29s, 31s, 33s never alerted with a 30s window,
-    // even though 29/31/33 are three spawns within 4 seconds.
+    // boundary — a burst straddling the 30 s mark never alerted, even though
+    // all of it fell within a few seconds.
     let mut state = RuleState::new();
     let sec = 1_000_000_000u64;
-    state.on_exec(&exec_event_win(200, 1, "cmd.exe", "cmd.exe", 0));
-    state.on_exec(&exec_event_win(201, 1, "cmd.exe", "cmd.exe", 29 * sec));
-    state.on_exec(&exec_event_win(202, 1, "cmd.exe", "cmd.exe", 31 * sec));
-    let alerts = state.on_exec(&exec_event_win(203, 1, "cmd.exe", "cmd.exe", 33 * sec));
+    state.on_exec(&exec_event_win(100, 1, "cmd.exe", "cmd.exe", 0));
+    // 26 s .. 32.75 s: a 30 s bucket opened at 0 holds 7 of these, the next one 4.
+    let alerts = spawn_burst(
+        &mut state,
+        "cmd.exe",
+        SELF_SPAWN_THRESHOLD,
+        26 * sec,
+        750_000_000,
+    );
     assert!(
         alerts.iter().any(|a| a.technique == "T1059"),
-        "three spawns within 4s straddling the bucket boundary must alert"
+        "a burst straddling the bucket boundary must alert"
     );
 }
 
 #[test]
 fn self_spawn_does_not_realert_past_threshold() {
     let mut state = RuleState::new();
-    state.on_exec(&exec_event_win(200, 1, "cmd.exe", "cmd.exe", 0));
-    state.on_exec(&exec_event_win(201, 1, "cmd.exe", "cmd.exe", 1_000_000_000));
-    state.on_exec(&exec_event_win(202, 1, "cmd.exe", "cmd.exe", 2_000_000_000)); // alerts here
-    // 4th spawn, still within the window: already alerted (flag), no duplicate.
-    let alerts = state.on_exec(&exec_event_win(203, 1, "cmd.exe", "cmd.exe", 3_000_000_000));
-    assert!(alerts.is_empty());
+    let alerts = spawn_burst(
+        &mut state,
+        "cmd.exe",
+        SELF_SPAWN_THRESHOLD + 3,
+        0,
+        1_000_000_000,
+    );
+    assert_eq!(
+        alerts.len(),
+        1,
+        "one alert per window, not one per spawn past the threshold"
+    );
 }
 
 #[test]
 fn self_spawn_excluded_process_does_not_alert() {
     // MpCmdRun.exe: false positive documented in lab (2026-08-24), explicitly excluded.
     let mut state = RuleState::new();
-    state.on_exec(&exec_event_win(200, 1, "MpCmdRun.exe", "MpCmdRun.exe", 0));
-    state.on_exec(&exec_event_win(
-        201,
-        1,
-        "MpCmdRun.exe",
-        "MpCmdRun.exe",
-        1_000_000_000,
-    ));
-    let alerts = state.on_exec(&exec_event_win(
-        202,
-        1,
-        "MpCmdRun.exe",
-        "MpCmdRun.exe",
-        2_000_000_000,
-    ));
+    let alerts: Vec<_> = (0..SELF_SPAWN_THRESHOLD + 2)
+        .flat_map(|i| {
+            let mut e = exec_event_win(200 + i, 1, "MpCmdRun.exe", "MpCmdRun.exe", u64::from(i));
+            e.image_path = r"C:\Windows\System32\MpCmdRun.exe".to_string();
+            state.on_exec(&e)
+        })
+        .collect();
     assert!(alerts.is_empty());
 }
 
@@ -271,13 +340,21 @@ fn wevtutil_child_of_a_different_parent_still_alerts() {
 
 #[test]
 fn self_spawn_outside_window_resets_counter() {
+    // One spawn short of the threshold, then the last one 40 s later: the first
+    // ones have slid out of the 30 s window.
     let mut state = RuleState::new();
-    state.on_exec(&exec_event_win(200, 1, "cmd.exe", "cmd.exe", 0));
-    state.on_exec(&exec_event_win(201, 1, "cmd.exe", "cmd.exe", 1_000_000_000));
-    // 40s later, outside the 30s window: the counter restarts at 1, no 3rd spawn
-    // reached.
+    assert!(
+        spawn_burst(
+            &mut state,
+            "cmd.exe",
+            SELF_SPAWN_THRESHOLD - 1,
+            0,
+            100_000_000
+        )
+        .is_empty()
+    );
     let alerts = state.on_exec(&exec_event_win(
-        202,
+        999,
         1,
         "cmd.exe",
         "cmd.exe",
