@@ -35,7 +35,13 @@
 //! stream (mark-of-the-web) is read back and reported as
 //! `schema::FileQuarantineEvent`, the macOS quarantine-xattr sibling — see
 //! [`zone_identifier`].
+//!
+//! BITS jobs (#284): `Microsoft-Windows-Bits-Client` records, reported as
+//! `schema::BitsJobEvent` with the job's client process as the actor (BITS
+//! does the network I/O from its own service), Microsoft update jobs dropped
+//! — see [`bits`].
 
+pub mod bits;
 #[cfg(any(windows, test))]
 mod long_path;
 pub mod normalize;
