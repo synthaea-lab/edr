@@ -130,7 +130,7 @@ can be regained and the agent child the watchdog spawns inherits it across `exec
 | `CAP_BPF`, `CAP_PERFMON` | load eBPF programs, attach tracepoints and the BPF-LSM hook | verified on a real host |
 | `CAP_SYS_RESOURCE` | raise `RLIMIT_MEMLOCK` for the BPF maps | verified on a real host |
 | `CAP_DAC_READ_SEARCH` | read `/proc/<pid>/*` and files owned by other users | verified on a real host |
-| `CAP_NET_ADMIN` | conntrack netlink (network flows); without it the poll fails with `NLMSG_ERROR` | failure observed, grant to be re-checked on a real host |
+| `CAP_NET_ADMIN` | conntrack netlink (network flows); without it the poll fails with `NLMSG_ERROR` | verified on a real host: no `NLMSG_ERROR` with it |
 | `CAP_KILL` | signal other users' processes for the response action (off by default) | from the kernel's rule for `kill(2)`, not exercised on a host |
 
 Not granted, on purpose: `CAP_SYS_PTRACE` (`/proc/<pid>/exe` of other users),
