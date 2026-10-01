@@ -8,6 +8,9 @@ export async function middleware(req: NextRequest) {
   // routes.
   if (
     req.nextUrl.pathname.startsWith("/api/ingest") ||
+    // The agent's versioned ingest paths (`transport::DEFAULT_INGEST_ENDPOINT`,
+    // `DEFAULT_HEARTBEAT_ENDPOINT`); same model as /api/ingest.
+    req.nextUrl.pathname.startsWith("/api/v1/ingest/") ||
     req.nextUrl.pathname.startsWith("/api/auth") ||
     req.nextUrl.pathname.startsWith("/api/health") ||
     // Agent release download (issue #30): authenticated by nginx proxy secret
@@ -21,6 +24,11 @@ export async function middleware(req: NextRequest) {
     // listed and stay behind the session check.
     /^\/api\/content\/manifest\/[^/]+$/.test(req.nextUrl.pathname) ||
     req.nextUrl.pathname === "/api/content/artifact" ||
+    // Scheduled jobs: the caller is a scheduler with no browser session. Each
+    // handler authenticates itself with `verifyCronRequest` (CRON_SECRET, fails
+    // closed when unset); without this the middleware redirected every cron call
+    // to /login before the handler ran.
+    req.nextUrl.pathname.startsWith("/api/cron/") ||
     req.nextUrl.pathname === "/login" ||
     req.nextUrl.pathname === "/"
   ) {
