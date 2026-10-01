@@ -18,12 +18,13 @@ use schema::{
 };
 
 use crate::{
+    bits::BitsJobs,
     long_path::{self, LongPathCache},
     normalize,
     pid_cache::PidCache,
     providers::{
-        dns_provider, dotnet_provider, file_provider, network_provider, powershell_provider,
-        process_provider, registry_provider, smb_provider, wmi_provider,
+        bits_provider, dns_provider, dotnet_provider, file_provider, network_provider,
+        powershell_provider, process_provider, registry_provider, smb_provider, wmi_provider,
     },
     winapi,
     zone_identifier::{self, MarkQueue, QuarantineDedup},
@@ -141,6 +142,9 @@ pub(crate) struct SharedState {
     /// #365/#439: `Zone.Identifier` writes, queued for the read-back worker
     /// (which owns the one-`FileQuarantine`-per-write dedup).
     pub(crate) marks: MarkQueue,
+    /// #284: BITS jobs in flight, between their file-added record and their
+    /// last one.
+    pub(crate) bits: Mutex<BitsJobs>,
     /// F-2: events observed — the silence watchdog reads this.
     pub(crate) events_seen: AtomicU64,
     /// The liveness canary file: the run loop touches it every heartbeat, which
@@ -346,6 +350,7 @@ impl Sensor for WindowsSensor {
             long_paths: Mutex::new(LongPathCache::new(LONG_PATH_CACHE_CAP)),
             dedup: Mutex::new(normalize::ConnectDedup::new(60_000_000_000)),
             marks,
+            bits: Mutex::new(BitsJobs::default()),
             events_seen: AtomicU64::new(0),
             canary_path: canary_file
                 .file_name()
@@ -368,7 +373,8 @@ impl Sensor for WindowsSensor {
             .enable(powershell_provider(sink.clone(), state.clone()))
             .enable(wmi_provider(sink.clone(), state.clone()))
             .enable(dotnet_provider(sink.clone(), state.clone()))
-            .enable(smb_provider(sink, state.clone()))
+            .enable(smb_provider(sink.clone(), state.clone()))
+            .enable(bits_provider(sink, state.clone()))
             .start_and_process()
             .map_err(|e| -> SensorError { format!("ETW startup error: {e:?}").into() })?;
 
