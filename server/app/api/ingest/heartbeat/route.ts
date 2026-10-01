@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
+import { beaconTime, parseHeartbeatBody } from "@/lib/health-beacon";
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,6 +44,8 @@ export async function POST(req: NextRequest) {
       data: { lastSeen: new Date() },
     });
 
+    await storeBeacon(req, agent);
+
     return NextResponse.json({
       status: "ok",
       agentId: agent.id,
@@ -64,5 +67,38 @@ export async function POST(req: NextRequest) {
       { error: "Internal server error" },
       { status: 500 }
     );
+  }
+}
+
+/**
+ * Keeps the agent's latest health beacon (issue #83). Never fails the
+ * heartbeat: the liveness update above already happened, and a missing,
+ * malformed or unstorable beacon must not make a live agent look dead.
+ */
+async function storeBeacon(
+  req: NextRequest,
+  agent: { id: string; tenantId: string }
+): Promise<void> {
+  try {
+    const body = await req.json().catch(() => null);
+    const beacon = parseHeartbeatBody(body);
+    if (!beacon) return;
+
+    const fields = {
+      beaconAt: beaconTime(beacon),
+      receivedAt: new Date(),
+      agentVersion: beacon.agent_version,
+      spoolBytes: BigInt(beacon.spool_bytes),
+      spoolDropped: BigInt(beacon.spool_dropped),
+      enrichDropped: BigInt(beacon.enrich_dropped),
+      sensors: beacon.sensors,
+    };
+    await prisma.agentHealth.upsert({
+      where: { agentId: agent.id },
+      create: { agentId: agent.id, tenantId: agent.tenantId, ...fields },
+      update: fields,
+    });
+  } catch (error) {
+    console.error("Health beacon store error:", error);
   }
 }
