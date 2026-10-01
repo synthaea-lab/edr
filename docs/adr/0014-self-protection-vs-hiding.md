@@ -106,3 +106,45 @@ tampering *attempt* loud and attributable; none of them make the *agent* harder 
   mutual-guard (#216, #102), process/service protection and tamper resistance (#103),
   sensor-silence/protected-resource/kill-loudness (#71). Anti-tamper hooks stay tracked
   under the kernel-floor milestone (#39) rather than getting their own issue.
+
+## Amendment 2026-10-01: the service's privilege model (#559)
+
+Technique class 2 (process/service protection) names the hardened unit as adopted, but
+the unit never said what the service is allowed to do. Starting the packaged unit on a
+real host (Fedora 41, kernel 6.17.7, SELinux Enforcing) showed the gap: it ran the agent
+as the unprivileged `synthaea` user with `NoNewPrivileges=true` and no capabilities, so
+the eBPF sensor could not load and the audit fallback failed with `EPERM`.
+
+**Decision: an unprivileged `synthaea` user plus an explicit ambient capability set, not
+root with the hardening options kept.** The agent's own preflight already expects this
+("capability-scoped deployment"), it keeps `NoNewPrivileges` and `ProtectSystem=strict`
+meaningful, and it means a bug in a sensor or in event parsing is not a root bug. The
+cost is that every privileged feature must be listed, which is the point: the list is
+reviewable in one place, the unit.
+
+The set is `AmbientCapabilities` equal to `CapabilityBoundingSet`, so nothing outside it
+can be regained and the agent child the watchdog spawns inherits it across `exec`:
+
+| Capability | Why | Status |
+|---|---|---|
+| `CAP_BPF`, `CAP_PERFMON` | load eBPF programs, attach tracepoints and the BPF-LSM hook | verified on a real host |
+| `CAP_SYS_RESOURCE` | raise `RLIMIT_MEMLOCK` for the BPF maps | verified on a real host |
+| `CAP_DAC_READ_SEARCH` | read `/proc/<pid>/*` and files owned by other users | verified on a real host |
+| `CAP_NET_ADMIN` | conntrack netlink (network flows); without it the poll fails with `NLMSG_ERROR` | failure observed, grant to be re-checked on a real host |
+| `CAP_KILL` | signal other users' processes for the response action (off by default) | from the kernel's rule for `kill(2)`, not exercised on a host |
+
+Not granted, on purpose: `CAP_SYS_PTRACE` (`/proc/<pid>/exe` of other users),
+`CAP_CHOWN`/`CAP_FOWNER`/`CAP_DAC_OVERRIDE` (quarantining files the agent does not own)
+and the audit capabilities (the audit fallback sensor). Each is added in its own change,
+with the feature that needs it checked on a real host, so that the table above only ever
+lists a capability with a reason. Until then the corresponding feature fails closed
+(a logged, per-event failure), it does not silently run as root.
+
+The sensor pins its tamper map under `/sys/fs/bpf/synthaea`; the directory is created
+owned by `synthaea` through tmpfiles and made writable to the unit with
+`ReadWritePaths`. The development-mode unit that `watchdog install` writes when no
+package unit exists keeps `User=root`: it is a manual-install convenience, not the
+shipped deployment, and the packaged unit is the one this decision binds.
+
+This does not move the trust boundary: an adversary with root can still edit the unit.
+What it changes is how much an adversary who only compromises the agent process obtains.
