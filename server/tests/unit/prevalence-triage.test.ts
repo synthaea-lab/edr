@@ -12,8 +12,10 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 import {
   MAX_LOOKUPS,
   describePrevalence,
+  lookedUpKeys,
   getPrevalenceBatch,
   observationsOfDetections,
+  type PrevalenceKind,
   prevalenceKey,
   prunePrevalence,
   triageLines,
@@ -66,6 +68,9 @@ describe("observationsOfDetections", () => {
   });
 });
 
+const allKeys = (obs: { kind: PrevalenceKind; key: string }[]) =>
+  new Set(obs.map((o) => prevalenceKey(o.kind, o.key)));
+
 describe("triageLines", () => {
   it("puts the rarest first, with never-seen ahead of everything", () => {
     const obs = [
@@ -77,7 +82,7 @@ describe("triageLines", () => {
       [prevalenceKey("domain", "common.example"), prev(40)],
       [prevalenceKey("image_path", "/opt/one-host"), prev(1)],
     ]);
-    const { lines } = triageLines(obs, found);
+    const { lines } = triageLines(obs, found, allKeys(obs));
     expect(lines.map((l) => l.text)).toEqual([
       "never seen on this fleet before",
       "seen on 1 host, first 2026-09-01",
@@ -91,14 +96,26 @@ describe("triageLines", () => {
       kind: "domain" as const,
       key: `d${i}.example`,
     }));
-    const { lines, omitted } = triageLines(obs, new Map());
+    const { lines, omitted } = triageLines(obs, new Map(), allKeys(lookedUpKeys(obs)));
     expect(lines).toHaveLength(MAX_LOOKUPS);
     expect(omitted).toBe(5);
   });
 
+  it("counts a later detection's keys as omitted when the case-wide cap never looked them up", () => {
+    const domains = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({ kind: "domain" as const, key: `d${from + i}.example` }));
+    const first = domains(0, MAX_LOOKUPS);
+    const second = domains(MAX_LOOKUPS, 3); // each detection is under the cap on its own
+    const lookedUp = allKeys(lookedUpKeys([...first, ...second]));
+
+    const { lines, omitted } = triageLines(second, new Map(), lookedUp);
+    expect(lines).toEqual([]);
+    expect(omitted).toBe(3);
+  });
+
   it("shortens a long path for display but keeps the full key", () => {
     const long = "/" + "a".repeat(200);
-    const { lines } = triageLines([{ kind: "image_path", key: long }], new Map());
+    const { lines } = triageLines([{ kind: "image_path", key: long }], new Map(), allKeys([{ kind: "image_path", key: long }]));
     expect(lines[0].label.length).toBeLessThan(100);
     expect(lines[0].key).toBe(long);
   });

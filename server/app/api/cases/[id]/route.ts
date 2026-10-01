@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
-import { getPrevalenceBatch, observationsOfDetections, triageLines } from "@/lib/prevalence";
+import {
+  getPrevalenceBatch,
+  lookedUpKeys,
+  observationsOfDetections,
+  prevalenceKey,
+  triageLines,
+} from "@/lib/prevalence";
 
 /**
  * GET /api/cases/[id]
@@ -43,9 +49,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         }
       : null;
 
-    const found = await getPrevalenceBatch(prisma, tenantId, observationsOfDetections(detections));
+    const caseObservations = observationsOfDetections(detections);
+    const found = await getPrevalenceBatch(prisma, tenantId, caseObservations);
+    const lookedUp = new Set(lookedUpKeys(caseObservations).map((o) => prevalenceKey(o.kind, o.key)));
     const prevalence = Object.fromEntries(
-      detections.map((d) => [d.id, triageLines(observationsOfDetections([d]), found)])
+      detections.map((d) => [d.id, triageLines(observationsOfDetections([d]), found, lookedUp)])
     );
 
     return NextResponse.json({ case: caseFields, detections, narrative, prevalence });

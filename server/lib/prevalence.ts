@@ -178,6 +178,17 @@ export function prevalenceKey(kind: PrevalenceKind, key: string): string {
 export const MAX_LOOKUPS = 200;
 
 /**
+ * The observations [`getPrevalenceBatch`] actually looks up: the first
+ * [`MAX_LOOKUPS`] distinct ones. The cap applies to the whole case, so
+ * [`triageLines`] must be told this set rather than apply a cap of its own.
+ */
+export function lookedUpKeys(observations: Observation[]): Observation[] {
+  const wanted = new Map<string, Observation>();
+  for (const o of observations) wanted.set(prevalenceKey(o.kind, o.key), o);
+  return Array.from(wanted.values()).slice(0, MAX_LOOKUPS);
+}
+
+/**
  * Prevalence of many keys at once, for the console. One grouped query, not one
  * per key; keys beyond [`MAX_LOOKUPS`] are not looked up (and so are absent from
  * the result, which a caller must not read as "never seen").
@@ -187,9 +198,7 @@ export async function getPrevalenceBatch(
   tenantId: string,
   observations: Observation[]
 ): Promise<Map<string, Prevalence>> {
-  const wanted = new Map<string, Observation>();
-  for (const o of observations) wanted.set(prevalenceKey(o.kind, o.key), o);
-  const keys = Array.from(wanted.values()).slice(0, MAX_LOOKUPS);
+  const keys = lookedUpKeys(observations);
   const found = new Map<string, Prevalence>();
   if (keys.length === 0) return found;
 
@@ -251,15 +260,17 @@ function shorten(kind: PrevalenceKind, key: string): string {
 /**
  * The triage lines for one detection's observations, rarest first: a key seen on
  * one host (or none) is what a triager needs to see before the ones every host
- * has. Only the first [`MAX_LOOKUPS`] keys were looked up
- * ([`getPrevalenceBatch`]), so only those are rendered; `omitted` counts the rest
- * rather than showing them as "never seen", which they were not checked for.
+ * has. `lookedUp` is the case-wide set [`getPrevalenceBatch`] queried
+ * ([`lookedUpKeys`] of every detection's observations); only keys in it are
+ * rendered, and `omitted` counts the rest rather than showing them as "never
+ * seen", which they were not checked for.
  */
 export function triageLines(
   observations: Observation[],
-  found: Map<string, Prevalence>
+  found: Map<string, Prevalence>,
+  lookedUp: Set<string>
 ): { lines: TriageLine[]; omitted: number } {
-  const shown = observations.slice(0, MAX_LOOKUPS);
+  const shown = observations.filter((o) => lookedUp.has(prevalenceKey(o.kind, o.key)));
   const lines = shown
     .map((o) => ({ o, p: found.get(prevalenceKey(o.kind, o.key)) ?? null }))
     .sort((a, b) => (a.p?.hostCount ?? 0) - (b.p?.hostCount ?? 0))

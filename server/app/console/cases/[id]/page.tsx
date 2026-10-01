@@ -2,7 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { severityColor, statusColor } from "@/lib/case-display";
 import { GenerateNarrativeButton } from "@/components/GenerateNarrativeButton";
-import { getPrevalenceBatch, observationsOfDetections, triageLines } from "@/lib/prevalence";
+import {
+  getPrevalenceBatch,
+  lookedUpKeys,
+  observationsOfDetections,
+  prevalenceKey,
+  triageLines,
+} from "@/lib/prevalence";
 import { redirect, notFound } from "next/navigation";
 
 interface NarrativeCitation {
@@ -49,11 +55,9 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
 
   // "Seen on N hosts, first <date>" for what each detection's event touched
   // (issue #76): one grouped lookup for the whole case, not one per detection.
-  const prevalence = await getPrevalenceBatch(
-    prisma,
-    tenantId,
-    observationsOfDetections(case_.detections)
-  );
+  const caseObservations = observationsOfDetections(case_.detections);
+  const prevalence = await getPrevalenceBatch(prisma, tenantId, caseObservations);
+  const lookedUp = new Set(lookedUpKeys(caseObservations).map((o) => prevalenceKey(o.kind, o.key)));
 
   const citations = (narrative?.citations as unknown as NarrativeCitation[] | null) ?? [];
 
@@ -146,7 +150,11 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
               <p className="mt-1 text-xs text-gray-500">
                 {new Date(detection.timestamp).toLocaleString()}
               </p>
-              <PrevalenceLines observations={observationsOfDetections([detection])} found={prevalence} />
+              <PrevalenceLines
+                observations={observationsOfDetections([detection])}
+                found={prevalence}
+                lookedUp={lookedUp}
+              />
             </div>
           ))}
         </div>
@@ -159,11 +167,13 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
 function PrevalenceLines({
   observations,
   found,
+  lookedUp,
 }: {
   observations: ReturnType<typeof observationsOfDetections>;
   found: Awaited<ReturnType<typeof getPrevalenceBatch>>;
+  lookedUp: Set<string>;
 }) {
-  const { lines, omitted } = triageLines(observations, found);
+  const { lines, omitted } = triageLines(observations, found, lookedUp);
   if (lines.length === 0) return null;
   return (
     <ul className="mt-2 space-y-0.5 text-xs text-gray-600" aria-label="Fleet prevalence">
