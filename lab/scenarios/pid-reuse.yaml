@@ -1,0 +1,20 @@
+name: pid-reuse
+platform: linux
+script: pid-reuse.sh
+simulates: >
+  A process that inherits a real sed's pid after the kernel recycles it, sets its
+  comm to `sed` without exec'ing, and renames 22 files with a `.bak` suffix (T1486,
+  Data Encrypted for Impact). The same rename burst from a real `sed -i.bak` is a
+  legitimate in-place edit, excluded by trusted exec-time path; the recycled pid must
+  not inherit that exclusion (issue #519).
+expected_detections:
+  - technique: "T1486"
+    rule: check_mass_rename_pattern   # crates/rules/src/state.rs - the in-place-edit
+                                       # exclusion must not apply to a recycled pid
+    min_count: 1
+    tolerance: 0
+notes: >
+  Runs as root: it writes /proc/sys/kernel/ns_last_pid so the next fork receives the
+  pid a real sed just left, which makes the recycling deterministic. Default mode
+  "recycled" expects one T1486; mode "real" is the control (a real `sed -i.bak`, no
+  alert) and has no expected detection.
