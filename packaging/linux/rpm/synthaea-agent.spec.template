@@ -1,3 +1,10 @@
+# The binaries are static musl builds checked byte for byte after packaging
+# (build-rpm.sh): no debuginfo extraction, and no brp-strip pass that would
+# rewrite them in the buildroot (Fedora 41: find-debuginfo fails on them, and
+# brp-strip silently re-strips them; #555 review).
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+
 Name:           synthaea-agent
 Version:        %{_version}
 BuildArch:      x86_64
