@@ -50,8 +50,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$AgentExe = (Join-Path $PSScriptRoot "..\target\release\agent.exe"),
-    [string]$OutDir = (Join-Path $PSScriptRoot ("..\target\lab-validation\" + (Get-Date -Format "yyyyMMdd-HHmmss"))),
+    [string]$AgentExe = "",
+    [string]$OutDir = "",
     [int[]]$ProbeCounts = @(0, 2, 6, 7, 8),
     [int]$MarkCount = 10,
     [switch]$SkipOrphans,
@@ -59,6 +59,13 @@ param(
     [switch]$SkipLongPath,
     [switch]$SkipMarkRemoval
 )
+
+# Defaults resolved here, not in param(): Windows PowerShell 5.1 leaves
+# $PSScriptRoot empty while it evaluates param() defaults.
+if (-not $AgentExe) { $AgentExe = Join-Path $PSScriptRoot "..\target\release\agent.exe" }
+if (-not $OutDir) {
+    $OutDir = Join-Path $PSScriptRoot ("..\target\lab-validation\" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+}
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
