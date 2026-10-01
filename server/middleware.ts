@@ -24,6 +24,11 @@ export async function middleware(req: NextRequest) {
     // listed and stay behind the session check.
     /^\/api\/content\/manifest\/[^/]+$/.test(req.nextUrl.pathname) ||
     req.nextUrl.pathname === "/api/content/artifact" ||
+    // Scheduled jobs: the caller is a scheduler with no browser session. Each
+    // handler authenticates itself with `verifyCronRequest` (CRON_SECRET, fails
+    // closed when unset); without this the middleware redirected every cron call
+    // to /login before the handler ran.
+    req.nextUrl.pathname.startsWith("/api/cron/") ||
     req.nextUrl.pathname === "/login" ||
     req.nextUrl.pathname === "/"
   ) {

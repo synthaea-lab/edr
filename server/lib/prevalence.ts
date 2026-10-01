@@ -168,3 +168,160 @@ export async function getPrevalence(
     lastSeen: agg._max.lastSeen,
   };
 }
+
+/** Stable map key for one `(kind, key)`. */
+export function prevalenceKey(kind: PrevalenceKind, key: string): string {
+  return `${kind}\u0000${key}`;
+}
+
+/** Most distinct keys looked up for one page: bounds the query a case with many detections issues. */
+export const MAX_LOOKUPS = 200;
+
+/**
+ * The observations [`getPrevalenceBatch`] actually looks up: the first
+ * [`MAX_LOOKUPS`] distinct ones. The cap applies to the whole case, so
+ * [`triageLines`] must be told this set rather than apply a cap of its own.
+ */
+export function lookedUpKeys(observations: Observation[]): Observation[] {
+  const wanted = new Map<string, Observation>();
+  for (const o of observations) wanted.set(prevalenceKey(o.kind, o.key), o);
+  return Array.from(wanted.values()).slice(0, MAX_LOOKUPS);
+}
+
+/**
+ * Prevalence of many keys at once, for the console. One grouped query, not one
+ * per key; keys beyond [`MAX_LOOKUPS`] are not looked up (and so are absent from
+ * the result, which a caller must not read as "never seen").
+ */
+export async function getPrevalenceBatch(
+  db: Pick<PrismaClient, "prevalenceSighting">,
+  tenantId: string,
+  observations: Observation[]
+): Promise<Map<string, Prevalence>> {
+  const keys = lookedUpKeys(observations);
+  const found = new Map<string, Prevalence>();
+  if (keys.length === 0) return found;
+
+  const rows = await db.prevalenceSighting.groupBy({
+    by: ["kind", "key"],
+    where: { tenantId, OR: keys.map(({ kind, key }) => ({ kind, key })) },
+    _count: { _all: true },
+    _sum: { count: true },
+    _min: { firstSeen: true },
+    _max: { lastSeen: true },
+  });
+  for (const row of rows) {
+    if (!row._min.firstSeen || !row._max.lastSeen) continue;
+    found.set(prevalenceKey(row.kind as PrevalenceKind, row.key), {
+      hostCount: row._count._all,
+      eventCount: row._sum.count ?? 0,
+      firstSeen: row._min.firstSeen,
+      lastSeen: row._max.lastSeen,
+    });
+  }
+  return found;
+}
+
+/** The distinct observations across a set of detections' stored events. */
+export function observationsOfDetections(detections: { event: unknown }[]): Observation[] {
+  const distinct = new Map<string, Observation>();
+  for (const d of detections) {
+    for (const o of extractObservations(d.event)) distinct.set(prevalenceKey(o.kind, o.key), o);
+  }
+  return Array.from(distinct.values());
+}
+
+/**
+ * The triage fact for one key: "seen on N hosts, first <date>". `null` means
+ * this tenant has never seen it, which is the answer a triager most wants, so it
+ * is said outright rather than left blank.
+ */
+export function describePrevalence(p: Prevalence | null): string {
+  if (!p) return "never seen on this fleet before";
+  const hosts = `${p.hostCount} host${p.hostCount === 1 ? "" : "s"}`;
+  return `seen on ${hosts}, first ${p.firstSeen.toISOString().slice(0, 10)}`;
+}
+
+export type TriageLine = { kind: PrevalenceKind; key: string; label: string; text: string };
+
+const KIND_LABEL: Record<PrevalenceKind, string> = {
+  sha256: "hash",
+  image_path: "image",
+  transition: "parent → child",
+  domain: "domain",
+};
+
+/** A long hash or path stays readable; the full value is still in `key`. */
+function shorten(kind: PrevalenceKind, key: string): string {
+  if (kind === "sha256") return `${key.slice(0, 12)}…`;
+  return key.length > 80 ? `${key.slice(0, 77)}…` : key;
+}
+
+/**
+ * The triage lines for one detection's observations, rarest first: a key seen on
+ * one host (or none) is what a triager needs to see before the ones every host
+ * has. `lookedUp` is the case-wide set [`getPrevalenceBatch`] queried
+ * ([`lookedUpKeys`] of every detection's observations); only keys in it are
+ * rendered, and `omitted` counts the rest rather than showing them as "never
+ * seen", which they were not checked for.
+ */
+export function triageLines(
+  observations: Observation[],
+  found: Map<string, Prevalence>,
+  lookedUp: Set<string>
+): { lines: TriageLine[]; omitted: number } {
+  const shown = observations.filter((o) => lookedUp.has(prevalenceKey(o.kind, o.key)));
+  const lines = shown
+    .map((o) => ({ o, p: found.get(prevalenceKey(o.kind, o.key)) ?? null }))
+    .sort((a, b) => (a.p?.hostCount ?? 0) - (b.p?.hostCount ?? 0))
+    .map(({ o, p }) => ({
+      kind: o.kind,
+      key: o.key,
+      label: `${KIND_LABEL[o.kind]} ${shorten(o.kind, o.key)}`,
+      text: describePrevalence(p),
+    }));
+  return { lines, omitted: observations.length - shown.length };
+}
+
+/** Row cap per tenant beyond which the oldest-seen sightings are dropped. */
+export const DEFAULT_MAX_ROWS_PER_TENANT = 5_000_000;
+/** A sighting not renewed for this long is dropped; if it returns it is "first seen" again. */
+export const DEFAULT_RETENTION_DAYS = 180;
+
+export type PruneResult = { expired: number; overCap: number };
+
+/**
+ * Bounds the sightings table. Every uploaded event is counted, and an enrolled
+ * agent chooses its own paths and domains, so without this the table grows with
+ * the number of *distinct* keys anyone can invent. Two rules:
+ *
+ * 1. Age: drop sightings whose `last_seen` is older than `olderThan`.
+ * 2. Size: for a tenant still over `maxRowsPerTenant`, drop the oldest-seen rows
+ *    down to the cap, so one tenant flooding the table cannot starve the rest.
+ */
+export async function prunePrevalence(
+  db: Pick<PrismaClient, "prevalenceSighting" | "$executeRaw">,
+  opts: { olderThan: Date; maxRowsPerTenant: number }
+): Promise<PruneResult> {
+  const expired = (
+    await db.prevalenceSighting.deleteMany({ where: { lastSeen: { lt: opts.olderThan } } })
+  ).count;
+
+  let overCap = 0;
+  const perTenant = await db.prevalenceSighting.groupBy({
+    by: ["tenantId"],
+    _count: { _all: true },
+  });
+  for (const { tenantId, _count } of perTenant) {
+    if (_count._all <= opts.maxRowsPerTenant) continue;
+    // Keep the newest `maxRowsPerTenant`; everything past that offset goes.
+    overCap += await db.$executeRaw`
+      DELETE FROM prevalence_sightings WHERE id IN (
+        SELECT id FROM prevalence_sightings
+        WHERE tenant_id = ${tenantId}
+        ORDER BY last_seen DESC, id
+        OFFSET ${opts.maxRowsPerTenant})`;
+  }
+  return { expired, overCap };
+}
+

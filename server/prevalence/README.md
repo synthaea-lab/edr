@@ -36,13 +36,21 @@ rest of the server (`lib/prevalence.ts`, `app/api/prevalence/route.ts`,
   never rejects the request. See `docs/architecture/control-plane.md` for the contract.
 - **Read:** `GET /api/prevalence?kind=&key=` (session, tenant-scoped) returns
   `seen: false` for an unknown key.
+- **Console:** the case page shows, under each detection, "seen on N hosts, first
+  <date>" for the hash, image path, parent-to-child transition or domain of its event,
+  rarest first ("never seen on this fleet before" leads). One grouped lookup per case,
+  capped at 200 keys; `GET /api/cases/{id}` returns the same lines as `prevalence`.
+- **Retention:** `GET /api/cron/prune-prevalence` (bearer `CRON_SECRET`) drops
+  sightings not renewed for `PREVALENCE_RETENTION_DAYS` (default 180; a binary that
+  returns after that is "first seen" again) and, for a tenant over
+  `PREVALENCE_MAX_ROWS_PER_TENANT` (default 5,000,000), the oldest-seen rows. Every
+  event is counted and an agent chooses its own paths and domains, so without this the
+  table grows with the number of distinct keys anyone can invent. Schedule it daily.
 
-**Known limits:** the bias of the first slice (counters fed only by detections) is
-gone for agents that upload events, but two things remain. Every event is
-counted, so the table grows with the fleet's distinct paths/hashes/domains (keys are
-capped in length, not in number; no retention or eviction yet). And the raw events
-are not kept anywhere: the lake (`server/datalake`) doesn't exist, so prevalence
-cannot be rebuilt from history if the counting rules change.
+**Known limits:** the raw events are not kept anywhere (the lake, `server/datalake`,
+doesn't exist), so prevalence cannot be rebuilt from history if the counting rules
+change. The triage counts include the event that raised the detection, so "seen on 1
+host" means only this host has shown it.
 
-Not done yet: the console triage line, the "first seen on fleet" correlator evidence,
-the rarity feature into per-site recalibration, and opt-in k-anonymous global statistics.
+Open, and waiting on a decision: the correlator evidence, the ML rarity feature and
+opt-in global statistics. ADR-0020 (proposed) lays out the options.

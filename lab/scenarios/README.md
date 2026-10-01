@@ -23,7 +23,9 @@ To migrate from `old/lab` after review:
 | `scheduled-task-persistence.ps1` | `schtasks.exe /Create` a demo task | T1053.005 — asserts the 4698 → `FLAG_PERSISTENCE_TASK_ARTIFACT` → `check_scheduled_task_persistence` end-to-end pipeline |
 | `service-install-persistence.ps1` | `sc.exe create` a demo service (never runs) | T1543.003 — asserts the 7045 → `FLAG_PERSISTENCE_ARTIFACT` → `check_service_install_persistence` end-to-end pipeline |
 | `create-account-persistence.ps1` | `net user /add` a benign local SAM account | T1136.001 — asserts the 4720 → `FLAG_PERSISTENCE_ACCOUNT_ARTIFACT` → `check_account_creation_persistence` end-to-end pipeline (local SAM only; T1136.002 domain accounts are out of scope) |
+| `response.sh` | One process beaconing once a second while a YARA-marked payload is written, run with response on or off (`EXPECT=enforce\|observe`) | `BAYES`, `RESPONSE-KILL`, `RESPONSE-QUARANTINE` (issue #25) — the message says killed/quarantined or observe-only; needs `response-marker.yar` installed under the content dir first. Not yet run on a VM |
 | `ransomware-rename-burst.sh` | Same-pid burst of file renames, each appending a suffix onto its own old name | T1486 — asserts `check_mass_rename_pattern`'s extension-agnostic mass-rename detection (issue #262) |
+| `pid-reuse.sh` | A real `sed` runs, its pid is forced to be recycled (`ns_last_pid`) by a forked child that sets `comm=sed` and renames files with a `.bak` suffix; run as root, `recycled` (default) or `real` (control) | T1486 — asserts the in-place-edit exclusion does not follow a recycled pid (#519); `real` expects no alert |
 
 The four `.ps1` scenarios above are the Windows demo surface — see `../../demo/`
 for the runbook that chains them in the reviewer-facing order.

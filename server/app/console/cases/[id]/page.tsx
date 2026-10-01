@@ -2,6 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { severityColor, statusColor } from "@/lib/case-display";
 import { GenerateNarrativeButton } from "@/components/GenerateNarrativeButton";
+import {
+  getPrevalenceBatch,
+  lookedUpKeys,
+  observationsOfDetections,
+  prevalenceKey,
+  triageLines,
+} from "@/lib/prevalence";
 import { redirect, notFound } from "next/navigation";
 
 interface NarrativeCitation {
@@ -45,6 +52,12 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
   const stale = narrative
     ? case_.detections.some((d) => d.updatedAt > narrative.generatedAt)
     : false;
+
+  // "Seen on N hosts, first <date>" for what each detection's event touched
+  // (issue #76): one grouped lookup for the whole case, not one per detection.
+  const caseObservations = observationsOfDetections(case_.detections);
+  const prevalence = await getPrevalenceBatch(prisma, tenantId, caseObservations);
+  const lookedUp = new Set(lookedUpKeys(caseObservations).map((o) => prevalenceKey(o.kind, o.key)));
 
   const citations = (narrative?.citations as unknown as NarrativeCitation[] | null) ?? [];
 
@@ -137,10 +150,39 @@ export default async function CaseDetailPage({ params }: { params: { id: string 
               <p className="mt-1 text-xs text-gray-500">
                 {new Date(detection.timestamp).toLocaleString()}
               </p>
+              <PrevalenceLines
+                observations={observationsOfDetections([detection])}
+                found={prevalence}
+                lookedUp={lookedUp}
+              />
             </div>
           ))}
         </div>
       </section>
     </div>
+  );
+}
+
+/** The triage lines under one detection; renders nothing for an event with no hash, path, transition or domain. */
+function PrevalenceLines({
+  observations,
+  found,
+  lookedUp,
+}: {
+  observations: ReturnType<typeof observationsOfDetections>;
+  found: Awaited<ReturnType<typeof getPrevalenceBatch>>;
+  lookedUp: Set<string>;
+}) {
+  const { lines, omitted } = triageLines(observations, found, lookedUp);
+  if (lines.length === 0) return null;
+  return (
+    <ul className="mt-2 space-y-0.5 text-xs text-gray-600" aria-label="Fleet prevalence">
+      {lines.map((line) => (
+        <li key={`${line.kind}-${line.key}`} title={line.key}>
+          <span className="font-mono text-gray-800">{line.label}</span>: {line.text}
+        </li>
+      ))}
+      {omitted > 0 && <li className="text-gray-400">+{omitted} more not shown</li>}
+    </ul>
   );
 }
