@@ -51,6 +51,9 @@ describe("middleware identity headers", () => {
       "/api/content/artifact",
       "/api/v1/ingest/events",
       "/api/v1/ingest/heartbeat",
+      "/api/cron/detect-silent-agents",
+      "/api/cron/group-detections",
+      "/api/cron/check-ring-health",
     ]) {
       const res = await middleware(spoofedRequest(path));
       const names = forwardedNames(res);
@@ -66,6 +69,16 @@ describe("middleware identity headers", () => {
     // itself publishes releases and needs a session.
     getSession.mockResolvedValue(null);
     for (const path of ["/api/release", "/api/release/manifest/extra"]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
+  });
+
+  it("does not treat a look-alike of the cron prefix as a cron route", async () => {
+    // Only `/api/cron/<job>` is public; a sibling that merely starts the same
+    // way is an ordinary session-protected route.
+    getSession.mockResolvedValue(null);
+    for (const path of ["/api/cron", "/api/cronjobs", "/api/crontab/x"]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }
