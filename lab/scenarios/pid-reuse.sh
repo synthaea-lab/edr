@@ -80,6 +80,11 @@ for attempt in range(50):
         f.write(str(pid - 1))
     child = os.fork()
     if child == 0:
+        # Touch nothing unless this child really got the recycled pid: otherwise it would
+        # consume the files (every retry then fails) and, with comm=sed on a pid that was
+        # never recycled, raise T1486 anyway and make a failed attempt look like a pass.
+        if os.getpid() != pid:
+            os._exit(1)
         # The recycled process: comm=sed, no exec, renames its files with a .bak suffix.
         libc = ctypes.CDLL(None)
         libc.prctl(PR_SET_NAME, b"sed", 0, 0, 0)
