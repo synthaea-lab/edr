@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use ferrisetw::trace::UserTrace;
+use ferrisetw::trace::{TraceTrait, UserTrace};
 use schema::{
     EventMeta,
     sensor::{Capabilities, EventSink, Sensor, SensorError},
@@ -286,8 +286,10 @@ fn liveness_watch(
     state: &SharedState,
     canary_file: &std::path::Path,
     session: &str,
+    trace: &UserTrace,
 ) -> Result<(), SensorError> {
     let mut last_seen = state.events_seen.load(Ordering::Relaxed);
+    let mut raw_at_last_event = trace.events_handled();
     let mut silent_intervals = 0u32;
     while !stop.load(Ordering::SeqCst) {
         let _ = std::fs::write(canary_file, b"synthaea liveness canary");
@@ -297,9 +299,13 @@ fn liveness_watch(
             silent_intervals += 1;
             // 15 × 2s = 30s with zero events despite the canary writes.
             if silent_intervals >= 15 {
+                // ferrisetw counts each raw callback before provider dispatch.
+                // Compare that count with our matched event IDs to distinguish
+                // a silent consumer from callbacks that never reach our filters.
+                let raw_callbacks = trace.events_handled().saturating_sub(raw_at_last_event);
                 return Err(format!(
                     "sensor produced no events for 30s despite liveness canary \
-                     writes: {}",
+                     writes (raw ETW callbacks during silence: {raw_callbacks}): {}",
                     silent_session_diagnosis(session)
                 )
                 .into());
@@ -307,6 +313,7 @@ fn liveness_watch(
         } else {
             silent_intervals = 0;
             last_seen = seen;
+            raw_at_last_event = trace.events_handled();
         }
     }
     Ok(())
@@ -404,7 +411,7 @@ impl Sensor for WindowsSensor {
         )
         .map_err(|e| -> SensorError { format!("ETW startup error: {e:?}").into() })?;
 
-        let result = liveness_watch(&self.stop, &state, &canary_file, &session);
+        let result = liveness_watch(&self.stop, &state, &canary_file, &session, &trace);
 
         let _ = trace.stop();
         let _ = std::fs::remove_file(&canary_file);
