@@ -116,9 +116,13 @@ export async function verifySignature(
     const signatureBytes = hexToBytes(manifest.signature);
 
     // Verify using Web Crypto API (Ed25519)
+    // Copy into a fresh ArrayBuffer-backed array: the caller's `Uint8Array` may be
+    // typed over `ArrayBufferLike` (it could be a SharedArrayBuffer view), which
+    // TypeScript's DOM lib refuses as a `BufferSource` (#602). Runtime-wise
+    // Web Crypto accepts either; this only satisfies the checker.
     const key = await crypto.subtle.importKey(
       "raw",
-      publicKey,
+      new Uint8Array(publicKey),
       { name: "Ed25519" },
       false,
       ["verify"]
@@ -153,7 +157,10 @@ export function isNewerRelease(
 /**
  * Convert hex string to Uint8Array
  */
-function hexToBytes(hex: string): Uint8Array {
+// No explicit return type on purpose: the inferred `Uint8Array<ArrayBuffer>` is what
+// `crypto.subtle.verify` accepts as a `BufferSource` (#602); a bare `Uint8Array`
+// annotation widens it to `ArrayBufferLike` and breaks `next build`.
+function hexToBytes(hex: string) {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
