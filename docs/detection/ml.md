@@ -136,9 +136,12 @@ One incarnation is one `(pid, process_generation)`: a recycled pid's earlier lif
 feeds the next one's correlation counts or lineage. `tests/test_train_behavior.py` proves
 the pipeline mechanically on synthetic captures and says nothing about detection quality.
 
-**Not shippable yet:** `crates/ml` has no combined scorer that builds the same 23-feature
-vector on-device (it must use `EventBus::events_for_pid(pid, generation)` for the exec
-lookup), so a T1 model can be trained and evaluated here but not loaded by the agent.
+**Not shippable yet:** the Rust half of the 23-feature vector exists
+(`ml::features::t1::extract_features(bus, pid, generation)`, pinned against Python by
+`ml/tests/fixtures/t1_golden.jsonl`, checked from `crates/ml/tests/t1_golden.rs` and
+`ml/tests/test_t1_parity.py`), but there is no T1 scorer yet: nothing loads a T1 ONNX model,
+applies its conformal threshold and feature bounds, and feeds the result to the agent.
+Until that exists a T1 model can be trained and evaluated here but not run on-device.
 
 **A caveat for evaluation:** an Isolation Forest ranks a value beyond the training range
 no more anomalous than the range edge, so on its own it will not flag a feature value it
