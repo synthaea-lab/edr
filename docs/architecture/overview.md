@@ -70,7 +70,7 @@ waits on the network, ever.
 
 **Health (control plane, agent → server):** `schema::HealthBeacon` — sensor
 silence status, spool depth, shed counters — emitted on its own cadence and
-POSTed to `/api/v1/ingest/heartbeat`, deliberately *not* an `Event` variant so
+POSTed to `/api/ingest/heartbeat` (contract in `control-plane.md`), deliberately *not* an `Event` variant so
 control-plane traffic never pollutes the telemetry pipeline. An agent that
 stops beaconing is as suspicious as one that stops sending events.
 

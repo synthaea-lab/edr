@@ -36,7 +36,9 @@ from synthaea_ml.features import correlation, lineage
 FEATURE_NAMES = correlation.FEATURE_NAMES + lineage.FEATURE_NAMES
 
 
-def extract_combined_features(events: list[dict], pid: int) -> list[float]:
+def extract_combined_features(
+    events: list[dict], pid: int, generation: int | None = None
+) -> list[float]:
     """Extract combined correlation + lineage features.
 
     Args:
@@ -48,15 +50,23 @@ def extract_combined_features(events: list[dict], pid: int) -> list[float]:
             {"type": "fileopen", "pid": 1234, "ts_ns": ..., "path": "...", "flags": ...}
 
         pid: Target PID to extract features for
+        generation: Process incarnation of `pid` (#590, #617). Both blocks filter by
+            `(pid, generation)` the same way, so a recycled pid's previous life feeds
+            neither the correlation counts nor the lineage (the parent of the *old*
+            process must not be scored as the new one's). `None` keeps pid-only.
 
     Returns:
         List of 14 floats: [8 correlation features] + [6 lineage features]
     """
-    # Extract correlation features (8) - filters events by pid internally
-    corr_features = correlation.extract_features(events, pid)
+    # Extract correlation features (8) - filters events by (pid, generation) internally
+    corr_features = correlation.extract_features(events, pid, generation)
 
-    # Extract lineage features (6) - needs most recent exec event for this pid
-    pid_execs = [e for e in events if e.get("type") == "exec" and e.get("pid") == pid]
+    # Extract lineage features (6) - needs most recent exec event for this incarnation
+    pid_execs = [
+        e
+        for e in correlation.events_for_pid(events, pid, generation)
+        if e.get("type") == "exec"
+    ]
     if pid_execs:
         # Use most recent exec event (highest ts_ns)
         exec_event = max(pid_execs, key=lambda e: e.get("ts_ns", 0))
@@ -70,17 +80,20 @@ def extract_combined_features(events: list[dict], pid: int) -> list[float]:
     return corr_features + lineage_features
 
 
-def extract_combined_features_dict(events: list[dict], pid: int) -> dict[str, float]:
+def extract_combined_features_dict(
+    events: list[dict], pid: int, generation: int | None = None
+) -> dict[str, float]:
     """Extract combined features as a named dict (for debugging/introspection).
 
     Args:
         events: List of events in correlation window
         pid: Target PID to extract features for
+        generation: Process incarnation of `pid`; see `extract_combined_features`.
 
     Returns:
         Dict mapping feature name -> value
     """
-    features = extract_combined_features(events, pid)
+    features = extract_combined_features(events, pid, generation)
     return dict(zip(FEATURE_NAMES, features, strict=True))
 
 

@@ -3,6 +3,7 @@
 Validates the evaluation flow and RobustnessCard generation.
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -154,14 +155,203 @@ def test_run_robustness_evaluation_missing_scenario() -> None:
         )
 
 
-def test_run_robustness_evaluation_t1_not_implemented(dummy_model, dummy_scenario_yaml) -> None:
-    """T1 tier raises NotImplementedError (deferred until combined features scoring)."""
-    with pytest.raises(NotImplementedError, match="T1"):
+class _LineageModel:
+    """A stand-in 23-feature T1 model: anomalous exactly when the parent runs from a
+    suspicious path (the last lineage feature). Deterministic, so a test can say which
+    mutation moves the score and why."""
+
+    n_features_in_ = 23
+
+    def decision_function(self, rows):
+        return np.array([-0.5 if row[-1] == 1.0 else 0.5 for row in rows])
+
+
+def test_t1_runs_the_lineage_mutators_and_scores_the_lineage_fields(dummy_scenario_yaml) -> None:
+    """#617: the T1 tier used to raise NotImplementedError because the scorer saw only
+    the command line, so a lineage mutation could never move the score."""
+    card = run_robustness_evaluation(
+        model=_LineageModel(),
+        scenario_yaml=dummy_scenario_yaml,
+        tier="T1",
+    )
+    classes = {r.mutation_class for r in card.mutation_results}
+    assert {"fake_parent_name", "parent_path", "remove_lineage"} <= classes
+    # The model's only signal is the parent path, so mutating the path must move it:
+    # system paths score benign, which is an escape from an originally detected sample.
+    heavy_path = [
+        r
+        for r in card.mutation_results
+        if r.mutation_class == "parent_path" and r.intensity == "heavy"
+    ]
+    assert heavy_path
+    assert all(r.escaped and r.score_delta > 0 for r in heavy_path)
+    assert card.escape_rate > 0.0
+
+
+def test_t1_lineage_removal_moves_the_score_too(dummy_scenario_yaml) -> None:
+    card = run_robustness_evaluation(
+        model=_LineageModel(),
+        scenario_yaml=dummy_scenario_yaml,
+        tier="T1",
+    )
+    removed = [
+        r
+        for r in card.mutation_results
+        if r.mutation_class == "remove_lineage" and r.intensity in ("medium", "heavy")
+    ]
+    assert removed
+    assert all(r.escaped for r in removed), "no parent path means no suspicious path"
+
+
+def test_t1_refuses_a_model_that_cannot_see_the_lineage(dummy_model, dummy_scenario_yaml) -> None:
+    """A 9-feature T0 model scored on the T1 tier would silently ignore every lineage
+    mutation and report a flattering escape rate."""
+    with pytest.raises(ValueError, match="23 features"):
         run_robustness_evaluation(
             model=dummy_model,
             scenario_yaml=dummy_scenario_yaml,
             tier="T1",
         )
+
+
+def test_t0_never_scores_the_lineage(dummy_model, dummy_scenario_yaml) -> None:
+    """T0 output is unchanged by the T1 work: no lineage mutators, no lineage fields."""
+    card = run_robustness_evaluation(
+        model=dummy_model,
+        scenario_yaml=dummy_scenario_yaml,
+        tier="T0",
+    )
+    classes = {r.mutation_class for r in card.mutation_results}
+    assert not classes & {"fake_parent_name", "parent_path", "remove_lineage"}
+    assert "parent_comm" not in _create_synthetic_event_for_detection("T1059")
+
+
+def test_t1_synthetic_events_carry_the_lineage_the_technique_arrives_with() -> None:
+    event = _create_synthetic_event_for_detection("T1059", tier="T1")
+    assert event["parent_comm"] == "nginx"
+    assert event["parent_image_path"] == "/usr/sbin/nginx"
+
+
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    path.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+
+def test_t1_loader_keeps_lineage_and_computes_correlation_context(tmp_path: Path) -> None:
+    """The source loader used to keep only argv/cmdline, so real captures lost the
+    parent fields before they could be scored or mutated."""
+    src = tmp_path / "events.jsonl"
+    _write_jsonl(
+        src,
+        [
+            {
+                "type": "exec",
+                "pid": 7,
+                "ts_ns": 1_000_000_000,
+                "argv": ["sh"],
+                "parent_comm": "nginx",
+                "parent_image_path": "/usr/sbin/nginx",
+            },
+            {
+                "type": "connect",
+                "pid": 7,
+                "ts_ns": 3_000_000_000,
+                "daddr_v4": [10, 0, 0, 1],
+                "dport": 4444,
+            },
+        ],
+    )
+    plain = _load_events_from_source(src)
+    assert plain[0]["parent_comm"] == "nginx"
+    assert "correlation_features" not in plain[0]
+
+    with_context = _load_events_from_source(src, with_context=True)
+    spawn, connect, *_ = with_context[0]["correlation_features"]
+    assert (spawn, connect) == (1.0, 1.0)
+
+
+def test_t1_loader_keeps_a_recycled_pids_earlier_life_out_of_the_context(tmp_path: Path) -> None:
+    """#590/#617: the correlation context of a pid is filtered by its incarnation."""
+    src = tmp_path / "events.jsonl"
+    _write_jsonl(
+        src,
+        [
+            {"type": "exec", "pid": 7, "process_generation": 1, "ts_ns": 1, "argv": ["a"]},
+            {
+                "type": "connect",
+                "pid": 7,
+                "process_generation": 1,
+                "ts_ns": 2,
+                "daddr_v4": [10, 0, 0, 1],
+                "dport": 80,
+            },
+            {"type": "exec", "pid": 7, "process_generation": 2, "ts_ns": 3, "argv": ["b"]},
+        ],
+    )
+    events = _load_events_from_source(src, with_context=True)
+    second_life = next(e for e in events if e["process_generation"] == 2)
+    assert second_life["correlation_features"][1] == 0.0, "the old life's connect must not leak"
+
+
+def _wire_exec(pid: int, generation: int | None, ts: int, **fields) -> dict:
+    """One exec event the way the agent's events.jsonl serializes it: identity nested
+    under `meta`, lineage beside the command line."""
+    meta = {"pid": pid, "ppid": 1, "timestamp_ns": ts, "comm": "sh"}
+    if generation is not None:
+        meta["process_generation"] = generation
+    return {"type": "exec", "meta": meta, **fields}
+
+
+def test_a_real_agent_capture_carries_lineage_and_incarnation_into_the_t1_tier(
+    tmp_path: Path,
+) -> None:
+    """#617: the wire-to-flat normalization used to drop `process_generation` and the
+    parent fields, so a real capture could never reach the T1 tier with its lineage."""
+    src = tmp_path / "events.jsonl"
+    _write_jsonl(
+        src,
+        [
+            _wire_exec(
+                7,
+                1,
+                1_000_000_000,
+                argv=["sh", "-c", "id"],
+                image_path="/bin/sh",
+                parent_comm="nginx",
+                parent_image_path="/usr/sbin/nginx",
+            ),
+            {
+                "type": "connect",
+                "meta": {"pid": 7, "ppid": 1, "timestamp_ns": 2_000_000_000, "comm": "sh",
+                         "process_generation": 1},
+                "daddr": "10.0.0.1",
+                "dport": 4444,
+            },
+            _wire_exec(7, 2, 3_000_000_000, argv=["ls"], parent_comm="bash"),
+        ],
+    )
+    events = _load_events_from_source(src, with_context=True)
+    first = next(e for e in events if e["process_generation"] == 1)
+    assert first["parent_comm"] == "nginx"
+    assert first["parent_image_path"] == "/usr/sbin/nginx"
+    assert first["argv"] == ["sh", "-c", "id"]
+    assert first["correlation_features"][1] == 1.0, "the first life connected out"
+    second = next(e for e in events if e["process_generation"] == 2)
+    assert second["correlation_features"][1] == 0.0, "the second life did not"
+
+
+def test_a_wire_capture_without_lineage_flattens_as_it_always_did() -> None:
+    from synthaea_ml.data.aggregate_correlation import flatten_wire_event
+
+    flat = flatten_wire_event(
+        {"type": "connect", "meta": {"pid": 3, "timestamp_ns": 9}, "daddr": "1.2.3.4", "dport": 80}
+    )
+    assert flat == {
+        "type": "connect",
+        "pid": 3,
+        "ts_ns": 9,
+        "daddr_v4": ["1.2.3.4"],
+        "dport": 80,
+    }
 
 
 def test_run_robustness_evaluation_t2_not_implemented(dummy_model, dummy_scenario_yaml) -> None:

@@ -41,7 +41,7 @@ thread exists to serve it:
 | --- | --- | --- |
 | sensor drain (per sensor) | in-memory engines: rules, sigma, correlator dispatch | **no** |
 | uprobes drain (opt-in) | TLS/readline capture: budget + allowlist + redaction, then the same sink | **no** |
-| `enrich` worker | SHA-256 + signature (budgeted), `events.jsonl` append, spool append | yes |
+| `enrich` worker | SHA-256 + signature (budgeted), `--events` file append (when given), spool append | yes |
 | `yara-scan` worker | budgeted content scans, quarantine (#25) | yes |
 | `transport-upload` | spool drain → batched POST, backoff | yes |
 | heartbeat writer | progress-counter file the watchdog polls | yes |
@@ -67,12 +67,12 @@ Response (#25) is injected, not built in: `enable_response` hands the sink a
 policy plus an OS kill callback. A platform that never calls it is
 indistinguishable from policy-disabled — observe-only either way.
 
-## Files on disk (all derived from `--alerts`, no separate flags)
+## Files on disk (derived from `--alerts`; the raw event log is the one opt-in flag)
 
 | Path | What |
 | --- | --- |
 | `alerts.ndjson` | one alert per line (rules/sigma/yara/correlation/response) |
-| `events.jsonl` | every normalized event, enriched (raw capture for ML/lab) |
+| `--events <path>` | every normalized event, enriched (raw capture for ML/lab). Off unless the flag is given: the file grows without bound, so the packaged service never writes it (#559) |
 | `<alerts>/../heartbeat` | progress counter for the watchdog (#102) |
 | `<alerts>/../quarantine/` | quarantined payloads (#25) |
 | `<alerts>/../spool/` | store-and-forward segments awaiting upload (`--server`) |
