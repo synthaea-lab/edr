@@ -83,6 +83,10 @@ model Detection {
   timestamp DateTime
   technique String // MITRE ATT&CK technique (e.g., T1059.001)
   severity  String // low/medium/high/critical
+  // Optional for older agents. A durable uploader reuses the same key across
+  // retries; uniqueness is scoped to its mTLS-authenticated agent.
+  ingestId          String? @map("ingest_id")
+  ingestPayloadHash String? @map("ingest_payload_hash")
 
   // Event data (JSON) - normalized schema::Event
   event Json
@@ -110,6 +114,7 @@ model Detection {
   @@index([agentId, timestamp])
   @@index([technique])
   @@index([caseId])
+  @@unique([agentId, ingestId])
   @@map("detections")
 }
 
