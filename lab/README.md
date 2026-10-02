@@ -16,6 +16,7 @@ welcome as siblings of `vagrant/` reusing the same `provisioning/` scripts.
 | `vagrant-hyperv/` | Vagrant harness (Hyper-V on Windows; Debian-family x86_64 rows) + `RUNBOOK-155.md` |
 | `scenarios/` | Scripted attack scenarios run against a live agent in any harness |
 | `validate-155.sh` | In-VM assertion script for PR #155: build + verifier + argv (#152) + lineage (#53) |
+| `driver/` | Minifilter test-signing loop (ADR-0012): test certificate, VirtualBox test VM, signing, `fltmc` load/unload check |
 | `lint.sh` | In-VM local lint gate — same checks as CI, run when sparing the CI budget |
 | `diag.sh` | In-VM eBPF toolchain diagnostic (bpf-linker / nightly / rust-src / LLVM major) |
 
