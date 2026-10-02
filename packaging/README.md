@@ -7,7 +7,7 @@ Subfolders are created when work on a platform starts.
 | --- | --- | --- |
 | `windows/` | MSI (fleet deploy via GPO/Intune), signed binaries (signing not yet done) | SCM service (watchdog self-registers `SynthaEDR` via `install`/`uninstall`, invoked as MSI custom actions — see `windows/README.md`) |
 | `macos/` | notarized .pkg, app bundle for the UI | launchd daemons, system-extension approval flow (ES + network entitlements) |
-| `linux/` | .deb and .rpm, static musl build option | systemd units (agent + watchdog), sysusers/tmpfiles |
+| `linux/` | .deb and .rpm from static musl binaries | systemd units (agent + watchdog), sysusers/tmpfiles |
 
 `windows/` (#37) is the first subfolder with real content: `Product.wxs` (WiX v3),
 `build.ps1`, and its own `README.md` with install/build/test steps. Build-tested

@@ -1,5 +1,13 @@
+# The binaries are static musl builds checked byte for byte after packaging
+# (build-rpm.sh): no debuginfo extraction, and no brp-strip pass that would
+# rewrite them in the buildroot (Fedora 41: find-debuginfo fails on them, and
+# brp-strip silently re-strips them; #555 review).
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+
 Name:           synthaea-agent
-Version:        0.1.0
+Version:        %{_version}
+BuildArch:      x86_64
 Release:        1%{?dist}
 Summary:        Synthaea EDR Agent - Endpoint detection and response
 
@@ -7,7 +15,7 @@ License:        Apache-2.0
 URL:            https://github.com/synthaea-lab/edr
 Source0:        synthaea-agent-%{version}.tar.gz
 
-BuildRequires:  rust >= 1.70, cargo, systemd-rpm-macros
+BuildRequires:  systemd-rpm-macros
 Requires:       systemd
 Requires(post): systemd
 # semanage: the file-context rules below (bin_t on the binaries), see %post
@@ -23,16 +31,13 @@ ML-based anomaly detection, and response capabilities.
 %setup -q
 
 %build
-# --exclude needs --workspace. Honour CARGO_TARGET_DIR (a small build host may keep
-# its target directory elsewhere); %install reads the same variable.
-cargo build --release --workspace --bins --exclude sensor-linux-ebpf
+# Binaries were built and checked on Alpine before creating the source archive.
 
 %install
 # Binaries to bootstrap directory
-T="${CARGO_TARGET_DIR:-target}/release"
-install -D -m 0755 "$T/agent" %{buildroot}/var/lib/synthaea/bootstrap/agent
-install -D -m 0755 "$T/watchdog" %{buildroot}/var/lib/synthaea/bootstrap/watchdog
-install -D -m 0755 "$T/cli" %{buildroot}/var/lib/synthaea/bootstrap/cli
+install -D -m 0755 target/x86_64-unknown-linux-musl/release/agent %{buildroot}/var/lib/synthaea/bootstrap/agent
+install -D -m 0755 target/x86_64-unknown-linux-musl/release/watchdog %{buildroot}/var/lib/synthaea/bootstrap/watchdog
+install -D -m 0755 target/x86_64-unknown-linux-musl/release/cli %{buildroot}/var/lib/synthaea/bootstrap/cli
 
 # systemd integration
 install -D -m 0644 packaging/linux/systemd/synthaea-agent.service \
