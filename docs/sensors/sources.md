@@ -71,7 +71,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 
 | Source | Mechanism | Cost & privilege (as observed) |
 | --- | --- | --- |
-| **eBPF** | tracepoints, uprobes, BPF-LSM hooks — ring buffers, in-kernel filters | Low overhead. Root or `CAP_BPF`+`CAP_PERFMON`; 5.10+ practically (CO-RE), LSM 5.7+. Capability probed at startup, never a hardcoded version |
+| **eBPF** | raw tracepoints for scheduler/syscalls, uprobes, BPF-LSM hooks — ring buffers, in-kernel filters | Low overhead. Root or `CAP_BPF`+`CAP_PERFMON`; raw tracepoints avoid `perf_event_open` and work with `perf_event_paranoid=3`. 5.10+ practically (CO-RE), LSM 5.7+. Capability probed at startup, never a hardcoded version |
 | **netlink** | `sock_diag`, conntrack, proc connector, `NETLINK_AUDIT` multicast | Low (10s polls). `sock_diag` confirmed **unprivileged** empirically; proc connector root-only (`EPERM`); audit needs `CAP_AUDIT_READ`. Audit is the designated eBPF fallback — degraded, honest (`parent_lineage: false`) |
 | **journald** | `journalctl -f -o json` subprocess tail, allowlist-first | Medium (subprocess + JSON per line). Root in practice — journald's per-unit read ACL blocks unprivileged auth reads (empirical) |
 | **/proc, /sys** | event-triggered reads + startup seeding — never a /proc-wide poll loop | Low; mostly unprivileged |
