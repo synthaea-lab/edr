@@ -50,6 +50,8 @@ SCHEMA_VERSION = 1
 
 MANIFEST_FILENAME = "manifest.json"
 DEFAULT_BASELINE_FILENAME = "baseline.jsonl"
+BEHAVIOR_CAPTURE_FILENAME = "events.jsonl"
+"""The samples file of a T1 behavior dataset: a raw agent capture (#617)."""
 
 _HOST_ID_LEN = 12
 """Length in hex chars of the truncated hostname hash. 12 chars = 48 bits — enough
