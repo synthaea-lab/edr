@@ -51,6 +51,32 @@ Constraints that keep the loop safe:
 - The evasion-cost harness (above) runs against site models too — both gates apply to
   every registry entry, global or per-site.
 
+### The rarity feature (Python side, #640)
+
+ADR-0020 (proposed) defines the fleet-derived feature a site model can use: whether the executed
+image's hash is on the tenant's **common set** (seen on at least K hosts), as a small ordinal
+rather than a count, because the device can only compute what a pushed snapshot lets it.
+`ml/synthaea_ml/features/rarity.py` is two numbers: `rarity_known` (a snapshot exists, covers
+enough hosts, and the event carries a hash; a fleet that just enrolled would otherwise look all
+rare) and `image_in_common_set`.
+
+Training it on today's counters would let the model learn from the future, so the values are
+**point in time**: `synthaea_ml/data/common_set.py` replays a site corpus in time order and gives
+each event the snapshot that would have been in force on the device (published every 24 h by
+default; an event sees the last boundary, never anything at or after its own time). A corpus that
+carries agent id, time and image hash is enough; the telemetry lake is not needed for this path.
+
+`python -m synthaea_ml.training.train_site_rarity` trains the 9-feature cmdline baseline and the
+11-feature candidate on the same **time-ordered** split (train, calibrate to the FP budget, test),
+and records each model's false-positive rate on the untouched test slice in `model_record.json`.
+Only the false-positive side is measured (the corpus is benign); the global-model-floor check of
+`train_site_model.py` still has to pass before a site model leaves the lab.
+
+**Not shippable:** there is no Rust mirror yet. Nothing agent-side is written until ADR-0020 is
+accepted, so the agent cannot load an 11-feature model; the mirror must take the same two inputs
+(a membership test and the "covers enough hosts" flag) and be pinned to the Python module by a
+golden fixture.
+
 ## Scores that know when they don't know
 
 A score is only evidence if its error rate is known. Two mechanisms, both in
