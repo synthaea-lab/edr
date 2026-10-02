@@ -55,6 +55,40 @@ Every outcome lands in the agent's alert log (`--alerts`, default
   chance to catch the signal. The pid is the one on the event that raised the
   verdict; a pid recycled between the event and the signal is a known, narrow window.
 
+## What the agent reads on other users' behalf
+
+With the packaged unit the agent can read any file on the host (`CAP_DAC_READ_SEARCH`,
+`ProtectHome=read-only`), and hashes or scans paths that processes of other users touch,
+including under `/home` and `/root`. Two consequences for a deployment with data-handling
+constraints:
+
+- A YARA scan is done only when the user whose process named the path could read the file
+  themselves, so one user cannot make the agent read another user's files.
+- The *result* of a scan or a hash (a rule name, a SHA-256) and the path leave the host
+  with the detection, for files in users' home directories too. If hashes of user files
+  must stay on the host, keep `ProtectHome=true` in a drop-in; payloads dropped in
+  `/home` are then not scanned.
+
+## Quarantine from the packaged unit
+
+The packaged systemd unit lets the agent read and hash anything on the host, including
+`/tmp`, `/var/tmp` and `/home` (read-only), but it deliberately cannot move a file out of
+another user's directory: that needs `CAP_DAC_OVERRIDE`, `CAP_FOWNER` and writable
+source directories, which is close to running as root (ADR-0014, amendment for #594).
+With `--enable-quarantine` and the shipped unit, quarantine therefore fails with a logged
+`failed to quarantine ...` for such files, and the payload is left in place.
+
+A host that accepts that trade can opt in with a drop-in
+(`systemctl edit synthaea-agent`):
+
+```ini
+[Service]
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
+ProtectHome=no
+ReadWritePaths=/tmp /var/tmp /home
+```
+
 ## Quarantine layout and reversal
 
 The quarantine directory is `quarantine/` next to the alert log (`--alerts`), no
