@@ -47,7 +47,7 @@ pending (the coverage packs #376–#381 — see
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
 | **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL · 📋 #285 RDP | ✅ ES + log |
 | **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · 📋 #266 setuid | 🟡* UAC content | ✅ sudo · 📋 #356 native |
-| **Credential-attack shadow**<br><sub>TA0006 Cred Access</sub> | 🟡* shadow-file reads | 📋 #364 Kerberos/NTLM/LDAP | 🟡* keychain reads |
+| **Credential-attack shadow**<br><sub>TA0006 Cred Access</sub> | 🟡* shadow-file reads | ✅ LDAP recon (roasting targets, sweeps) · 📋 #364 NTLM | 🟡* keychain reads |
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
 | **Services & autostart**<br><sub>TA0003 T1543/T1547</sub> | ✅ journald + rules | ✅ WEL 7045 + ETW registry | ✅ ES BTM |
 | **Scheduled execution**<br><sub>TA0002/TA0003 T1053</sub> | ✅ cron/systemd paths | ✅ WEL 4698 · 4702 | ✅ cron/launchd paths |
@@ -149,7 +149,9 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Scripts & runtimes** | ETW · DotNETRuntime | **dynamic (in-memory) assembly loads only** (EID 154, `flags & 0x2`) — file-backed dropped at the sensor | ✅ used | T1620, T1055 | #97 |
 | **Memory & injection** | driver · ObCallbacks+TI-ETW | handle access to LSASS; injection telemetry | 📋 planned | T1003.001, T1055 | #137 |
 | **Identity & privilege** | WEL · Security | logons 4624/4625/4648/4672 → `Auth` | ✅ used | T1078, T1110 | #94 |
-| **Identity & privilege** | ETW · Kerberos/NTLM/LDAP-Client | client-side ticket requests (RC4-etype shadow), NTLM validation, LDAP recon bursts — DC-side 4768/4769 stay server scope, honestly | 📋 planned | T1558, AD recon | #364 |
+| **Identity & privilege** | ETW · LDAP-Client | every LDAP search a process sends (EID 30: filter, base, scope, attributes, pid; logged when the request is sent, even if no server answers) → `LdapSearchEvent`. Rules: roasting-target searches (SPN on user accounts, no pre-auth), `adminCount=1`, delegation, trusts, LAPS/gMSA password attributes, and ≥20 distinct searches in 60 s from one non-service process | ✅ used | T1558.003/.004, T1087.002, T1482, T1552 | #364 |
+| **Identity & privilege** | ETW · Security-Kerberos (client) | **no per-ticket event**: the client provider logs errors and admin events only, so an RC4 ticket request is not visible on the endpoint (DC-side 4769). Roasting is caught by its LDAP target search instead | ❌ not available | T1558 | #364 |
+| **Identity & privilege** | NTLM Operational (4020-4027, Win11 24H2+) | outgoing/incoming NTLM with process, target and version: downgrade and relay-victim signals; needs NTLM auditing enabled | 📋 planned | T1557, T1550.002 | #364 |
 | **Identity & privilege** | WEL · TerminalServices | RDP session lifecycle | 📋 planned | T1021.001 | #285 |
 | **Persistence & autostart** | WEL · System+Security | service install 7045, scheduled task 4698 + update 4702 (task hijack, path-gated), local account 4720 — flag-gated deterministic events | ✅ used | T1543.003, T1053.005, T1136.001 | #94 |
 | **Persistence & autostart** | ETW · Kernel-Registry | value writes (EID 4, NT→`HKLM` normalized; reads deliberately not taken) | ✅ used | T1547.001, T1112 | #21 |
