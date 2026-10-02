@@ -28,7 +28,7 @@ from synthaea_ml.evaluation.mutations.cmdline import ALL_T0_MUTATORS
 from synthaea_ml.evaluation.mutations.lineage import ALL_LINEAGE_MUTATORS
 from synthaea_ml.evaluation.mutations.prng import LCG
 from synthaea_ml.evaluation.scenario_replay import _sha256_file, load_expected_detections
-from synthaea_ml.features import correlation, lineage
+from synthaea_ml.features import correlation, t1
 from synthaea_ml.features.cmdline import extract_features
 from synthaea_ml.registry.training_record import MutationTestResult, RobustnessCard
 
@@ -52,30 +52,13 @@ def _score_cmdline(model: Any, cmdline: str, threshold: float) -> float:
     return float(score)
 
 
-# T1 behavior models score cmdline (9) + correlation (8) + lineage (6) features, in that
-# order (issue #48/#617): the layout the Rust side builds for the combined scorer.
-T1_FEATURE_COUNT = 9 + len(correlation.FEATURE_NAMES) + len(lineage.FEATURE_NAMES)
+# The T1 vector layout lives in `synthaea_ml.features.t1`, shared with the trainer.
+T1_FEATURE_COUNT = t1.FEATURE_COUNT
 
 
 def _t1_features(record: dict[str, Any]) -> list[float]:
-    """The 23-feature T1 vector for one exec record.
-
-    The mutators only rewrite the record's own fields (command line, parent), so the
-    correlation block is *context*: it is taken from `record["correlation_features"]`
-    (eight floats computed from the event window the record came from) and held fixed
-    across the original and every mutation, so a score delta can only come from the
-    mutated fields. Missing context scores as an empty window (all zeros).
-    """
-    context = record.get("correlation_features")
-    if context is None:
-        context = [0.0] * len(correlation.FEATURE_NAMES)
-    if len(context) != len(correlation.FEATURE_NAMES):
-        raise ValueError(
-            f"correlation_features must have {len(correlation.FEATURE_NAMES)} values, "
-            f"got {len(context)}"
-        )
-    cmdline = extract_features(ml_cmdline_from_record(record))
-    return [*cmdline, *(float(v) for v in context), *lineage.extract_features(record)]
+    """The 23-feature T1 vector for one exec record (see `synthaea_ml.features.t1`)."""
+    return t1.extract_features(record)
 
 
 def _score_record(model: Any, record: dict[str, Any], tier: str) -> float:
