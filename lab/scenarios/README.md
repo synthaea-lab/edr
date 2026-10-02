@@ -18,6 +18,7 @@ To migrate from `old/lab` after review:
 | `ld-preload-hijack.sh` | `LD_PRELOAD` pointed at a shared object outside the dynamic linker's trust set | T1574.006 — asserts the ExecEvent-side `check_ld_preload_hijack` rule (issue #363) |
 | `persistence-write.sh` | A marker line appended to `~/.bashrc` | T1546.004 — asserts the write-intent-gated `check_persistence_write` rule |
 | `log-clear.sh` | A log file under `/var/log/` deleted outright | T1070.002 — asserts the FileDeleteEvent-side `check_log_file_delete` rule (Linux only here; the exec-side `check_log_clear_exec` half needs a systemd-based row) |
+| `mysql-failed-login.sh` | Six failed logins against a local MariaDB/MySQL server | T1110 — asserts the `[logs]` `mysql_error` source end to end: error-log line → failed-logon AuthEvent → `on_auth` burst rule (#478) |
 | `bind-shell.sh` | Interactive shell served on a loopback TCP port through a listening `nc` | T1571 — asserts `check_listen_port_drift` on a listener opened after agent startup (netlink poll, 10s); also produces the eBPF SocketBind/Listen/Accept telemetry from #263 |
 | `encoded-powershell.ps1` | `powershell.exe -EncodedCommand <base64>` invocations | T1059.001 — asserts the ExecEvent-side `check_encoded_powershell` rule |
 | `scheduled-task-persistence.ps1` | `schtasks.exe /Create` a demo task | T1053.005 — asserts the 4698 → `FLAG_PERSISTENCE_TASK_ARTIFACT` → `check_scheduled_task_persistence` end-to-end pipeline |
