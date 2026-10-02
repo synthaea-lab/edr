@@ -182,3 +182,16 @@ quarantine fails closed with a logged per-event failure.
 What this gives up: the agent no longer has a private `/tmp`, so a local user can plant
 or race files in the agent's own temporary directory. The agent keeps its state in
 `/var/lib/synthaea` and `/run/synthaea` (both `ReadWritePaths`), not in `/tmp`.
+
+It also exposes `/root` and `/home` to the agent's reads, and that matters because the
+agent scans whatever path a process opened for writing, even when the kernel refused the
+open (the sensor fires before the permission check): measured, a denied
+`open("/root/secret", "w")` by an unprivileged user still queued the file for YARA. Until
+the scan request is gated on what that user could read, this lets a local user aim the
+agent at a file they cannot read, with a rule match and a path as the only thing that
+comes back (to logs and the control plane, not to them). The gate is the change that
+carries the uid with the request and refuses what the user could not read themselves
+(#631); the exposure above lasts until that lands. Measured on Fedora 41 with
+SELinux Enforcing and the agent as `synthaea`: with both changes, a payload another user
+drops in `/tmp` or `/home` is scanned, and a denied open of a root-only file, by name or
+through a symlink they planted, is not.

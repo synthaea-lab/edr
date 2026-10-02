@@ -54,6 +54,20 @@ Every outcome lands in the agent's alert log (`--alerts`, default
   chance to catch the signal. The pid is the one on the event that raised the
   verdict; a pid recycled between the event and the signal is a known, narrow window.
 
+## What the agent reads on other users' behalf
+
+With the packaged unit the agent can read any file on the host (`CAP_DAC_READ_SEARCH`,
+`ProtectHome=read-only`), and hashes or scans paths that processes of other users touch,
+including under `/home` and `/root`. Two consequences for a deployment with data-handling
+constraints:
+
+- A YARA scan is done only when the user whose process named the path could read the file
+  themselves, so one user cannot make the agent read another user's files.
+- The *result* of a scan or a hash (a rule name, a SHA-256) and the path leave the host
+  with the detection, for files in users' home directories too. If hashes of user files
+  must stay on the host, keep `ProtectHome=true` in a drop-in; payloads dropped in
+  `/home` are then not scanned.
+
 ## Quarantine from the packaged unit
 
 The packaged systemd unit lets the agent read and hash anything on the host, including
