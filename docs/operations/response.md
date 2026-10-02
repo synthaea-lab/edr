@@ -28,6 +28,7 @@ Every outcome lands in the agent's alert log (`--alerts`, default
 | `RESPONSE-KILL` | `killed pid N …`, `pid N would have been killed … (observe-only)`, `failed to kill pid N …: <error>`, or `refused to kill pid N …: <reason>` |
 | `RESPONSE-QUARANTINE` | `quarantined <path> (<sha256>) to <dir> …`, `<path> would have been quarantined … (observe-only)`, or `failed to quarantine <path> …: <error>` |
 | `RESPONSE-UNQUARANTINE` | `restored <path> (<sha256>) from quarantine …` or `failed to restore <sha256> …: <error>` |
+| `RESPONSE-ESCALATE` | `escalated <ppid>:<comm> at <severity> severity across N source(s): <techniques>`: the entity's fused verdict (rules, Sigma, YARA, correlator) reached High or Critical. Raised once per new verdict snapshot, not per finding. Non-destructive: it kills and quarantines nothing and does not depend on `--enable-kill` or `--enable-quarantine`, so it appears with both off. It is a prompt to triage; the kill gate still reads only the correlator's own `BAYES` crossing |
 
 ## Safety rails
 

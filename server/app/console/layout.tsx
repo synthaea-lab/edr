@@ -23,6 +23,12 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
                   Agents
                 </a>
                 <a
+                  href="/console/ops"
+                  className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                >
+                  Fleet health
+                </a>
+                <a
                   href="/console/detections"
                   className="px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
                 >

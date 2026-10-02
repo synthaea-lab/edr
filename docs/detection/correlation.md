@@ -64,6 +64,23 @@ against the engine's bus and hands the LLR back through a small `correlator` API
 (a score-provider trait on the engine, or an extra term on the belief update). That
 seam is not implemented — see the T2 handoff note.
 
+## Web request and web-server shell (T1505.003)
+
+`Event::HttpRequest` (a request from a web access log that matched a detection
+signature, #478 / ADR-0022) has no pid, so it cannot join the pid-keyed rules above. It
+is pushed to the bus and paired **by time** with a shell exec whose parent is a web
+server (`nginx`, `apache2`, `httpd`, `lighttpd`, `php-cgi`, `php-fpm*`): one alert per
+shell, naming the closest request (signature, method and path, status, client, and the
+matched parameter's *name*, never its value). Either event can arrive first: the log
+line is written when the request ends, after the shell it caused, and read a moment
+later. The engine returns before every pid-keyed step for an `HttpRequest`, so it never
+creates a belief for a pid-0 pseudo-process.
+
+This is co-occurrence on one host, not proof of causality: a log line names no process,
+so a probe and an unrelated shell under php-fpm in the same window pair. The stateless
+`rules` T1059 alert on the shell itself still fires on its own; this one adds the
+request that likely caused it.
+
 ## Parity fixtures
 
 - `ml/tests/fixtures/features_golden.jsonl` — the vector (Python defines the model's
