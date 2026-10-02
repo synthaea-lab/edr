@@ -7,9 +7,17 @@
 //! the only state [`unquarantine`] needs to reverse the action (issue #25: "reversible
 //! where possible").
 //!
-//! Platform-neutral: renaming, read-only, and reading/writing plain files are all
-//! plain `std::fs` — no `#[cfg(target_os = ...)]` needed (contrast [`crate::kill`],
-//! which does need one, injected by the caller instead of living in this crate).
+//! On Unix the quarantine takes the payload out of play, not just out of its place
+//! (issue #569): the directory is `0700`, the payload `0400` (no execute bit, no
+//! setuid) and the sidecar `0600`, so no other local user can read or run it. The
+//! payload's original mode is recorded in the sidecar and put back by [`unquarantine`].
+//! A directory left `0755` by an earlier version is tightened on the next quarantine.
+//! Windows keeps the read-only bit only: restricting it to SYSTEM and Administrators
+//! needs an ACL, which is not done here yet.
+//!
+//! Renaming and reading/writing plain files are `std::fs`; only the mode handling is
+//! `#[cfg(unix)]` (contrast [`crate::kill`], whose platform code is injected by the
+//! caller instead of living in this crate).
 
 use std::{
     fmt::Write as _,
@@ -70,29 +78,123 @@ pub fn quarantine_file(
 
 fn try_quarantine(path: &Path, quarantine_dir: &Path) -> std::io::Result<(PathBuf, String)> {
     let sha256_hex = sha256_file(path)?;
-    std::fs::create_dir_all(quarantine_dir)?;
+    create_private_dir(quarantine_dir)?;
     let quarantined_at = quarantine_dir.join(&sha256_hex);
 
     move_file(path, &quarantined_at)?;
 
-    let mut permissions = std::fs::metadata(&quarantined_at)?.permissions();
-    permissions.set_readonly(true);
-    std::fs::set_permissions(&quarantined_at, permissions)?;
+    let original_mode = lock_down_payload(&quarantined_at)?;
 
     // Lossy on a non-UTF-8 path (rare but real on Linux) — the sidecar is a plain
     // text file, not a byte-exact path store; accepted for this first cut rather
     // than pulling in an OsStr-preserving serialization for an edge case.
     let origin_path = origin_sidecar_path(quarantine_dir, &sha256_hex);
-    std::fs::write(&origin_path, path.to_string_lossy().as_bytes())?;
+    write_private_file(&origin_path, &encode_origin(path, original_mode))?;
 
     Ok((quarantined_at, sha256_hex))
 }
 
+/// The sidecar: the original absolute path, preceded on Unix by a `mode=<octal>` line
+/// holding the payload's original permission bits. A sidecar written before #569 is
+/// the bare path; an absolute path never starts with `mode=`, so the two never clash.
+fn encode_origin(path: &Path, original_mode: Option<u32>) -> Vec<u8> {
+    let path = path.to_string_lossy();
+    match original_mode {
+        Some(mode) => format!("mode={mode:o}\n{path}").into_bytes(),
+        None => path.into_owned().into_bytes(),
+    }
+}
+
+/// Inverse of [`encode_origin`].
+fn decode_origin(text: &str) -> (PathBuf, Option<u32>) {
+    if let Some((header, path)) = text.split_once('\n')
+        && let Some(octal) = header.strip_prefix("mode=")
+        && let Ok(mode) = u32::from_str_radix(octal, 8)
+    {
+        return (PathBuf::from(path), Some(mode));
+    }
+    (PathBuf::from(text), None)
+}
+
+fn read_origin(origin_path: &Path) -> std::io::Result<(PathBuf, Option<u32>)> {
+    Ok(decode_origin(&std::fs::read_to_string(origin_path)?))
+}
+
+/// Creates `dir` if needed and makes sure it is `0700`, including when it already
+/// exists with the wider mode an earlier version gave it.
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Makes a payload that has just been moved in inert, and returns the permission bits
+/// it had (`None` where there are none to record).
+#[cfg(unix)]
+fn lock_down_payload(payload: &Path) -> std::io::Result<Option<u32>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let original = std::fs::metadata(payload)?.permissions().mode() & 0o7777;
+    std::fs::set_permissions(payload, std::fs::Permissions::from_mode(0o400))?;
+    Ok(Some(original))
+}
+
+#[cfg(not(unix))]
+fn lock_down_payload(payload: &Path) -> std::io::Result<Option<u32>> {
+    let mut permissions = std::fs::metadata(payload)?.permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(payload, permissions)?;
+    Ok(None)
+}
+
+/// Writes `contents` to `path`, `0600` on Unix even if the file already existed wider.
+#[cfg(unix)]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::{
+        io::Write as _,
+        os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents)
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, contents)
+}
+
+/// Puts back the permission bits recorded at quarantine. Best effort: the file is
+/// already restored by now, and failing here leaves it `0400`, the safe side.
+#[cfg(unix)]
+fn restore_mode(path: &Path, mode: Option<u32>) {
+    use std::os::unix::fs::PermissionsExt as _;
+    if let Some(mode) = mode {
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_mode(_path: &Path, _mode: Option<u32>) {}
+
 /// Reverses [`quarantine_file`]: moves the payload back to the original path recorded
-/// in its `.origin` sidecar, then removes the sidecar. The restored file keeps the
-/// read-only bit [`quarantine_file`] set — a deliberate choice not reversed here: an
-/// analyst restoring a payload for investigation should have to explicitly decide it's
-/// safe to make writable/executable again, not get that back for free.
+/// in its `.origin` sidecar, then removes the sidecar. On Unix the permission bits the
+/// payload had before it was quarantined are put back too (a payload quarantined by an
+/// earlier version has none recorded and stays read-only). Restoring is an explicit
+/// analyst action run as root, which is where the decision to make it live again is made.
 ///
 /// # Errors
 ///
@@ -114,7 +216,7 @@ pub fn unquarantine(quarantine_dir: &Path, sha256_hex: &str) -> std::io::Result<
         return Err(invalid("not a lowercase SHA-256 hex digest"));
     }
     let origin_path = origin_sidecar_path(quarantine_dir, sha256_hex);
-    let original = PathBuf::from(std::fs::read_to_string(&origin_path)?);
+    let (original, original_mode) = read_origin(&origin_path)?;
     let stored = quarantine_dir.join(sha256_hex);
 
     // The file's name is its hash, so a mismatch means it was altered in place
@@ -124,6 +226,7 @@ pub fn unquarantine(quarantine_dir: &Path, sha256_hex: &str) -> std::io::Result<
         return Err(invalid("quarantined file no longer matches its hash"));
     }
     move_file_no_clobber(&stored, &original)?;
+    restore_mode(&original, original_mode);
     // The file is back: the restore has happened. Dropping the sidecar is
     // cleanup, and [`is_still_quarantined`] tells a caller when it did not work.
     let _ = std::fs::remove_file(&origin_path);
@@ -167,7 +270,7 @@ pub fn list_quarantined(quarantine_dir: &Path) -> std::io::Result<Vec<Quarantine
         };
         found.push(QuarantinedFile {
             sha256_hex: sha256_hex.to_string(),
-            original: PathBuf::from(std::fs::read_to_string(&path)?),
+            original: read_origin(&path)?.0,
         });
     }
     found.sort_by(|a, b| a.sha256_hex.cmp(&b.sha256_hex));
@@ -628,5 +731,115 @@ mod tests {
             std::io::ErrorKind::AlreadyExists
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn quarantine_with_mode(dir: &Path, mode: u32) -> (PathBuf, PathBuf, String) {
+        let payload = dir.join("payload.bin");
+        std::fs::write(&payload, b"an executable").unwrap();
+        set_mode(&payload, mode);
+        let qdir = dir.join("quarantine");
+        let policy = ResponsePolicy {
+            kill_enabled: false,
+            quarantine_enabled: true,
+        };
+        match quarantine_file(&payload, &qdir, &policy) {
+            QuarantineOutcome::Quarantined { sha256_hex, .. } => (payload, qdir, sha256_hex),
+            other => panic!("expected Quarantined, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_quarantined_payload_is_private_and_not_executable() {
+        let dir = temp_dir("modes");
+        let (_, qdir, digest) = quarantine_with_mode(&dir, 0o4755);
+
+        assert_eq!(mode_of(&qdir), 0o700, "directory");
+        assert_eq!(mode_of(&qdir.join(&digest)), 0o400, "payload");
+        assert_eq!(
+            mode_of(&qdir.join(format!("{digest}.origin"))),
+            0o600,
+            "sidecar"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_restore_puts_back_the_recorded_mode() {
+        let dir = temp_dir("restore-mode");
+        let (payload, qdir, digest) = quarantine_with_mode(&dir, 0o755);
+
+        unquarantine(&qdir, &digest).unwrap();
+
+        assert_eq!(mode_of(&payload), 0o755);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_and_sidecar_left_wide_by_an_earlier_version_are_tightened() {
+        let dir = temp_dir("migrate");
+        let qdir = dir.join("quarantine");
+        std::fs::create_dir_all(&qdir).unwrap();
+        set_mode(&qdir, 0o755);
+        let payload = dir.join("payload.bin");
+        std::fs::write(&payload, b"same bytes").unwrap();
+        let digest = sha256_file(&payload).unwrap();
+        // The same payload was quarantined before: wide payload, wide sidecar.
+        let old_payload = qdir.join(&digest);
+        let old_sidecar = qdir.join(format!("{digest}.origin"));
+        std::fs::write(&old_payload, b"same bytes").unwrap();
+        std::fs::write(&old_sidecar, "/old/place").unwrap();
+        set_mode(&old_payload, 0o755);
+        set_mode(&old_sidecar, 0o644);
+        let policy = ResponsePolicy {
+            kill_enabled: false,
+            quarantine_enabled: true,
+        };
+
+        assert!(matches!(
+            quarantine_file(&payload, &qdir, &policy),
+            QuarantineOutcome::Quarantined { .. }
+        ));
+
+        assert_eq!(mode_of(&qdir), 0o700);
+        assert_eq!(mode_of(&old_payload), 0o400);
+        assert_eq!(mode_of(&old_sidecar), 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sidecar_from_before_the_mode_was_recorded_still_reads_and_restores() {
+        let dir = temp_dir("legacy-sidecar");
+        let (payload, qdir, digest) = quarantine_one(&dir, "payload.bin", b"malware");
+        let target = payload.to_string_lossy().into_owned();
+        std::fs::write(qdir.join(format!("{digest}.origin")), &target).unwrap();
+
+        assert_eq!(list_quarantined(&qdir).unwrap()[0].original, payload);
+        assert_eq!(unquarantine(&qdir, &digest).unwrap(), payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sidecar_round_trips_a_path_that_looks_like_a_header() {
+        let path = Path::new("/tmp/mode=755\nx");
+        for mode in [None, Some(0o755)] {
+            let text = String::from_utf8(encode_origin(path, mode)).unwrap();
+            assert_eq!(decode_origin(&text), (path.to_path_buf(), mode));
+        }
     }
 }

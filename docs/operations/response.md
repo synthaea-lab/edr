@@ -60,6 +60,13 @@ The quarantine directory is `quarantine/` next to the alert log (`--alerts`), no
 separate flag. A payload is moved there, renamed to its own SHA-256, marked
 read-only, with a `<sha256>.origin` sidecar holding its original path.
 
+On Unix the quarantine also takes the payload out of play: the directory is `0700`,
+the payload `0400` (no execute or setuid bit) and the sidecar `0600`, so only the
+agent's user and root can read or run it. A directory left `0755` by an earlier version
+is tightened the next time something is quarantined. `list` and `restore` therefore need
+root or the service user. On Windows the payload is read-only but the directory is not
+yet restricted by an ACL (#569).
+
 ```
 agent quarantine --alerts /var/lib/synthaea/alerts.ndjson list
 agent quarantine --alerts /var/lib/synthaea/alerts.ndjson restore <sha256>
@@ -74,8 +81,10 @@ changing nothing, when:
 - the stored file no longer hashes to its name (altered since quarantine);
 - something now exists at the original path. A restore never overwrites.
 
-The restored file stays read-only: whoever restores a payload for investigation
-should decide explicitly that it is safe to make writable or executable again.
+On Unix the restored file gets back the permission bits it had before it was
+quarantined, which are recorded in the sidecar. A payload quarantined by an earlier
+version has none recorded and stays read-only. Restoring is the explicit decision that
+the file may live again; check what it is first.
 
 A restore that fails before the file is back changes nothing, including when the
 quarantine directory is on another filesystem and the payload has to be copied: a
