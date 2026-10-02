@@ -87,6 +87,27 @@ busy), `restore` still succeeds, prints a warning, and records the leftover in t
 `RESPONSE-UNQUARANTINE` audit line; the payload then stays listed until it is removed by
 hand, and a second `restore` refuses because the original path is occupied.
 
+## Silencing a noisy finding
+
+The agent fuses every engine's findings into one verdict per entity (`<ppid>:<comm>`).
+When one technique keeps firing on an entity you have judged benign, drop it from that
+fused view without touching the rules:
+
+```
+cli suppress <ppid> <comm> <technique>     # e.g. cli suppress 1 cron T1059.004
+cli unsuppress <ppid> <comm> <technique>
+cli status                                  # lists every active suppression
+```
+
+- It is runtime state in the agent, not configuration: a restart clears it.
+- The alert log still records every finding. A suppression only keeps the finding out
+  of the fused verdict (and so out of escalation); it never feeds the kill gate, which
+  reads the correlator's own `BAYES` crossing.
+- Each change is audited as `VERDICT-SUPPRESS` / `VERDICT-UNSUPPRESS`. Repeating a
+  command that changes nothing says so and writes no audit line.
+- The list holds at most 1024 marks; past that `suppress` is refused until one is lifted.
+- Like every control channel request it needs root (Unix) or an elevated prompt (Windows).
+
 ## Not built yet
 
 - **Host isolation** and the analyst-driven half (`response::live`): blocked on
