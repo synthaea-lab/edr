@@ -28,6 +28,7 @@ Every outcome lands in the agent's alert log (`--alerts`, default
 | `RESPONSE-KILL` | `killed pid N …`, `pid N would have been killed … (observe-only)`, `failed to kill pid N …: <error>`, or `refused to kill pid N …: <reason>` |
 | `RESPONSE-QUARANTINE` | `quarantined <path> (<sha256>) to <dir> …`, `<path> would have been quarantined … (observe-only)`, or `failed to quarantine <path> …: <error>` |
 | `RESPONSE-UNQUARANTINE` | `restored <path> (<sha256>) from quarantine …` or `failed to restore <sha256> …: <error>` |
+| `RESPONSE-ESCALATE` | `escalated <ppid>:<comm> at <severity> severity across N source(s): <techniques>`: the entity's fused verdict (rules, Sigma, YARA, correlator) reached High or Critical. Raised once per new verdict snapshot, not per finding. Non-destructive: it kills and quarantines nothing and does not depend on `--enable-kill` or `--enable-quarantine`, so it appears with both off. It is a prompt to triage; the kill gate still reads only the correlator's own `BAYES` crossing |
 
 ## Safety rails
 
@@ -85,6 +86,27 @@ and its sidecar is cleanup. If the quarantine directory refuses that (read-only 
 busy), `restore` still succeeds, prints a warning, and records the leftover in the
 `RESPONSE-UNQUARANTINE` audit line; the payload then stays listed until it is removed by
 hand, and a second `restore` refuses because the original path is occupied.
+
+## Silencing a noisy finding
+
+The agent fuses every engine's findings into one verdict per entity (`<ppid>:<comm>`).
+When one technique keeps firing on an entity you have judged benign, drop it from that
+fused view without touching the rules:
+
+```
+cli suppress <ppid> <comm> <technique>     # e.g. cli suppress 1 cron T1059.004
+cli unsuppress <ppid> <comm> <technique>
+cli status                                  # lists every active suppression
+```
+
+- It is runtime state in the agent, not configuration: a restart clears it.
+- The alert log still records every finding. A suppression only keeps the finding out
+  of the fused verdict (and so out of escalation); it never feeds the kill gate, which
+  reads the correlator's own `BAYES` crossing.
+- Each change is audited as `VERDICT-SUPPRESS` / `VERDICT-UNSUPPRESS`. Repeating a
+  command that changes nothing says so and writes no audit line.
+- The list holds at most 1024 marks; past that `suppress` is refused until one is lifted.
+- Like every control channel request it needs root (Unix) or an elevated prompt (Windows).
 
 ## Not built yet
 

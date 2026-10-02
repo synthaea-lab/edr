@@ -12,6 +12,23 @@
 #   vagrant ssh ubuntu2204
 #   vagrant destroy -f ubuntu2204   # rollback = destroy + up
 
+# jtarpley/fedora41_base is a 40 GB LVM disk split into many small logical
+# volumes: / has ~6 GB free after the LLVM packages and /home under 1 GB, so
+# rustup ("No space left on device") and a release build do not fit there, while
+# /var has ~9 GB free. Redirect the per-user toolchain to /var before the
+# toolchain script runs; build with CARGO_TARGET_DIR=/var/synthaea/target.
+FEDORA_PREP = <<~'SH'
+  set -eu
+  mkdir -p /var/synthaea/cargo /var/synthaea/rustup /var/synthaea/target
+  chown -R vagrant:vagrant /var/synthaea
+  for d in cargo rustup; do
+    if [ ! -L /home/vagrant/.$d ]; then rm -rf /home/vagrant/.$d; fi
+    ln -sfn /var/synthaea/$d /home/vagrant/.$d
+    chown -h vagrant:vagrant /home/vagrant/.$d
+  done
+  echo "export CARGO_TARGET_DIR=/var/synthaea/target" >> /etc/profile.d/synthaea-cargo.sh
+SH
+
 # name => [box, kernel it proves]. Hyper-V box availability is thin: generic/*
 # only covers 5.15 and 6.1, so the 6.8 and 6.12 rows use community boxes that
 # ship a Hyper-V provider, each with manual fix-ups (README.md "Community
@@ -23,6 +40,12 @@ LINUX_MACHINES = {
   "ubuntu2404" => { box: "jtarpley/ubuntu2404_base" },          # 6.8  — current LTS
   "debian13"   => { box: "shekeriev/debian-13" },               # 6.12 — Debian trixie
   "arch"       => { box: "generic/arch", provision: "../provisioning/arch-toolchain.sh" }, # rolling — #124
+  # RPM family, SELinux Enforcing out of the box — deliberately left that way
+  # (no `setenforce 0` in provisioning): this is the row that runs the eBPF/LSM/
+  # audit sensors under a real RHEL-family security policy. The box ships the
+  # Fedora 41 kernel line (6.11); check `uname -r` after `up`, a `dnf upgrade`
+  # moves it. `linux-toolchain.sh` already has the dnf branch.
+  "fedora41"   => { box: "jtarpley/fedora41_base", prep: FEDORA_PREP }, # 6.11 GA, 6.17 after updates — Fedora, SELinux enforcing
 }.freeze
 
 # Makes any box able to build the toolchain and the agent without OOM kills,
@@ -101,6 +124,7 @@ Vagrant.configure("2") do |config|
       end
 
       m.vm.provision "shell", name: "build-host-setup", inline: BUILD_HOST_SETUP
+      m.vm.provision "shell", name: "prep", inline: opts[:prep] if opts[:prep]
 
       # Provider-neutral, shared by every harness. Debian/RPM machines use the
       # apt/dnf script; a machine on a different package manager (pacman,

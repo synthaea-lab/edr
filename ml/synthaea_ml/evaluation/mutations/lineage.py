@@ -15,6 +15,35 @@ from .base import Mutator
 from .prng import LCG
 
 
+def _platform_of(record: dict[str, Any]) -> str | None:
+    """`"windows"`, `"unix"` or `None` (cannot tell) for a record, from its paths and names.
+
+    A Windows-style path (backslash or drive letter) or an `.exe` name means Windows; a
+    rooted POSIX path means Unix. The fake-parent and parent-path mutators draw from the
+    matching pool so a Linux event is never given `explorer.exe` as a parent: that
+    makes the transition *rarer*, which is not a realistic evasion (#617).
+    """
+    hints = [
+        record.get(k) for k in ("image_path", "parent_image_path", "comm", "parent_comm")
+    ]
+    argv = record.get("argv")
+    if argv:
+        hints.append(str(argv[0]))
+    windows = unix = False
+    for hint in hints:
+        if not isinstance(hint, str) or not hint:
+            continue
+        if "\\" in hint or (len(hint) > 1 and hint[1] == ":") or hint.lower().endswith(".exe"):
+            windows = True
+        elif hint.startswith("/"):
+            unix = True
+    if windows and not unix:
+        return "windows"
+    if unix and not windows:
+        return "unix"
+    return None
+
+
 class FakeParentNameMutator(Mutator):
     """Replace parent_comm with legitimate system process names.
 
@@ -40,6 +69,17 @@ class FakeParentNameMutator(Mutator):
         "sshd",  # SSH daemon (common for remote shells)
     ]
 
+    # The same pool split by platform, in the same relative order, for events whose
+    # platform is known (see `_platform_of`).
+    UNIX_PARENTS: ClassVar[list[str]] = ["systemd", "init", "launchd", "bash", "sshd"]
+    WINDOWS_PARENTS: ClassVar[list[str]] = [
+        "explorer.exe",
+        "svchost.exe",
+        "services.exe",
+        "System",
+        "cmd.exe",
+    ]
+
     def mutation_class_name(self) -> str:
         return "fake_parent_name"
 
@@ -50,15 +90,25 @@ class FakeParentNameMutator(Mutator):
         if "parent_comm" not in mutated or mutated["parent_comm"] is None:
             return mutated
 
+        platform = _platform_of(mutated)
         if intensity == "light":
-            # Most common benign parent (systemd on Linux, explorer.exe on Windows)
-            candidates = ["systemd", "explorer.exe"]
+            # Most common benign parent for the platform
+            candidates = {
+                "unix": ["systemd"],
+                "windows": ["explorer.exe"],
+            }.get(platform, ["systemd", "explorer.exe"])
         elif intensity == "medium":
             # Context-appropriate parents (shells, init, service managers)
-            candidates = self.BENIGN_PARENTS[:5]
+            candidates = {
+                "unix": self.UNIX_PARENTS[:3],
+                "windows": self.WINDOWS_PARENTS[:3],
+            }.get(platform, self.BENIGN_PARENTS[:5])
         elif intensity == "heavy":
-            # Full pool of legitimate names
-            candidates = self.BENIGN_PARENTS
+            # Full pool of legitimate names for the platform
+            candidates = {
+                "unix": self.UNIX_PARENTS,
+                "windows": self.WINDOWS_PARENTS,
+            }.get(platform, self.BENIGN_PARENTS)
         else:
             raise ValueError(f"invalid intensity: {intensity}")
 
@@ -70,11 +120,15 @@ class FakeParentNameMutator(Mutator):
 
 
 class ParentPathMutator(Mutator):
-    """Replace parent_image_path with legitimate or suspicious directory paths.
+    """Replace parent_image_path to make the parent look more legitimate.
 
-    Light: Replace with system directory (makes parent appear legitimate)
-    Medium: Replace with mixed system/suspicious paths
-    Heavy: Replace with suspicious paths (temp, downloads, appdata)
+    Intensity is the attacker's evasion strength, as for every mutator feeding an
+    *escape* metric: heavier must mean harder to detect, never easier (#617 — the first
+    version had heavy pick suspicious-only paths, which only ever makes detection easier).
+
+    Light: a mixed pool of system and suspicious paths (a weak, sometimes-useless attempt)
+    Medium: system directories only, from any platform
+    Heavy: system directories of the record's own platform (the most convincing)
 
     Tests if path-based lineage features (parent_path_is_system,
     parent_path_is_suspicious) can be evaded by moving binaries.
@@ -114,14 +168,15 @@ class ParentPathMutator(Mutator):
             return mutated
 
         if intensity == "light":
-            # System directories only (make parent look legitimate)
-            candidates = self.SYSTEM_PATHS
-        elif intensity == "medium":
-            # Mixed system and suspicious paths
             candidates = self.SYSTEM_PATHS + self.SUSPICIOUS_PATHS
+        elif intensity == "medium":
+            candidates = self.SYSTEM_PATHS
         elif intensity == "heavy":
-            # Suspicious paths only (test if detector relies on path alone)
-            candidates = self.SUSPICIOUS_PATHS
+            platform = _platform_of(mutated)
+            candidates = {
+                "unix": [p for p in self.SYSTEM_PATHS if p.startswith("/")],
+                "windows": [p for p in self.SYSTEM_PATHS if not p.startswith("/")],
+            }.get(platform, self.SYSTEM_PATHS)
         else:
             raise ValueError(f"invalid intensity: {intensity}")
 

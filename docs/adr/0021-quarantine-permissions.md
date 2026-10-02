@@ -1,6 +1,6 @@
 # ADR-0021: Platform permissions at the quarantine boundary
 
-- **Status**: proposed
+- **Status**: accepted
 - **Date**: 2026-10-01
 
 ## Context

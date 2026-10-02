@@ -83,6 +83,29 @@ describe("Ingest API", () => {
       expect(result.success).toBe(false);
     });
 
+    it("enforces retry-key uniqueness per agent while allowing legacy detections", async () => {
+      const tenant = await createTestTenant();
+      const firstAgent = await createTestAgent(tenant.id, "agent-retry-001");
+      const secondAgent = await createTestAgent(tenant.id, "agent-retry-002");
+      const key = "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a";
+      const data = {
+        tenantId: tenant.id,
+        timestamp: new Date(),
+        technique: "T1059",
+        severity: "medium",
+        event: {},
+        meta: {},
+      };
+
+      await prisma.detection.create({ data: { ...data, agentId: firstAgent.id, ingestId: key } });
+      await expect(prisma.detection.create({
+        data: { ...data, agentId: firstAgent.id, ingestId: key },
+      })).rejects.toMatchObject({ code: "P2002" });
+      await prisma.detection.create({ data: { ...data, agentId: secondAgent.id, ingestId: key } });
+      await prisma.detection.create({ data: { ...data, agentId: firstAgent.id } });
+      await prisma.detection.create({ data: { ...data, agentId: firstAgent.id } });
+    });
+
     it("should update agent last-seen timestamp", async () => {
       const tenant = await createTestTenant();
       const agent = await createTestAgent(tenant.id);

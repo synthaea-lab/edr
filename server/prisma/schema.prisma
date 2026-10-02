@@ -43,12 +43,33 @@ model Agent {
   createdAt    DateTime @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  health AgentHealth?
 
   @@index([tenantId, lastSeen])
   @@index([tenantId, ring])
   @@index([tenantId, ring, lastSeen])
   @@index([enrollmentId])
   @@map("agents")
+}
+
+// Latest health beacon per agent (issue #83). One row per agent, overwritten by
+// each beacon: bounded by fleet size, not by uptime. A time series (loss-counter
+// rates, sensor flapping) is a later slice and needs its own retention.
+model AgentHealth {
+  agentId       String   @id @map("agent_id")
+  tenantId      String   @map("tenant_id")
+  beaconAt      DateTime @map("beacon_at") // the agent's own clock
+  receivedAt    DateTime @map("received_at")
+  agentVersion  String   @map("agent_version")
+  spoolBytes    BigInt   @map("spool_bytes")
+  spoolDropped  BigInt   @map("spool_dropped")
+  enrichDropped BigInt   @map("enrich_dropped")
+  sensors       Json // [{ name, pulse_count, silent }]
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("agent_health")
 }
 
 // Detection storage - events that triggered rules
@@ -62,6 +83,10 @@ model Detection {
   timestamp DateTime
   technique String // MITRE ATT&CK technique (e.g., T1059.001)
   severity  String // low/medium/high/critical
+  // Optional for older agents. A durable uploader reuses the same key across
+  // retries; uniqueness is scoped to its mTLS-authenticated agent.
+  ingestId          String? @map("ingest_id")
+  ingestPayloadHash String? @map("ingest_payload_hash")
 
   // Event data (JSON) - normalized schema::Event
   event Json
@@ -89,6 +114,7 @@ model Detection {
   @@index([agentId, timestamp])
   @@index([technique])
   @@index([caseId])
+  @@unique([agentId, ingestId])
   @@map("detections")
 }
 

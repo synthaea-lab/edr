@@ -43,7 +43,7 @@ pending (the coverage packs #376–#381 — see
 | **DNS**<br><sub>TA0011 C2</sub> | 📋 #267 | ✅ ETW | 🔨 NE |
 | **Lateral-movement services**<br><sub>TA0008</sub> | 🟡* SSH-out content | ✅ SMB + WMI · 📋 #284 BITS | 🟡* SSH-out content |
 | **Encrypted traffic**<br><sub>TA0011 C2 · TA0010 Exfil</sub> | ✅ uprobes · 📋 JA4 #86 | 📋 #373 | 📋 #360 |
-| **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW · 📋 AMSI #282 | 📋 #374 (evaluate) |
+| **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | 📋 #374 (evaluate) |
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
 | **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL · 📋 #285 RDP | ✅ ES + log |
 | **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · 📋 #266 setuid | 🟡* UAC content | ✅ sudo · 📋 #356 native |
@@ -145,7 +145,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **DNS** | ETW · DNS-Client | query + answer + status joined to the process (EID 3008; 3006 dropped as noise) | ✅ used | T1071.004, IOC join | #21 |
 | **Encrypted traffic** | ETW + driver · WFP | TLS handshake metadata (evaluate Schannel providers); JA4 + SNI via #138's callout for cross-platform fingerprint parity — plaintext has no supported analog, stated honestly | 📋 planned | T1071 fingerprints | #373 |
 | **Scripts & runtimes** | ETW · PowerShell | script blocks (EID 4104) **post-decode** — `-EncodedCommand` arrives plain, fragments reassembled | ✅ used | T1059.001, T1027 | #21 |
-| **Scripts & runtimes** | ETW · AMSI | script/VBS/JS content at the scan interface | 📋 planned | T1059, T1027 | #282 |
+| **Scripts & runtimes** | ETW · AMSI | the buffer each runtime (PowerShell, WSH VBScript/JScript, Office VBA, .NET 4.8+) hands to AMSI **before running it**, decoded as UTF-16 text up to 16k chars (`AmsiContentEvent`, EID 1101). PowerShell hands over every script/command, de-obfuscated; WSH only its **sensitive runtime calls** (e.g. `IWshShell3.Run("cmd /c …")`, VBScript `Execute` content), not the whole script (lab, 2026-10-01: a plain `WScript.Echo` or JScript `eval` produced no scan). Identical content reported once per 5 min, 64 events / 10 s per process. In-process: an AMSI bypass that patches `AmsiScanBuffer` silences it for that process | ✅ used | T1059.001/.005/.007, T1027 | #282 |
 | **Scripts & runtimes** | ETW · DotNETRuntime | **dynamic (in-memory) assembly loads only** (EID 154, `flags & 0x2`) — file-backed dropped at the sensor | ✅ used | T1620, T1055 | #97 |
 | **Memory & injection** | driver · ObCallbacks+TI-ETW | handle access to LSASS; injection telemetry | 📋 planned | T1003.001, T1055 | #137 |
 | **Identity & privilege** | WEL · Security | logons 4624/4625/4648/4672 → `Auth` | ✅ used | T1078, T1110 | #94 |

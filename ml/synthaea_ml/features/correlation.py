@@ -55,10 +55,37 @@ def _is_file_write(event: dict) -> bool:
     return access_mode in (O_WRONLY, O_RDWR) or bool(flags & O_CREAT)
 
 
-def extract_features(events: list[dict], pid: int) -> list[float]:
+def same_generation(recorded: int | None, wanted: int | None) -> bool:
+    """Whether an event stamped `recorded` can belong to the process incarnation `wanted`.
+
+    Mirror of `correlator::bus::same_generation`: two known, different stamps are two
+    incarnations of a recycled pid and never mix; a missing stamp on either side cannot
+    disprove identity, which keeps stamp-less captures behaving exactly as before.
+    """
+    return recorded is None or wanted is None or recorded == wanted
+
+
+def events_for_pid(events: list[dict], pid: int, generation: int | None = None) -> list[dict]:
+    """The events of one process incarnation: Python mirror of `EventBus::events_for_pid`.
+
+    Records carry the stamp under `process_generation` (the `EventMeta` field name).
+    """
+    return [
+        e
+        for e in events
+        if e["pid"] == pid and same_generation(e.get("process_generation"), generation)
+    ]
+
+
+def extract_features(
+    events: list[dict], pid: int, generation: int | None = None
+) -> list[float]:
     """`events`: all events of a correlation window (not only those of the requested pid —
-    the pid filtering happens here, like `EventBus::events_for_pid` on the Rust side)."""
-    pid_events = [e for e in events if e["pid"] == pid]
+    the pid filtering happens here, like `EventBus::events_for_pid` on the Rust side).
+
+    `generation` is the process incarnation (#590): a recycled pid's earlier life must not
+    feed this one's features. `None` keeps the pid-only behavior."""
+    pid_events = events_for_pid(events, pid, generation)
 
     spawn_count = sum(1 for e in pid_events if e["type"] == "exec")
     connect_count = sum(1 for e in pid_events if e["type"] == "connect")

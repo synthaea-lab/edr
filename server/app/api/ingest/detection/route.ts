@@ -2,16 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { extractObservations, recordObservations } from "@/lib/prevalence";
-
-// Validation schema for detection payload
-const DetectionSchema = z.object({
-  timestamp_ns: z.number(),
-  technique: z.string(),
-  severity: z.enum(["low", "medium", "high", "critical"]),
-  event: z.record(z.any()),
-  meta: z.record(z.any()),
-});
+import { parseDetectionPayload } from "@/lib/detection-payload";
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,20 +56,46 @@ export async function POST(req: NextRequest) {
 
     // Parse and validate detection payload
     const body = await req.json();
-    const detection = DetectionSchema.parse(body);
+    const detection = parseDetectionPayload(body);
+    const rawIngestId = req.headers.get("Idempotency-Key");
+    const ingestId = rawIngestId === null ? null : z.string().uuid().parse(rawIngestId);
+    const ingestPayloadHash = ingestId === null
+      ? null
+      : createHash("sha256").update(JSON.stringify(body)).digest("hex");
 
     // Store detection
-    await prisma.detection.create({
-      data: {
-        tenantId: agent.tenantId,
-        agentId: agent.id,
-        timestamp: new Date(detection.timestamp_ns / 1_000_000),
-        technique: detection.technique,
-        severity: detection.severity,
-        event: detection.event,
-        meta: detection.meta,
-      },
-    });
+    try {
+      await prisma.detection.create({
+        data: {
+          tenantId: agent.tenantId,
+          agentId: agent.id,
+          ingestId,
+          ingestPayloadHash,
+          timestamp: detection.timestamp,
+          technique: detection.technique,
+          severity: detection.severity,
+          event: detection.event,
+          meta: detection.meta,
+        },
+      });
+    } catch (error) {
+      if (ingestId === null || !isUniqueViolation(error)) throw error;
+      const existing = await prisma.detection.findUnique({
+        where: { agentId_ingestId: { agentId: agent.id, ingestId } },
+        select: { ingestPayloadHash: true },
+      });
+      if (!existing || existing.ingestPayloadHash !== ingestPayloadHash) {
+        return NextResponse.json(
+          { error: "Idempotency key reused for a different detection" },
+          { status: 409 }
+        );
+      }
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: { lastSeen: new Date() },
+      });
+      return NextResponse.json({ status: "accepted" });
+    }
 
     // Fleet prevalence (issue #76). Best effort: the detection is already
     // stored, and a counter failure must not make the agent retry and
@@ -86,7 +105,7 @@ export async function POST(req: NextRequest) {
         prisma,
         agent.tenantId,
         agent.id,
-        new Date(detection.timestamp_ns / 1_000_000),
+        detection.timestamp,
         extractObservations(detection.event)
       );
     } catch (error) {
@@ -115,4 +134,9 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null
+    && "code" in error && error.code === "P2002";
 }
