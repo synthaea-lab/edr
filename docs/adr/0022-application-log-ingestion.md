@@ -35,11 +35,15 @@ detect. What the repository already settles, and therefore bounds the answers:
   the upload path applies today is a constant, 64 MiB (`SPOOL_MAX_BYTES` in
   `agent/src/upload.rs`). The `storage.spool_max_mb` value in the local configuration
   (4096 by default, validated at load) is not read by the agent code I checked, so it
-  does not raise that cap.
+  does not raise that cap. The same gap is tracked as #604; this ADR does not fix it
+  and the two should be handled together.
 - **Redaction has a precedent and an invariant.** ADR-0018 redacts URL credentials
   in the agent, at the sink boundary, unconditionally and only credentials, and says a
   future producer carrying a URL "must not add a second redaction path". The raw URL
-  exists only in process memory between the producer and the wrapper.
+  exists only in process memory between the producer and the wrapper. ADR-0018 and its
+  `agent/src/redact.rs` are in #550, which is open and not yet on `main`: until it
+  lands, the invariant this ADR relies on is pending, not accepted, and the access-log
+  wiring below depends on it.
   `policy::RedactionPolicy` has one flag, off by default, and no policy reaches the agent
   at runtime yet (ADR-0010).
 - **Allowlist plus counters, and the local-versus-policy split.** ADR-0006 decided that
