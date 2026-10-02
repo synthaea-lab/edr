@@ -125,9 +125,8 @@ Three kinds of data appear: client addresses, URL and query content, and account
   (`sqlmap`, `nikto`), not the string.
 - **Client address.** Kept on signature events and in the per-window top clients,
   because without it neither a responder nor a server-side correlation has anything to
-  act on. Not hashed in v1. It is personal data, so this choice needs sign-off from
-  whoever owns the project's data-protection position before this ADR moves to
-  accepted (see Open questions).
+  act on. Not hashed in v1. It is personal data; Jean signed off on
+  keeping it in clear on 2026-10-02 (see Decisions on the open questions).
 - **Account names.** MySQL/MariaDB login names are kept. They are the signal for a
   brute-force case. Passwords never appear in these logs.
 - Because v1 has no user-defined formats, no field the presets do not name (cookies,
@@ -178,19 +177,23 @@ log paths; Level 3.
 - **Risks accepted.** A request that never reaches the logging module (a crash, a log
   level that omits it) is invisible. An attacker with root can stop or truncate a log;
   detecting that a source went quiet is ambiguous for a site with little traffic and is
-  left as an open question rather than faked with a canary.
+  not alerted on in v1 rather than faked with a canary.
 - **Validation before this becomes accepted.** Lab scenarios under `lab/scenarios/`
   (Level 1 left that gap) on real Apache, nginx and MariaDB logs from a lab VM: a webshell
   request followed by a shell spawn, a traversal and an injection attempt, a failed-login
   burst, plus a custom `LogFormat` to exercise the misparsing event.
 
-## Open questions (to close before accepted)
+## Decisions on the open questions (2026-10-02, Jean)
 
-1. **Data protection.** Is keeping the client address and one truncated parameter value
-   on signature events acceptable, or does it need pseudonymization or a shorter
-   retention? Whoever owns the project's privacy position decides; this ADR does not.
-2. **PostgreSQL.** In v1 with a documented `log_line_prefix`, or deferred as written?
-3. **Priority.** Where this sits against #456 and #555, which still block the agent on
-   glibc older than 2.38, and against the remaining Windows sensors.
-4. **Silence of a log source.** Whether a quiet source should alert, and on what, given
-   that a quiet site is normal.
+1. **Data protection.** The client address and one truncated parameter value stay on
+   signature events, in clear, with the value passed through ADR-0018's redaction. No
+   pseudonymization in v1.
+2. **PostgreSQL.** Deferred, as written in section 1: `log_line_prefix` is
+   operator-defined, so no preset would be reliable.
+3. **Priority.** Level 2 proceeds now, ahead of #456 and #555 and the remaining
+   Windows sensors.
+4. **Silence of a log source.** No alert in v1. A quiet site is normal, and the ADR
+   does not fake a canary.
+
+What still stands between this ADR and `accepted` is the lab validation listed under
+Consequences (real Apache, nginx and MariaDB logs), and a review.
