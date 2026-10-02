@@ -7,6 +7,7 @@ const VALID_RINGS = ["canary_0", "canary_1", "canary_2", "prod"];
 /**
  * GET /api/content/manifest/{ring}
  * Agent endpoint: Fetch latest content manifest for assigned ring
+ * A halted newest release returns 423 until the ring is resumed or rolled back.
  *
  * Authentication: nginx proxy secret + mTLS + enrolled agent (`authenticateAgent`)
  * Response: ContentManifest JSON (signed)

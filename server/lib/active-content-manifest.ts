@@ -8,9 +8,11 @@ export type ActiveManifest =
   | { ok: false; status: number; error: string };
 
 /**
- * The content manifest an agent is currently offered: the newest `active`
- * release of its own tenant and ring, with the stored bytes checked against the
- * row's SHA-256 and the manifest's ring and version checked against the row.
+ * The content manifest an agent is currently offered: the newest active release
+ * of its own tenant and ring, unless that ring's newest release is halted. A halt
+ * stops delivery instead of silently falling back to older content. The stored
+ * bytes are checked against the row's SHA-256 and the manifest's ring and version
+ * are checked against the row.
  *
  * Shared by the manifest route (which serves it) and the artifact route (which
  * serves only what it lists), so the two cannot disagree about what "the
@@ -18,6 +20,19 @@ export type ActiveManifest =
  */
 export async function loadActiveManifest(agent: AuthenticatedAgent): Promise<ActiveManifest> {
   const { ring } = agent;
+  const latest = await prisma.contentRelease.findFirst({
+    where: { tenantId: agent.tenantId, ring },
+    orderBy: { releaseVersion: "desc" },
+    select: { releaseVersion: true, status: true },
+  });
+  if (latest?.status === "halted") {
+    return {
+      ok: false,
+      status: 423,
+      error: `Content delivery is halted for ring '${ring}' at release ${latest.releaseVersion}`,
+    };
+  }
+
   const release = await prisma.contentRelease.findFirst({
     where: { tenantId: agent.tenantId, ring, status: "active" },
     orderBy: { releaseVersion: "desc" },

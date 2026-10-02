@@ -17,11 +17,7 @@ export type RingStatus = {
   /** The newest release's version, whatever its status. */
   latestVersion: number | null;
   latestReleasedAt: string | null;
-  /**
-   * The version agents of this ring are actually offered: the newest `active`
-   * release. After a halt this is an OLDER release than `latestVersion`, which is
-   * why both are shown.
-   */
+  /** The version agents are offered, or null when the ring is halted. */
   servedVersion: number | null;
   agents: number;
   byStatus: Record<FleetStatus, number>;
@@ -57,10 +53,13 @@ export async function loadRings(
       where: { tenantId, ring },
       orderBy: { releaseVersion: "desc" },
     });
-    const served = await db.contentRelease.findFirst({
-      where: { tenantId, ring, status: "active" },
-      orderBy: { releaseVersion: "desc" },
-    });
+    const served =
+      latest?.status === "halted"
+        ? null
+        : await db.contentRelease.findFirst({
+            where: { tenantId, ring, status: "active" },
+            orderBy: { releaseVersion: "desc" },
+          });
     const inRing = fleet.filter((a) => a.ring === ring);
     rings.push({
       ring,
