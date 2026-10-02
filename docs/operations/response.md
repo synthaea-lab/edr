@@ -54,6 +54,26 @@ Every outcome lands in the agent's alert log (`--alerts`, default
   chance to catch the signal. The pid is the one on the event that raised the
   verdict; a pid recycled between the event and the signal is a known, narrow window.
 
+## Quarantine from the packaged unit
+
+The packaged systemd unit lets the agent read and hash anything on the host, including
+`/tmp`, `/var/tmp` and `/home` (read-only), but it deliberately cannot move a file out of
+another user's directory: that needs `CAP_DAC_OVERRIDE`, `CAP_FOWNER` and writable
+source directories, which is close to running as root (ADR-0014, amendment for #594).
+With `--enable-quarantine` and the shipped unit, quarantine therefore fails with a logged
+`failed to quarantine ...` for such files, and the payload is left in place.
+
+A host that accepts that trade can opt in with a drop-in
+(`systemctl edit synthaea-agent`):
+
+```ini
+[Service]
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
+ProtectHome=no
+ReadWritePaths=/tmp /var/tmp /home
+```
+
 ## Quarantine layout and reversal
 
 The quarantine directory is `quarantine/` next to the alert log (`--alerts`), no
