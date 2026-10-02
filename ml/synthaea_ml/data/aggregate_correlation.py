@@ -38,7 +38,7 @@ from synthaea_ml.features.correlation import FEATURE_NAMES, extract_features
 RAW_EVENT_TYPES = ("exec", "connect", "file_open", "network_flow")
 
 
-def _flatten(raw: dict) -> dict | None:
+def flatten_wire_event(raw: dict) -> dict | None:
     """Translates one wire event (`crates/schema::Event` JSON: identity nested under
     `meta`, `daddr` a single address string) into the flat shape `correlation.py` was
     written against (`pid`/`ts_ns` at top level, `fileopen` tag, `daddr_v4` as a
@@ -54,6 +54,15 @@ def _flatten(raw: dict) -> dict | None:
         "pid": meta["pid"],
         "ts_ns": meta["timestamp_ns"],
     }
+    # The process incarnation (#590) and, on exec, the lineage and command line the T1
+    # tier scores (#617): kept when the wire event carries them, absent otherwise, so a
+    # capture without them flattens exactly as it always did.
+    if meta.get("process_generation") is not None:
+        e["process_generation"] = meta["process_generation"]
+    if event_type == "exec":
+        for key in ("argv", "cmdline", "image_path", "parent_comm", "parent_image_path"):
+            if raw.get(key) is not None:
+                e[key] = raw[key]
     if event_type in ("connect", "network_flow"):
         e["daddr_v4"] = [raw["daddr"]]
         e["dport"] = raw["dport"]
@@ -64,7 +73,7 @@ def _flatten(raw: dict) -> dict | None:
 
 def charger_events(path: Path) -> list[dict]:
     """Loads the usable events from events.jsonl (exec/connect/file_open), flattened by
-    `_flatten` to the shape `correlation.py` expects."""
+    `flatten_wire_event` to the shape `correlation.py` expects."""
     events: list[dict] = []
     try:
         with open(path, encoding="utf-8") as f:
@@ -77,7 +86,7 @@ def charger_events(path: Path) -> list[dict]:
                 except json.JSONDecodeError as exc:
                     print(f"[warn] {path} line {i} invalid: {exc}", file=sys.stderr)
                     continue
-                e = _flatten(raw)
+                e = flatten_wire_event(raw)
                 if e is not None:
                     events.append(e)
     except FileNotFoundError:

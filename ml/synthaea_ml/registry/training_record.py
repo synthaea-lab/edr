@@ -49,6 +49,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from synthaea_ml.data.manifest import (
+    BEHAVIOR_CAPTURE_FILENAME,
     DEFAULT_BASELINE_FILENAME,
     load_manifest,
     verify_manifest,
@@ -425,6 +426,7 @@ def dataset_version_from_manifest(
     baseline_dir: Path,
     *,
     name: str | None = None,
+    baseline_filename: str = DEFAULT_BASELINE_FILENAME,
 ) -> DatasetVersion:
     """Verify the baseline against its manifest and return a ``DatasetVersion``.
 
@@ -437,13 +439,15 @@ def dataset_version_from_manifest(
             ``manifest.json``.
         name: Optional override. Defaults to
             ``default_dataset_name(baseline_dir)``.
+        baseline_filename: Name of the samples file the manifest was written
+            for. A T1 behavior capture is ``events.jsonl``, not ``baseline.jsonl``.
 
     Raises:
         FileNotFoundError: If baseline or manifest is missing.
         ValueError: If the baseline hash or sample count no longer matches
             the manifest (see ``verify_manifest``).
     """
-    verify_manifest(baseline_dir)
+    verify_manifest(baseline_dir, baseline_filename=baseline_filename)
     manifest = load_manifest(baseline_dir)
     return DatasetVersion(
         name=name if name is not None else default_dataset_name(baseline_dir),
@@ -677,12 +681,20 @@ def verify_training_record(
             raise FileNotFoundError(
                 f"dataset {dv.name!r} not found under {baselines_root}"
             )
-        baseline_path = baseline_dir / DEFAULT_BASELINE_FILENAME
+        # A T1 behavior dataset is a raw agent capture named `events.jsonl` (#617);
+        # every other dataset is `baseline.jsonl`.
+        baseline_filename = next(
+            (n for n in (DEFAULT_BASELINE_FILENAME, BEHAVIOR_CAPTURE_FILENAME)
+             if (baseline_dir / n).exists()),
+            DEFAULT_BASELINE_FILENAME,
+        )
+        baseline_path = baseline_dir / baseline_filename
         if not baseline_path.exists():
             raise FileNotFoundError(
-                f"baseline missing inside {baseline_dir}: expected {DEFAULT_BASELINE_FILENAME}"
+                f"baseline missing inside {baseline_dir}: expected {DEFAULT_BASELINE_FILENAME} "
+                f"or {BEHAVIOR_CAPTURE_FILENAME}"
             )
-        verify_manifest(baseline_dir)
+        verify_manifest(baseline_dir, baseline_filename=baseline_filename)
         current = load_manifest(baseline_dir)
         if current.sample_sha256 != dv.baseline_sha256:
             raise ValueError(

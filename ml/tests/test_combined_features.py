@@ -179,3 +179,57 @@ def test_pid_isolation():
     # PID 200 should have connect but no spawn
     assert features_200[0] == 0.0  # spawn_count
     assert features_200[1] == 1.0  # connect_count
+
+
+# --- #617: (pid, generation) filtering, mirroring `EventBus::events_for_pid` (#590) ---
+
+
+def _two_lives():
+    """One pid, two incarnations: the first connected out, the second only execs."""
+    return [
+        {"type": "exec", "pid": 9, "process_generation": 1, "ts_ns": 1_000_000_000,
+         "image_path": "/bin/sh", "cmdline": "sh", "parent_comm": "nginx",
+         "parent_image_path": "/usr/sbin/nginx"},
+        {"type": "connect", "pid": 9, "process_generation": 1, "ts_ns": 2_000_000_000,
+         "daddr_v4": [10, 0, 0, 1], "dport": 4444},
+        {"type": "exec", "pid": 9, "process_generation": 2, "ts_ns": 5_000_000_000,
+         "image_path": "/bin/ls", "cmdline": "ls", "parent_comm": "bash",
+         "parent_image_path": "/bin/bash"},
+    ]
+
+
+def test_a_recycled_pids_earlier_life_feeds_neither_correlation_nor_lineage():
+    names = combined.FEATURE_NAMES
+    second = dict(zip(names, combined.extract_combined_features(_two_lives(), 9, 2), strict=True))
+    assert second["connect_count"] == 0.0, "the first life's connect must not leak"
+    assert second["spawn_count"] == 1.0
+    # Lineage is the second life's parent (bash), not the most recent exec of the pid
+    # overall by accident of ordering and not the first life's nginx.
+    assert second["parent_comm_is_shell"] == 1.0
+    assert second["parent_comm_is_webserver"] == 0.0
+
+    first = dict(zip(names, combined.extract_combined_features(_two_lives(), 9, 1), strict=True))
+    assert first["connect_count"] == 1.0
+    assert first["parent_comm_is_webserver"] == 1.0
+
+
+def test_no_generation_keeps_the_pid_only_behavior():
+    """`None` on either side cannot disprove identity: stamp-less captures and the golden
+    fixtures behave exactly as before."""
+    features = dict(
+        zip(combined.FEATURE_NAMES, combined.extract_combined_features(_two_lives(), 9), strict=True)
+    )
+    assert features["spawn_count"] == 2.0
+    assert features["connect_count"] == 1.0
+    unstamped = [{k: v for k, v in e.items() if k != "process_generation"} for e in _two_lives()]
+    assert combined.extract_combined_features(unstamped, 9, 2) == combined.extract_combined_features(
+        unstamped, 9
+    )
+
+
+def test_same_generation_matches_the_rust_rule():
+    assert correlation.same_generation(None, None)
+    assert correlation.same_generation(None, 3)
+    assert correlation.same_generation(3, None)
+    assert correlation.same_generation(3, 3)
+    assert not correlation.same_generation(3, 4)

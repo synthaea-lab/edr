@@ -92,7 +92,7 @@ def test_fake_parent_name_no_lineage() -> None:
 
 
 def test_parent_path_light() -> None:
-    """Light intensity replaces parent_image_path with system directory."""
+    """Light intensity is a weak attempt: a mixed pool of system and suspicious paths."""
     mutator = ParentPathMutator()
     rng = LCG(seed=42)
 
@@ -105,39 +105,49 @@ def test_parent_path_light() -> None:
     # Original unchanged
     assert record["parent_image_path"] == "/tmp/evil"
 
-    # Mutated path is from system paths
-    assert mutated["parent_image_path"] in mutator.SYSTEM_PATHS
+    assert mutated["parent_image_path"] in mutator.SYSTEM_PATHS + mutator.SUSPICIOUS_PATHS
 
     # Other fields unchanged
     assert mutated["parent_comm"] == record["parent_comm"]
 
 
 def test_parent_path_medium() -> None:
-    """Medium intensity uses mixed system/suspicious paths."""
+    """Medium intensity uses system directories only, from any platform."""
     mutator = ParentPathMutator()
     rng = LCG(seed=100)
 
     record = {"parent_comm": None, "parent_image_path": "/usr/bin/bash"}
     mutated = mutator.mutate(record, "medium", rng)
 
-    # Mutated path is from system or suspicious
-    expected = mutator.SYSTEM_PATHS + mutator.SUSPICIOUS_PATHS
-    assert mutated["parent_image_path"] in expected
+    assert mutated["parent_image_path"] in mutator.SYSTEM_PATHS
 
 
 def test_parent_path_heavy() -> None:
-    """Heavy intensity uses suspicious paths only."""
+    """Heavy intensity is the strongest evasion: system paths of the record's own platform."""
     mutator = ParentPathMutator()
-    rng = LCG(seed=200)
-
-    record = {
+    windows = {
         "parent_comm": "svchost.exe",
         "parent_image_path": "C:\\Windows\\System32\\svchost.exe",
     }
-    mutated = mutator.mutate(record, "heavy", rng)
+    unix = {"parent_comm": "bash", "parent_image_path": "/tmp/dropper"}
+    for seed in range(100):
+        got_windows = mutator.mutate(windows, "heavy", LCG(seed=seed))["parent_image_path"]
+        got_unix = mutator.mutate(unix, "heavy", LCG(seed=seed))["parent_image_path"]
+        assert got_windows in mutator.SYSTEM_PATHS
+        assert not got_windows.startswith("/")
+        assert got_unix in mutator.SYSTEM_PATHS
+        assert got_unix.startswith("/")
 
-    # Mutated path is from suspicious paths
-    assert mutated["parent_image_path"] in mutator.SUSPICIOUS_PATHS
+
+def test_parent_path_heavy_never_picks_a_suspicious_path() -> None:
+    """#617: the intensity ladder must not be inverted for an escape metric: a heavier
+    mutation that moves *toward* suspicious paths makes detection easier, not harder."""
+    mutator = ParentPathMutator()
+    record = {"parent_comm": "x", "parent_image_path": "x"}
+    for seed in range(300):
+        for intensity in ("medium", "heavy"):
+            got = mutator.mutate(record, intensity, LCG(seed=seed))["parent_image_path"]
+            assert got not in mutator.SUSPICIOUS_PATHS
 
 
 def test_parent_path_deterministic() -> None:
@@ -245,7 +255,7 @@ def test_mutation_class_names() -> None:
     ("mutator", "field", "intensity", "candidates"),
     [
         (FakeParentNameMutator(), "parent_comm", "light", ["systemd", "explorer.exe"]),
-        (ParentPathMutator(), "parent_image_path", "heavy", ParentPathMutator.SUSPICIOUS_PATHS),
+        (ParentPathMutator(), "parent_image_path", "heavy", ParentPathMutator.SYSTEM_PATHS),
     ],
 )
 def test_every_candidate_is_reachable(mutator, field, intensity, candidates) -> None:
@@ -259,3 +269,61 @@ def test_every_candidate_is_reachable(mutator, field, intensity, candidates) -> 
     record = {"parent_comm": "x", "parent_image_path": "x"}
     seen = {mutator.mutate(record, intensity, LCG(seed=s))[field] for s in range(500)}
     assert set(candidates) <= seen
+
+
+# --- #617: platform-matched fake parents -------------------------------------------
+
+
+def test_a_linux_event_is_never_given_a_windows_parent() -> None:
+    mutator = FakeParentNameMutator()
+    record = {
+        "argv": ["/bin/sh", "-c", "id"],
+        "image_path": "/bin/sh",
+        "parent_comm": "dropper",
+        "parent_image_path": "/tmp/dropper",
+    }
+    for intensity in ("light", "medium", "heavy"):
+        for seed in range(200):
+            got = mutator.mutate(record, intensity, LCG(seed=seed))["parent_comm"]
+            assert got in FakeParentNameMutator.UNIX_PARENTS, (intensity, got)
+
+
+def test_a_windows_event_is_never_given_a_unix_parent() -> None:
+    mutator = FakeParentNameMutator()
+    record = {
+        "image_path": "C:\\Users\\victim\\evil.exe",
+        "parent_comm": "winword.exe",
+        "parent_image_path": "C:\\Program Files\\Office\\winword.exe",
+    }
+    for intensity in ("light", "medium", "heavy"):
+        for seed in range(200):
+            got = mutator.mutate(record, intensity, LCG(seed=seed))["parent_comm"]
+            assert got in FakeParentNameMutator.WINDOWS_PARENTS, (intensity, got)
+
+
+def test_an_event_whose_platform_is_unknown_keeps_the_cross_platform_pool() -> None:
+    mutator = FakeParentNameMutator()
+    record = {"parent_comm": "x", "parent_image_path": None}
+    seen = {mutator.mutate(record, "heavy", LCG(seed=s))["parent_comm"] for s in range(500)}
+    assert seen == set(FakeParentNameMutator.BENIGN_PARENTS)
+
+
+def test_the_platform_pools_partition_the_cross_platform_pool() -> None:
+    pools = FakeParentNameMutator.UNIX_PARENTS + FakeParentNameMutator.WINDOWS_PARENTS
+    assert sorted(pools) == sorted(FakeParentNameMutator.BENIGN_PARENTS)
+
+
+# --- #617: removing lineage means the same thing however it is expressed ----------
+
+
+def test_a_none_lineage_and_a_missing_lineage_extract_identical_features() -> None:
+    """`RemoveLineageMutator` sets the fields to `None` instead of deleting the keys;
+    the extractor (and the Rust side, where both are `Option::None`) must not tell the
+    difference, or a sensor without parent tracking would score differently from a
+    mutated record."""
+    from synthaea_ml.features import lineage
+
+    full = {"parent_comm": "nginx", "parent_image_path": "/usr/sbin/nginx"}
+    stripped = RemoveLineageMutator().mutate(full, "heavy", LCG(seed=1))
+    assert stripped["parent_comm"] is None
+    assert lineage.extract_features(stripped) == lineage.extract_features({})
