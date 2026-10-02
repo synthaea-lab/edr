@@ -104,6 +104,72 @@ describe("GET /api/content/manifest/[ring]", () => {
     expect(body.entries[0].path).toBe("rules/beacon.sigma");
   });
 
+  it("stops delivery when the newest release is halted instead of offering an older active release", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-halted", { ring: "canary_0" });
+
+    await prisma.contentRelease.create({
+      data: {
+        tenantId: tenant.id,
+        ring: "canary_0",
+        releaseVersion: 1,
+        manifestUrl: "storage://manifests/content-canary_0-v1.json",
+        manifestSha256: "a".repeat(64),
+        status: "active",
+        releasedAt: new Date("2026-09-23T16:00:00Z"),
+      },
+    });
+    await prisma.contentRelease.create({
+      data: {
+        tenantId: tenant.id,
+        ring: "canary_0",
+        releaseVersion: 2,
+        manifestUrl: "storage://manifests/content-canary_0-v2.json",
+        manifestSha256: "b".repeat(64),
+        status: "halted",
+        releasedAt: new Date("2026-09-24T16:00:00Z"),
+      },
+    });
+
+    const res = await GET(request("agent-halted"), { params: { ring: "canary_0" } });
+    expect(res.status).toBe(423);
+    expect((await res.json()).error).toMatch(/halted/i);
+  });
+
+  it("serves the active rollback target after the halted release is rolled back", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-rollback", { ring: "canary_0" });
+    const bytes = signedManifestBytes({ release_version: 1 });
+    writeManifestFile("content-canary_0-v1.json", bytes);
+
+    await prisma.contentRelease.create({
+      data: {
+        tenantId: tenant.id,
+        ring: "canary_0",
+        releaseVersion: 1,
+        manifestUrl: "storage://manifests/content-canary_0-v1.json",
+        manifestSha256: createHash("sha256").update(bytes).digest("hex"),
+        status: "active",
+        releasedAt: new Date("2026-09-23T16:00:00Z"),
+      },
+    });
+    await prisma.contentRelease.create({
+      data: {
+        tenantId: tenant.id,
+        ring: "canary_0",
+        releaseVersion: 2,
+        manifestUrl: "storage://manifests/content-canary_0-v2.json",
+        manifestSha256: "b".repeat(64),
+        status: "rolled_back",
+        releasedAt: new Date("2026-09-24T16:00:00Z"),
+      },
+    });
+
+    const res = await GET(request("agent-rollback"), { params: { ring: "canary_0" } });
+    expect(res.status).toBe(200);
+    expect((await res.json()).release_version).toBe(1);
+  });
+
   it("rejects when the manifest bytes don't match manifestSha256", async () => {
     const tenant = await createTestTenant();
     await createTestAgent(tenant.id, "agent-2", { ring: "canary_0" });
