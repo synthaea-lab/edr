@@ -17,6 +17,7 @@ export async function cleanDatabase() {
   await prisma.corpusVersion.deleteMany();
   await prisma.contentRelease.deleteMany();
   await prisma.binaryRelease.deleteMany();
+  await prisma.agentHealth.deleteMany();
   await prisma.agent.deleteMany();
   await prisma.tenant.deleteMany();
 }

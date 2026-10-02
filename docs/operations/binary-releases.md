@@ -17,11 +17,30 @@ store URL is fetched over the network, as for content manifests).
 
 ## Steps
 
-1. Build the release files (`agent`, `watchdog`, `cli`, ...) and hash them.
-2. Create the manifest `{"schema_version":1,"release_version":N,"entries":{"agent":"<sha256>",...},"signature":""}`
-   and sign it **offline** with the updater key (`ReleaseManifest::sign`). The server
-   never holds the private key, and does not verify the signature: every agent does,
-   before staging. The manifest carries no ring and no per-entry size.
+1. Build the release files (`agent`, `watchdog`, `cli`, ...) into one directory.
+2. Build and sign the manifest **offline** with `release-tool` (workspace member
+   `release-tool/`, not shipped to endpoints). The server never holds the private key,
+   and does not verify the signature: every agent does, before staging.
+
+   ```
+   release-tool manifest --release-version N --dir dist/ --out manifest.json
+   release-tool sign --kind release --key-file release.key manifest.json --out signed.json
+   ```
+
+   `manifest` hashes every regular file under `dist/` (a symlink is refused) into
+   `{"schema_version":1,"release_version":N,"entries":{"agent":"<sha256>",...},"signature":""}`;
+   the manifest carries no ring and no per-entry size. `sign` refuses a manifest the
+   agent would reject whatever its signature (an entry path that escapes the release
+   directory), prints the signing key's public half, and says whether the key embedded
+   in this build of `updater` accepts the result; if it does not, agents built with
+   that key will refuse the release. The key file holds the 32-byte Ed25519 seed as 64
+   hex characters and must not be readable by group or others. `--test-key` signs with
+   the public checked-in test key, for lab releases only. Content manifests
+   (`--kind content`) are signed the same way; they are written by hand or by a
+   script, `release-tool` only signs them.
+
+   Key generation, custody and rotation are not decided here (ADR-0015, Deferred): the
+   tool takes whatever key file it is given.
 3. Put the manifest and the files at the paths above.
 4. `POST /api/release` (session-authenticated) with
    `{ "ring", "releaseVersion", "manifestUrl", "manifestSha256" }`. The server refuses

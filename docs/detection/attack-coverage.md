@@ -96,5 +96,5 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
-| T1505.003 | 1 | `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
+| T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
 
