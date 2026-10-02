@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from synthaea_ml.data.aggregate_correlation import flatten_wire_event
 from synthaea_ml.data.canonical import ml_cmdline_from_record
 from synthaea_ml.evaluation.mutations.base import Mutator
 from synthaea_ml.evaluation.mutations.cmdline import ALL_T0_MUTATORS
@@ -285,7 +286,14 @@ def _load_events_from_source(
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if with_context and isinstance(record, dict) and "pid" in record and "type" in record:
+        if not isinstance(record, dict):
+            continue
+        # The agent's own events.jsonl nests identity under `meta`; baseline and
+        # hand-built sources are already flat. Normalize the former so real captures
+        # carry their pid, incarnation and lineage into the T1 tier.
+        if "meta" in record:
+            record = flatten_wire_event(record) or record
+        if with_context and "pid" in record and "type" in record:
             window.append(record)
 
         # Extract exec events (type=="exec") or baseline records (have argv/cmdline)

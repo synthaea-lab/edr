@@ -292,6 +292,68 @@ def test_t1_loader_keeps_a_recycled_pids_earlier_life_out_of_the_context(tmp_pat
     assert second_life["correlation_features"][1] == 0.0, "the old life's connect must not leak"
 
 
+def _wire_exec(pid: int, generation: int | None, ts: int, **fields) -> dict:
+    """One exec event the way the agent's events.jsonl serializes it: identity nested
+    under `meta`, lineage beside the command line."""
+    meta = {"pid": pid, "ppid": 1, "timestamp_ns": ts, "comm": "sh"}
+    if generation is not None:
+        meta["process_generation"] = generation
+    return {"type": "exec", "meta": meta, **fields}
+
+
+def test_a_real_agent_capture_carries_lineage_and_incarnation_into_the_t1_tier(
+    tmp_path: Path,
+) -> None:
+    """#617: the wire-to-flat normalization used to drop `process_generation` and the
+    parent fields, so a real capture could never reach the T1 tier with its lineage."""
+    src = tmp_path / "events.jsonl"
+    _write_jsonl(
+        src,
+        [
+            _wire_exec(
+                7,
+                1,
+                1_000_000_000,
+                argv=["sh", "-c", "id"],
+                image_path="/bin/sh",
+                parent_comm="nginx",
+                parent_image_path="/usr/sbin/nginx",
+            ),
+            {
+                "type": "connect",
+                "meta": {"pid": 7, "ppid": 1, "timestamp_ns": 2_000_000_000, "comm": "sh",
+                         "process_generation": 1},
+                "daddr": "10.0.0.1",
+                "dport": 4444,
+            },
+            _wire_exec(7, 2, 3_000_000_000, argv=["ls"], parent_comm="bash"),
+        ],
+    )
+    events = _load_events_from_source(src, with_context=True)
+    first = next(e for e in events if e["process_generation"] == 1)
+    assert first["parent_comm"] == "nginx"
+    assert first["parent_image_path"] == "/usr/sbin/nginx"
+    assert first["argv"] == ["sh", "-c", "id"]
+    assert first["correlation_features"][1] == 1.0, "the first life connected out"
+    second = next(e for e in events if e["process_generation"] == 2)
+    assert second["correlation_features"][1] == 0.0, "the second life did not"
+
+
+def test_a_wire_capture_without_lineage_flattens_as_it_always_did() -> None:
+    from synthaea_ml.data.aggregate_correlation import flatten_wire_event
+
+    flat = flatten_wire_event(
+        {"type": "connect", "meta": {"pid": 3, "timestamp_ns": 9}, "daddr": "1.2.3.4", "dport": 80}
+    )
+    assert flat == {
+        "type": "connect",
+        "pid": 3,
+        "ts_ns": 9,
+        "daddr_v4": ["1.2.3.4"],
+        "dport": 80,
+    }
+
+
 def test_run_robustness_evaluation_t2_not_implemented(dummy_model, dummy_scenario_yaml) -> None:
     """T2 tier raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="T2"):
