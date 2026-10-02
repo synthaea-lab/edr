@@ -1,0 +1,22 @@
+name: mysql-failed-login
+platform: linux
+script: mysql-failed-login.sh
+simulates: >
+  A burst of failed logins against a local MariaDB/MySQL server (T1110, Brute Force),
+  read from the server's error log by a `mysql_error` source (issue #478 level 2,
+  ADR-0022). The scenario uses a made-up account name and a deliberately wrong
+  password; no data and no real account is touched.
+expected_detections:
+  - technique: "T1110"
+    rule: on_auth   # crates/rules/src/state.rs — AUTH_FAILURE_THRESHOLD in
+                    # AUTH_FAILURE_WINDOW_NS, per (target user, source)
+    min_count: 1
+    tolerance: 0
+notes: >
+  Needs a real server whose error log is a file (Ubuntu/Debian MariaDB logs to the
+  journal by default) and a `[[logs.sources]]` entry for it. Validated on MariaDB
+  10.11.14, Ubuntu 24.04, with the real agent: the burst alerts, a logrotate-style
+  rename + `flush logs` is followed (rotations=1), and failures written while the
+  agent was down are read after a restart without replaying earlier ones. Not covered:
+  MySQL 8 (its line format is taken from the documentation, not a running server) and
+  a client with a resolved IP (source=local here).
