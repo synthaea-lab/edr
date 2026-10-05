@@ -33,7 +33,7 @@
 #                  and T1059 from the web-server-spawns-shell rule (lineage)
 #      in /tmp/e:  four http_request events, one per signature (sql_injection,
 #                  path_traversal, webshell_like, scanner_user_agent), the evidence value
-#                  cut and credential-redacted, no query value of any other parameter
+#                  cut but not yet credential-redacted (#550), no query value of any other parameter
 #      after about 65 s in /tmp/e: one http_summary for the source, with the request
 #                  count and the failing clients
 #
