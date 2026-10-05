@@ -152,15 +152,19 @@ model ContentRelease {
 - Load failure rate > 10%
 
 **Manual Rollback**:
-- Admin can halt deployment and rollback ring to previous `release_version`
-- Agents poll server for `ring → release_version` mapping, fetch rolled-back manifest
+- Halting a ring stops delivery: its newest release is marked `halted`, and the
+  manifest and artifact endpoints return `423 Locked` instead of serving the
+  previous active release. Agents keep their installed content and fetch no new
+  content until the halt is lifted or the ring is rolled back.
+- Rollback is a separate admin action that marks the halted release
+  `rolled_back` and serves the previous active `release_version`.
 
 ### 5. API Endpoints
 
 **Agent Endpoints** (mTLS authentication):
 ```
-GET  /api/content/manifest/{ring}  → ContentManifest (latest for ring)
-GET  /api/content/artifact/{path}  → Binary artifact (with SHA-256 verification)
+GET  /api/content/manifest/{ring}  → ContentManifest, or 423 when the ring is halted
+GET  /api/content/artifact/{path}  → Binary artifact, or 423 when the ring is halted
 POST /api/content/report            → { status: "success"|"failure", details }
 ```
 
