@@ -164,30 +164,26 @@ packaged service is what exercises it (below). What to know:
   `ausearch` reads a missing `/var/log/audit/audit.log` and always answers "no
   matches" (an earlier "0 AVC" claim measured with it was wrong). Denials are in the
   journal: `sudo journalctl _TRANSPORT=audit | grep AVC`.
-- **The packaged systemd unit does not start the agent on this row.** Installing the
-  files the way `synthaea-agent.spec.template` does and starting the real unit under
-  Enforcing, four defects stack, each hiding the next:
-  1. `ExecStartPre` tries `ln -sf ... /usr/bin/synthaea-ctl` under `ProtectSystem=strict`
-     (read-only `/usr`): `Read-only file system`, the unit never starts. The `.deb`
-     `postinst` creates that link, the RPM spec does not.
-  2. The binaries under `/var/lib/synthaea` are labelled `var_lib_t`; `init_t` is
-     denied `execute`, `execute_no_trans` and `map` on them (`status=203/EXEC`,
-     `Permission denied`). `chcon -R -t bin_t /var/lib/synthaea/bootstrap` fixes it
-     (the service then runs as `unconfined_service_t`, no denial). A real fix labels
-     it with `semanage fcontext` so `restorecon` and the updater's `versions/vN` agree.
-  3. The unit runs the agent as the unprivileged `synthaea` user with
-     `NoNewPrivileges` and no `AmbientCapabilities`, so it cannot load eBPF, falls back
-     to the audit socket, gets `EPERM` (`audit socket open: netlink socket error: 1`)
-     and exits 1. With `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE` and
-     `CAP_DAC_READ_SEARCH` ambient, the eBPF sensor and the BPF-LSM hook attach
-     (conntrack still needs `CAP_NET_ADMIN`).
-  4. The watchdog starts the agent with `--alerts` only and forces its working
-     directory to the binary's folder (`/var/lib/synthaea/bootstrap`, root-owned), so
-     the agent's default relative `events.jsonl` fails with `Permission denied`; its
-     output goes to `/var/tmp/synthaea-agent.log`, which `PrivateTmp=true` hides from
-     the host (`nsenter -t <watchdog pid> -m -- cat /var/tmp/synthaea-agent.log`).
-  Defect 1 is RPM-specific and 2 is SELinux-specific; 3 and 4 come from the unit and
-  the watchdog, not from the distro, so they should hit the `.deb` too (not tested here).
+- **The packaged systemd unit runs on this row.** On 2026-09-30 it did not: installing
+  the files the way `synthaea-agent.spec.template` does and starting the real unit under
+  Enforcing, four defects stacked, each hiding the next. All four are fixed:
+  1. `ExecStartPre` linked `synthaea-ctl` into the read-only `/usr` (RPM spec): #558.
+  2. The binaries under `/var/lib/synthaea` were labelled `var_lib_t`, so `init_t` was
+     denied `execute`/`map` (`status=203/EXEC`): #558 labels them `bin_t`, and #581 has
+     the updater relabel a staged release before promoting it.
+  3. The unprivileged `synthaea` user had no capabilities, so it could not load eBPF:
+     #559 (ambient `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE`, `CAP_DAC_READ_SEARCH`,
+     `CAP_NET_ADMIN`, `CAP_KILL`; ADR-0014).
+  4. The watchdog's working directory was root-owned, so the agent's default relative
+     `events.jsonl` failed: #559.
+
+  Re-run on 2026-10-02 (kernel 6.17.7, SELinux Enforcing, the unit installed the way the
+  RPM does, with the fixes of #589, #594, #631 and #515): the agent runs under the
+  packaged unit, sees `/tmp` and `/home` of another user, and refuses to scan a root-only
+  file a user merely tried to open, with **no AVC denial** in the session. The last AVC
+  denials in the journal are the 2026-09-30 ones above. This row is not affected by the
+  `perf_event_paranoid` problem of Debian and Ubuntu (#643): Fedora has no patch that adds
+  level 3.
 
 ### Check the tracepoint layout on every new row
 
