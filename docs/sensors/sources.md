@@ -161,7 +161,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Lateral-movement services** | ETW · WMI-Activity | WQL queries (EID 23) + method invocations (EID 24, `Win32_Process.Create`) | ✅ used | T1047 | #21 |
 | **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
-| **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone); consumed by the T1204.002 download→exec join. Strip/tamper of the mark needs the minifilter (#136) | ✅ used | T1204.002 | #365 |
+| **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join. Strip/tamper of the mark needs the minifilter (#136) | ✅ used | T1204.002 | #365 |
 | **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
 | **Devices** | device-control | Windows collectors land with the cross-platform crate | 📋 planned | T1091 | #84 |
 | **Host state** | Win32 · WMI/CIM | point-in-time inventory; Sysmon-channel opt-in is an ADR-first decision | ✅ / 📋 | pre-existing persistence | collectors; #286 |
@@ -213,7 +213,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Tamper & anti-forensics** | ES · signal | signals **filtered to ES-client targets** (this agent, other security tools), sender attributed | ✅ used | T1562 | #96 |
 | **Tamper & anti-forensics** | ES · widening | kext loads, sensitive IOKit user-client opens | 📋 planned | T1547.006, keylogger preludes | #357 |
 | **Tamper & anti-forensics** | ES · XPC | XPC connects (14+) — rules match sensitive service names, never per-event | ✅ used | agent-impersonation surface | #96 |
-| **Download provenance** | ES · quarantine | quarantine xattr + `kMDItemWhereFroms` read-back → v21 `FileQuarantine` (agent, origin + referrer URLs) — the network→file link | ✅ used | provenance | #96 |
+| **Download provenance** | ES · quarantine | quarantine xattr + `kMDItemWhereFroms` read-back → v21 `FileQuarantine` (agent, origin + referrer URLs, credentials redacted by the agent per ADR-0018) — the network→file link | ✅ used | provenance | #96 |
 | **Containers** | inventory + ES/NE | runtime/VM inventory (Docker Desktop, OrbStack, Apple Containerization) + tagging of VM-manager processes/flows the sensors already see; in-VM Linux workloads = the Linux agent's job, documented | 📋 planned | unmanaged-workload signal | #372 |
 | **Devices** | DiskArbitration/IOKit | disk/volume + device attach/detach | 📋 planned | T1091, T1052 | `device-control` |
 | **Host state** | inventory | pre-existing launch items, kexts/system extensions, profiles, the standing TCC-grant map, browser artifacts | 📋 planned | persistence that predates the agent | #359 |
