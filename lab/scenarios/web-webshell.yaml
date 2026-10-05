@@ -24,5 +24,8 @@ notes: >
   the events file; they are not alert techniques. Validated with the real agent against
   nginx 1.24 (Ubuntu 24.04, WSL2): T1505.003 names the WebshellLike request, T1059 fires,
   four `http_request` events and one `http_summary` (6 requests, 4 failing) are written.
-  The evidence value is not credential-redacted in that run: the redaction is #550's.
+  That run predates the redaction of the evidence value (ADR-0018): the value was cut but
+  not redacted then. It is now replaced by REDACTED when the matched parameter is named like
+  a secret (unit tests and a `poll_source` test); this scenario's parameters are not, and it
+  has not been re-run on a live nginx since.
   Not covered: Apache, php-fpm as the parent, a custom LogFormat.

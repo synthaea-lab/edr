@@ -41,9 +41,9 @@ detect. What the repository already settles, and therefore bounds the answers:
   in the agent, at the sink boundary, unconditionally and only credentials, and says a
   future producer carrying a URL "must not add a second redaction path". The raw URL
   exists only in process memory between the producer and the wrapper. ADR-0018 and its
-  `agent/src/redact.rs` are in #550, which is open and not yet on `main`: until it
-  lands, the invariant this ADR relies on is pending, not accepted, and the access-log
-  wiring below depends on it.
+  `agent/src/redact.rs` are on `main` (#550). The access-log wiring (#478) applies the
+  same `redact::redact_event` to an `HttpRequest`'s evidence value, in
+  `log_sources::deliver`, the one place an access-log event leaves that module.
   `policy::RedactionPolicy` has one flag, off by default, and no policy reaches the agent
   at runtime yet (ADR-0010).
 - **Allowlist plus counters, and the local-versus-policy split.** ADR-0006 decided that
