@@ -51,7 +51,7 @@ pending (the coverage packs #376–#381 — see
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
 | **Services & autostart**<br><sub>TA0003 T1543/T1547</sub> | ✅ journald + rules | ✅ WEL 7045 + ETW registry | ✅ ES BTM |
 | **Scheduled execution**<br><sub>TA0002/TA0003 T1053</sub> | ✅ cron/systemd paths | ✅ WEL 4698 · 4702 | ✅ cron/launchd paths |
-| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | 🔍 SELinux AVC | ✅ AppLocker · 📋 #283 | ✅ log · 📋 #356 |
+| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | 🔍 SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
 | **Kernel modules & drivers**<br><sub>TA0003/TA0005 rootkits</sub> | 📋 #264 module+bpf | 🟡* image loads · 📋 #39 | 📋 #357 kexts |
 | **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | 📋 #362 kill-trace | 📋 #39 driver vantage | ✅ ES signals |
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
@@ -155,7 +155,9 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Persistence & autostart** | ETW · Kernel-Registry | value writes (EID 4, NT→`HKLM` normalized; reads deliberately not taken) | ✅ used | T1547.001, T1112 | #21 |
 | **Persistence & autostart** | driver · kernel callbacks | process/image/registry from the tamper-resistant vantage | 📋 planned | same, authoritative | #39 |
 | **OS security verdicts** | WEL · AppLocker/EXE and DLL | AppLocker 8004 (enforced block) / 8003 (audit mode) → `PolicyDenial` (`mechanism: applocker`, `object_path` from `FullFilePath`) | ✅ used | policy context, T1204 | #427 |
-| **OS security verdicts** | WEL · operational channels | WDAC, Defender, Task-Scheduler | 📋 planned | policy + AV context | #283 |
+| **OS security verdicts** | WEL · CodeIntegrity/Operational | WDAC 3077 (enforced) / 3076 (audit mode) → `PolicyDenial` (`mechanism: wdac`, `object_path` as the event's NT device path, `object_class` kernel/user-mode). **3033 is not subscribed**: 584 in a day on one lab host, all Chrome loading its own DLLs | ✅ used | policy context | #283 |
+| **OS security verdicts** | WEL · Defender/Operational | verdicts 1116 (detected) / 1117 (action taken) and tamper traces 5001/5010/5012 (protection turned off) and 5007 (setting changed) → `DefenderEvent`. The channel is **localized**, so only numeric ids and `Threat Name` are read. 5007 is 42 % of the channel (start-up progress): only exclusions, the `Disable*` protection switches and Tamper Protection are forwarded. Alerts: protection turned off, an exclusion added (High for `C:\Users\Public`, `Temp`, `Downloads`, `AppData`, a drive root, code extensions, interpreters; else Medium), a protection switch turned on, Tamper Protection turned off. The events name no process; verdicts raise no alert yet (they need a host-wide correlator signal) | ✅ used | T1562.001 | #283 |
+| **OS security verdicts** | WEL · TaskScheduler/Operational | task registered 106 (already covered, #422) | ✅ used | T1053.005 | #283 |
 | **Lateral-movement services** | ETW · WMI-Activity | WQL queries (EID 23) + method invocations (EID 24, `Win32_Process.Create`) | ✅ used | T1047 | #21 |
 | **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
