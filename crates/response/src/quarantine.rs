@@ -587,6 +587,15 @@ fn copy_open_file_to_quarantine(
 }
 
 fn open_quarantine_source(path: &Path) -> std::io::Result<std::fs::File> {
+    // A FIFO opened for reading can wait forever for a writer before fstat is
+    // reached. Reject known special files first; the descriptor and link checks
+    // below still decide whether the opened object can be quarantined.
+    let path_metadata = std::fs::symlink_metadata(path)?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(invalid(
+            "quarantine source must be a regular, non-symlink file",
+        ));
+    }
     let file = open_payload_for_security(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
@@ -1085,6 +1094,47 @@ mod tests {
             0o755
         );
         assert!(!dir.join("quarantine").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_payload_is_refused_without_waiting_for_a_writer() {
+        use std::os::unix::fs::FileTypeExt as _;
+
+        let dir = temp_dir("fifo-source");
+        let source = dir.join("source-fifo");
+        let quarantine_dir = dir.join("quarantine");
+        let created = std::process::Command::new("mkfifo")
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(created.status.success(), "mkfifo failed: {created:?}");
+
+        // No writer is opened: attempting a blocking read of this FIFO would
+        // hang before any descriptor metadata check could run.
+        let outcome = quarantine_file(
+            &source,
+            &quarantine_dir,
+            &ResponsePolicy {
+                kill_enabled: false,
+                quarantine_enabled: true,
+            },
+        );
+
+        let QuarantineOutcome::Failed { error, .. } = outcome else {
+            panic!("a FIFO must be refused, got {outcome:?}");
+        };
+        assert!(error.contains("regular, non-symlink file"));
+        assert!(
+            std::fs::symlink_metadata(&source)
+                .unwrap()
+                .file_type()
+                .is_fifo(),
+            "refusing quarantine must leave the FIFO in place"
+        );
+        assert!(!quarantine_dir.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
