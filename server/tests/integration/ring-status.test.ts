@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { cleanDatabase, createTestTenant, createTestAgent, prisma } from "../helpers/db";
 import { createTenantHeaders } from "../helpers/http";
 import { GET as rings } from "@/app/api/ops/rings/route";
+import { GET as ringHealth } from "@/app/api/rings/[ring]/health/route";
 
 async function release(tenantId: string, ring: string, version: number, status: string) {
   await prisma.contentRelease.create({
@@ -25,6 +26,12 @@ const getRings = async (tenantId: string) =>
     ).json()
   ).rings as { ring: string; rollout: string; latestVersion: number | null; servedVersion: number | null; agents: number }[];
 
+const getRingHealth = async (tenantId: string, ring: string) =>
+  ringHealth(
+    new NextRequest(`http://localhost/api/rings/${ring}/health`, { headers: createTenantHeaders(tenantId) }),
+    { params: { ring } }
+  );
+
 describe("ring status against a real database (issue #83)", () => {
   beforeEach(cleanDatabase);
 
@@ -33,14 +40,18 @@ describe("ring status against a real database (issue #83)", () => {
     await prisma.$disconnect();
   });
 
-  it("shows a halted release and the older one agents are still offered", async () => {
+  it("stops serving a halted release and reports it in both ring status endpoints", async () => {
     const tenant = await createTestTenant();
     await createTestAgent(tenant.id, "agent-r1", { ring: "canary_0" });
     await release(tenant.id, "canary_0", 1, "active");
     await release(tenant.id, "canary_0", 2, "halted");
 
     const ring = (await getRings(tenant.id)).find((r) => r.ring === "canary_0");
-    expect(ring).toMatchObject({ rollout: "halted", latestVersion: 2, servedVersion: 1, agents: 1 });
+    expect(ring).toMatchObject({ rollout: "halted", latestVersion: 2, servedVersion: null, agents: 1 });
+
+    const health = await getRingHealth(tenant.id, "canary_0");
+    expect(health.status).toBe(200);
+    expect((await health.json()).contentRelease).toMatchObject({ releaseVersion: 2, status: "halted" });
   });
 
   it("does not show another tenant's releases or agents", async () => {
