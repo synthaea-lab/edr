@@ -167,8 +167,11 @@ the pipeline mechanically on synthetic captures and says nothing about detection
 `ml/tests/fixtures/t1_golden.jsonl`) and the scorer, `ml::BehaviorScorer`. The scorer loads a
 T1 ONNX model with its `model_metadata.json`, applies the conformal threshold (a normal score
 returns `None`) and the feature bounds (an out-of-range vector is an error, not a score), and
-returns the score with its top attributions. It refuses a model that is not 23 features wide
-and bounds that are not for exactly the T1 features, in order. It is pinned to onnxruntime by
+returns the score with its top attributions. Metadata means a calibrated model and must carry
+both the threshold and the bounds (`train_behavior.py` always writes both): one without the other
+is refused at load rather than leaving a guard off silently; no metadata at all is the explicit
+uncalibrated mode. It also refuses a model that is not 23 features wide and bounds that are not
+for exactly the T1 features, in order. It is pinned to onnxruntime by
 `crates/ml/tests/fixtures/t1_scorer_golden.jsonl` (`gen_t1_scorer_fixture.py`, checked from
 `crates/ml/tests/t1_scorer.rs`) on a small model trained on jittered synthetic vectors: that
 pins Rust and Python inference, not detection quality.
