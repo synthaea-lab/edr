@@ -45,7 +45,7 @@ pending (the coverage packs #376–#381 — see
 | **Encrypted traffic**<br><sub>TA0011 C2 · TA0010 Exfil</sub> | ✅ uprobes · 📋 JA4 #86 | 📋 #373 | 📋 #360 |
 | **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | 📋 #374 (evaluate) |
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
-| **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL · 📋 #285 RDP | ✅ ES + log |
+| **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL + RDP sessions | ✅ ES + log |
 | **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · 📋 #266 setuid | 🟡* UAC content | ✅ sudo · 📋 #356 native |
 | **Credential-attack shadow**<br><sub>TA0006 Cred Access</sub> | 🟡* shadow-file reads | 📋 #364 Kerberos/NTLM/LDAP | 🟡* keychain reads |
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
@@ -150,7 +150,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Memory & injection** | driver · ObCallbacks+TI-ETW | handle access to LSASS; injection telemetry | 📋 planned | T1003.001, T1055 | #137 |
 | **Identity & privilege** | WEL · Security | logons 4624/4625/4648/4672 → `Auth` | ✅ used | T1078, T1110 | #94 |
 | **Identity & privilege** | ETW · Kerberos/NTLM/LDAP-Client | client-side ticket requests (RC4-etype shadow), NTLM validation, LDAP recon bursts — DC-side 4768/4769 stay server scope, honestly | 📋 planned | T1558, AD recon | #364 |
-| **Identity & privilege** | WEL · TerminalServices | RDP session lifecycle | 📋 planned | T1021.001 | #285 |
+| **Identity & privilege** | WEL · TerminalServices | session lifecycle → `Session` (v40): LocalSessionManager 21 logon / 23 logoff / 24 disconnect / 25 reconnect with `SessionID` and client (`Address`: an IP, or `LOCAL` = the console, which logs these too), and RemoteConnectionManager 1149 (a client authenticated to the RDP listener: user + source IP, no session yet). The channel's RPC trace (59, ~90 % of it) and 22 (shell start, repeats 21) are not read. No client hostname: neither channel carries one. Alert: a disconnected session reconnected from another client (Medium; an owner moving between clients looks the same). The pre-auth source IP of a 1149 sits beside 4625's for brute-force rules | ✅ used | T1563.002, T1021.001 | #285 |
 | **Persistence & autostart** | WEL · System+Security | service install 7045, scheduled task 4698 + update 4702 (task hijack, path-gated), local account 4720 — flag-gated deterministic events | ✅ used | T1543.003, T1053.005, T1136.001 | #94 |
 | **Persistence & autostart** | ETW · Kernel-Registry | value writes (EID 4, NT→`HKLM` normalized; reads deliberately not taken) | ✅ used | T1547.001, T1112 | #21 |
 | **Persistence & autostart** | driver · kernel callbacks | process/image/registry from the tamper-resistant vantage | 📋 planned | same, authoritative | #39 |
