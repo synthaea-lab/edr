@@ -68,18 +68,30 @@ that yet; ring-health auto-halt is a later slice).
 An agent trusts the built-in public roots by default, so a control plane whose
 certificate comes from a private CA (a self-hosted install, a lab, the dev CA from
 `server/scripts/generate-dev-certs.sh`) fails with `UnknownIssuer`, and installing the
-CA in the system store does not help: the agent does not read it. Point the command at
-the CA instead:
+CA in the system store does not help: the agent does not read it. Tell the agent which
+CA to trust, once, in `agent.toml`:
+
+```toml
+[server]
+ca_cert = "/etc/synthaea/certs/ca.pem"   # absolute path, PEM bundle
+```
+
+That applies to `agent run --server`, `apply-release`, `apply-content-manifest` and
+`check-content-manifest`. Each of the four also takes `--ca-cert <PEM>`, which wins over
+the file for that run:
 
 ```sh
 agent apply-release --server https://cp.internal --ca-cert /etc/synthaea/certs/ca.pem \
   --cert /etc/synthaea/certs/client.crt --key /etc/synthaea/certs/client.key
 ```
 
-`--ca-cert` takes a PEM bundle and is accepted by `apply-release`,
-`apply-content-manifest` and `check-content-manifest`. It **replaces** the public
-roots rather than adding to them, so the server is pinned to that CA. An unreadable
-file or a bundle with no certificate stops the command before it connects.
+The bundle **replaces** the public roots rather than adding to them, so the server is
+pinned to that CA. An unreadable file or a bundle with no certificate stops the command
+before it connects (`agent run` stops at start-up). A CA is a trust anchor, not a
+credential, so it also applies to a server named by hand; the client certificate does
+not (see `--cert`/`--key`).
 
-Not covered yet: the `agent run` upload and heartbeat path, and `agent.toml` has no
-`server.ca_cert` field (#658).
+Not covered yet: `agent run` does not present the client certificate from `agent.toml`
+(`server.mtls_cert`/`mtls_key`) to the control plane, so a control plane that requires
+mTLS on the ingest routes still cannot be used from `run`; that is separate from the
+CA (#658).
