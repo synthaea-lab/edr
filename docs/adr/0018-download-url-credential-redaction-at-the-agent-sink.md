@@ -80,3 +80,10 @@ consumer, including detection, only ever sees the redacted URL.
   future Linux producer, or any other event type that carries a URL (a DNS or
   TLS URL field, for instance), has to go through the same wrapper or extend
   it. It must not add a second redaction path.
+- The Linux access-log sources (#478, ADR-0022 §4) extend `redact_event` instead:
+  an `HttpRequest`'s evidence value (the one query parameter a signature matched
+  on) is replaced by `REDACTED` when that parameter's *name* marks it as a secret,
+  by the same name rules as a URL query, and kept otherwise since it is the
+  evidence. `log_sources::deliver`, the one exit of that module, calls it. The same
+  limits apply: a secret inside the value of a parameter that is not named like one
+  (`?cmd=curl -H "Authorization: Bearer ..."`) is not caught.
