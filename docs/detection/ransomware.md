@@ -14,6 +14,18 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    window) so restoration tooling has a scope; VSS/snapshot integration is a later
    Windows item.
 
+   **Damage manifest (built, #82).** When a T1486 rule alert is recorded, the agent attaches
+   the alerting process incarnation's recent renames and deletions to the detection as
+   further events (`Detection::events` after the triggering one): the newest 100, oldest
+   first, from a per-pid history in `rules::RuleState` (`touched_files`; 64 pids, 100 events
+   each, counted shedding). No schema change. The control plane keeps the first event in the
+   detection's `event` and the rest in `meta.additional_events`, and
+   `GET /api/cases/[id]` returns `damageManifest: { files, truncated }`: the distinct files
+   (renamed with their new path, or deleted) of the case's T1486 detections, oldest first,
+   at most 1000. Not covered: files only *written* in place (a `FileWrite` has no path), and
+   files touched before the history began (a process pushed out by 64 busier ones loses its
+   manifest, not its detection).
+
 Acceptance is scenario-driven: a lab encryptor (benign, marker-based) must be killed
 before it processes more than N canary-adjacent files.
 
