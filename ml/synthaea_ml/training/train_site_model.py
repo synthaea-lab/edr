@@ -238,7 +238,9 @@ def main():
     # Export to ONNX
     print("\n=== Exporting to ONNX ===")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    onnx_model = to_onnx(clf, X[:1])
+    # Pinned like train_linux.py: skl2onnx does not yet follow the `ai.onnx.ml` v4 domain
+    # that onnx 1.22 emits by default.
+    onnx_model = to_onnx(clf, X[:1], target_opset={"": 18, "ai.onnx.ml": 3})
     onnx_path = args.output_dir / MODEL_FILENAME
     with open(onnx_path, "wb") as f:
         f.write(onnx_model.SerializeToString())
@@ -246,8 +248,7 @@ def main():
 
     # Write training record with provenance
     print("\n=== Writing training record ===")
-    global_manifest_path = args.global_dataset / "manifest.json"
-    dataset_versions = [dataset_version_from_manifest(global_manifest_path)]
+    dataset_versions = [dataset_version_from_manifest(args.global_dataset)]
 
     # Add site corpus as dataset version
     site_corpus_version = DatasetVersion(
@@ -258,7 +259,7 @@ def main():
     dataset_versions.append(site_corpus_version)
 
     write_training_record(
-        output_dir=args.output_dir,
+        args.output_dir,
         training_script=TRAINING_SCRIPT,
         dataset_versions=dataset_versions,
         robustness_cards=[],  # Populated by separate robustness evaluation run
