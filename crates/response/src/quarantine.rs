@@ -12,7 +12,7 @@
 
 use std::{
     fmt::Write as _,
-    io::{Read as _, Write as _},
+    io::{Read as _, Seek as _, Write as _},
     path::{Path, PathBuf},
 };
 
@@ -69,13 +69,8 @@ pub fn quarantine_file(
 }
 
 fn try_quarantine(path: &Path, quarantine_dir: &Path) -> std::io::Result<(PathBuf, String)> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(invalid(
-            "quarantine source must be a regular, non-symlink file",
-        ));
-    }
-    let sha256_hex = sha256_file(path)?;
+    let mut source = open_quarantine_source(path)?;
+    let sha256_hex = sha256_open_file(&mut source)?;
     secure_quarantine_dir(quarantine_dir)?;
 
     // Reserve the sidecar before moving the source. A failed sidecar write leaves
@@ -115,7 +110,7 @@ fn try_quarantine(path: &Path, quarantine_dir: &Path) -> std::io::Result<(PathBu
         match move_and_secure(
             path,
             &quarantined_at,
-            move_to_quarantine,
+            |from, to| move_open_file_to_quarantine(&mut source, &sha256_hex, from, to),
             secure_payload,
             move_file_no_clobber,
         ) {
@@ -144,19 +139,20 @@ struct QuarantineMoveFailure {
 fn move_and_secure(
     from: &Path,
     to: &Path,
-    move_file: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
-    secure: impl FnOnce(&Path) -> std::io::Result<()>,
+    move_file: impl FnOnce(&Path, &Path) -> std::io::Result<std::fs::File>,
+    secure: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
     rollback: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), QuarantineMoveFailure> {
-    if let Err(error) = move_file(from, to) {
+    let stored = move_file(from, to).map_err(|error| {
         let retained_in_quarantine =
             error.kind() != std::io::ErrorKind::AlreadyExists && to.exists();
-        return Err(QuarantineMoveFailure {
+        QuarantineMoveFailure {
             error,
             retained_in_quarantine,
-        });
-    }
-    if let Err(security_error) = secure(to) {
+        }
+    })?;
+    if let Err(security_error) = secure(&stored) {
+        drop(stored);
         return match rollback(to, from) {
             Ok(()) => Err(QuarantineMoveFailure {
                 error: security_error,
@@ -216,18 +212,23 @@ fn secure_quarantine_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn secure_payload(path: &Path) -> std::io::Result<()> {
+fn secure_payload(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400))
+        file.set_permissions(std::fs::Permissions::from_mode(0o400))
     }
     #[cfg(not(unix))]
     {
-        let mut permissions = std::fs::metadata(path)?.permissions();
+        let mut permissions = file.metadata()?.permissions();
         permissions.set_readonly(true);
-        std::fs::set_permissions(path, permissions)
+        file.set_permissions(permissions)
     }
+}
+
+fn secure_payload_path(path: &Path) -> std::io::Result<()> {
+    let file = std::fs::File::open(path)?;
+    secure_payload(&file)
 }
 
 fn secure_sidecar(_path: &Path) -> std::io::Result<()> {
@@ -383,7 +384,7 @@ fn secure_existing_files(quarantine_dir: &Path) -> std::io::Result<()> {
         if sidecar_slot(&path).is_some() {
             secure_sidecar(&path)?;
         } else if payload_slot(&path).is_some() {
-            secure_payload(&path)?;
+            secure_payload_path(&path)?;
         }
     }
     Ok(())
@@ -465,15 +466,179 @@ fn move_file_no_clobber(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Moves a source into quarantine without leaving its original path live. Unlike
 /// restore, failure to remove the source after creating the destination is an
 /// error: both copies must not be reported as a successful quarantine.
-fn move_to_quarantine(from: &Path, to: &Path) -> std::io::Result<()> {
+#[cfg(test)]
+fn move_to_quarantine(from: &Path, to: &Path) -> std::io::Result<std::fs::File> {
+    let mut source = open_quarantine_source(from)?;
+    let sha256_hex = sha256_open_file(&mut source)?;
+    move_open_file_to_quarantine(&mut source, &sha256_hex, from, to)
+}
+
+fn move_open_file_to_quarantine(
+    source: &mut std::fs::File,
+    expected_sha256: &str,
+    from: &Path,
+    to: &Path,
+) -> std::io::Result<std::fs::File> {
     match std::fs::hard_link(from, to) {
-        Ok(()) => {}
+        Ok(()) => {
+            if let Err(error) = destination_matches_source(source, to) {
+                let _ = std::fs::remove_file(to);
+                return Err(error);
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Err(error),
-        Err(_) => copy_no_clobber(from, to)?,
+        Err(_) => return copy_open_file_to_quarantine(source, expected_sha256, from, to),
+    }
+
+    let mut stored = match source.try_clone() {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = std::fs::remove_file(to);
+            return Err(error);
+        }
+    };
+    let stored_sha256 = match sha256_open_file(&mut stored) {
+        Ok(sha256) => sha256,
+        Err(error) => {
+            let _ = std::fs::remove_file(to);
+            return Err(error);
+        }
+    };
+    if stored_sha256 != expected_sha256 {
+        let _ = std::fs::remove_file(to);
+        return Err(invalid(
+            "quarantine source changed while it was being moved",
+        ));
+    }
+    if let Err(error) = source_path_matches(source, from) {
+        let _ = std::fs::remove_file(to);
+        return Err(error);
     }
     if let Err(error) = std::fs::remove_file(from) {
         let _ = std::fs::remove_file(to);
         return Err(error);
+    }
+    Ok(stored)
+}
+
+fn copy_open_file_to_quarantine(
+    source: &mut std::fs::File,
+    expected_sha256: &str,
+    from: &Path,
+    to: &Path,
+) -> std::io::Result<std::fs::File> {
+    source.seek(std::io::SeekFrom::Start(0))?;
+    let mut stored = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(to)?;
+    if let Err(error) = std::io::copy(source, &mut stored)
+        .and_then(|_| stored.set_permissions(source.metadata()?.permissions()))
+        .and_then(|()| stored.sync_all())
+    {
+        drop(stored);
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    let stored_sha256 = match sha256_open_file(&mut stored) {
+        Ok(sha256) => sha256,
+        Err(error) => {
+            drop(stored);
+            let _ = std::fs::remove_file(to);
+            return Err(error);
+        }
+    };
+    if stored_sha256 != expected_sha256 {
+        drop(stored);
+        let _ = std::fs::remove_file(to);
+        return Err(invalid(
+            "quarantine source changed while it was being moved",
+        ));
+    }
+    if let Err(error) = source_path_matches(source, from) {
+        drop(stored);
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::remove_file(from) {
+        drop(stored);
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    Ok(stored)
+}
+
+fn open_quarantine_source(path: &Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new().read(true).open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(invalid("quarantine source must be a regular file"));
+    }
+    source_path_matches(&file, path)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn source_path_matches(source: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let path_metadata = std::fs::symlink_metadata(path)?;
+    let source_metadata = source.metadata()?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_file()
+        || path_metadata.dev() != source_metadata.dev()
+        || path_metadata.ino() != source_metadata.ino()
+    {
+        return Err(invalid(
+            "quarantine source path no longer names the opened regular file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn source_path_matches(source: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    let path_metadata = std::fs::symlink_metadata(path)?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_file()
+        || path_metadata.len() != source.metadata()?.len()
+    {
+        return Err(invalid(
+            "quarantine source path no longer names the opened regular file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn destination_matches_source(source: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let destination = std::fs::symlink_metadata(path)?;
+    let source = source.metadata()?;
+    if destination.file_type().is_symlink()
+        || !destination.is_file()
+        || destination.dev() != source.dev()
+        || destination.ino() != source.ino()
+    {
+        return Err(invalid(
+            "quarantine destination does not match the opened source file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn destination_matches_source(source: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    let destination = std::fs::symlink_metadata(path)?;
+    if destination.file_type().is_symlink()
+        || !destination.is_file()
+        || destination.len() != source.metadata()?.len()
+    {
+        return Err(invalid(
+            "quarantine destination does not match the opened source file",
+        ));
     }
     Ok(())
 }
@@ -540,8 +705,13 @@ fn origin_sidecar_path(quarantine_dir: &Path, sha256_hex: &str) -> PathBuf {
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path)?;
+    sha256_open_file(&mut file)
+}
+
+fn sha256_open_file(file: &mut std::fs::File) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    file.seek(std::io::SeekFrom::Start(0))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -898,6 +1068,92 @@ mod tests {
             0o755
         );
         assert!(!dir.join("quarantine").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_swapped_for_a_symlink_before_link_is_refused_without_chmod() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = temp_dir("symlink-race");
+        let source = dir.join("source");
+        let target = dir.join("target");
+        let stored = dir.join("stored");
+        std::fs::write(&source, b"original payload").unwrap();
+        std::fs::write(&target, b"permission target").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut opened = open_quarantine_source(&source).unwrap();
+        let digest = sha256_open_file(&mut opened).unwrap();
+
+        let error = move_and_secure(
+            &source,
+            &stored,
+            |from, to| {
+                std::fs::remove_file(from)?;
+                symlink(&target, from)?;
+                move_open_file_to_quarantine(&mut opened, &digest, from, to)
+            },
+            secure_payload,
+            move_file_no_clobber,
+        )
+        .unwrap_err();
+
+        assert!(!error.retained_in_quarantine);
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "the raced symlink target must never be chmoded"
+        );
+        assert!(
+            std::fs::symlink_metadata(&source)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the replacement source entry must not be removed"
+        );
+        assert!(
+            !stored.exists(),
+            "the raced quarantine entry must be removed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_payload_changed_after_hashing_is_not_stored_under_the_old_digest() {
+        let dir = temp_dir("changed-after-hash");
+        let source = dir.join("source");
+        let stored = dir.join("stored");
+        std::fs::write(&source, b"original payload").unwrap();
+        let mut opened = open_quarantine_source(&source).unwrap();
+        let digest = sha256_open_file(&mut opened).unwrap();
+
+        let error = move_and_secure(
+            &source,
+            &stored,
+            |from, to| {
+                std::fs::write(from, b"changed payload")?;
+                move_open_file_to_quarantine(&mut opened, &digest, from, to)
+            },
+            secure_payload,
+            move_file_no_clobber,
+        )
+        .unwrap_err();
+
+        assert!(!error.retained_in_quarantine);
+        assert!(
+            source.exists(),
+            "a failed quarantine must retain the source"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"changed payload");
+        assert_ne!(sha256_file(&source).unwrap(), digest);
+        assert!(
+            !stored.exists(),
+            "changed bytes must not remain under the stale digest"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
