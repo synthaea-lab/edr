@@ -5,7 +5,7 @@ distribution, case queries, console. Technology choices recorded here once made.
 
 ## Agent heartbeat contract
 
-Every agent running with `--server` tells the control plane it is alive by
+Every agent that uploads (every `agent run` that is not `--standalone`) tells the control plane it is alive by
 sending its health beacon. Heartbeats keep `agent.lastSeen` fresh even when
 there are no events to upload.
 Event ingestion also updates `lastSeen`; the silent-agent check watches that
@@ -52,7 +52,7 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `timestamp_ns` | agent clock at collection, nanoseconds since the UNIX epoch |
 | `agent_version` | agent crate version |
 | `sensors[]` | one entry per heartbeat registered on the silence monitor: `name` (`linux-ebpf`, `windows-etw`, `windows-eventlog:<target>`, …), `pulse_count` (cumulative since start) and `silent` (past its deadline without a pulse). It's the same snapshot `cli health` shows. |
-| `spool_bytes` | event spool backlog awaiting upload; `0` without `--server` |
+| `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
 | `spool_dropped` | cumulative records shed by the spool's byte cap |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
 

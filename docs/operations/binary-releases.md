@@ -91,7 +91,10 @@ before it connects (`agent run` stops at start-up). A CA is a trust anchor, not 
 credential, so it also applies to a server named by hand; the client certificate does
 not (see `--cert`/`--key`).
 
-Not covered yet: `agent run` does not present the client certificate from `agent.toml`
-(`server.mtls_cert`/`mtls_key`) to the control plane, so a control plane that requires
-mTLS on the ingest routes still cannot be used from `run`; that is separate from the
-CA (#658).
+`agent run` uses the same two settings, and it also presents the client certificate: by
+default it uploads to `server.control_plane_url` with `server.mtls_cert` and
+`server.mtls_key`, and trusts only `server.ca_cert` when that is set. `--server` names
+another control plane (it never receives the configured client certificate; pass
+`--cert`/`--key` for one that needs it), and `--standalone` uploads nothing. An unreadable
+client certificate or key stops `run` at start-up, and so does a passphrase-protected key:
+the transport cannot use an encrypted key yet (`server.mtls_passphrase` is not wired).
