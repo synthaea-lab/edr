@@ -16,7 +16,7 @@ const SILENCE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
  *   healthyAgents: number,
  *   silentAgents: number,
  *   silentRate: number,
- *   contentRelease: { releaseVersion, status, releasedAt },
+ *   contentRelease: { releaseVersion, status, releasedAt } for the latest release,
  *   recentDetections: number,
  *   falsePositives: number
  * }
@@ -55,12 +55,12 @@ export async function GET(
     const silentAgents = totalAgents - healthyAgents;
     const silentRate = totalAgents > 0 ? silentAgents / totalAgents : 0;
 
-    // Get current content release for this ring
+    // Report the latest release, including halted and rolled-back releases, so
+    // this endpoint does not hide a halt by showing the previous active row.
     const contentRelease = await prisma.contentRelease.findFirst({
       where: {
         tenantId,
         ring,
-        status: "active",
       },
       orderBy: { releaseVersion: "desc" },
       select: {

@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const db = vi.hoisted(() => ({
   agent: { findUnique: vi.fn(), update: vi.fn() },
-  detection: { create: vi.fn() },
+  detection: { create: vi.fn(), findUnique: vi.fn() },
   $executeRaw: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -19,9 +20,9 @@ const headers = {
   "Content-Type": "application/json",
 };
 
-const post = (body: unknown) => POST(new NextRequest("http://localhost/api/ingest/detection", {
+const post = (body: unknown, extraHeaders: Record<string, string> = {}) => POST(new NextRequest("http://localhost/api/ingest/detection", {
   method: "POST",
-  headers,
+  headers: { ...headers, ...extraHeaders },
   body: JSON.stringify(body),
 }));
 
@@ -114,6 +115,73 @@ describe("POST /api/ingest/detection", () => {
       techniques: [],
       events: [],
     });
+    expect(response.status).toBe(400);
+    expect(db.detection.create).not.toHaveBeenCalled();
+  });
+
+  it("stores a retry key scoped to the enrolled agent", async () => {
+    const body = {
+      timestamp_ns: 1_700_000_000_000_000_000,
+      technique: "T1059",
+      severity: "medium",
+      event: { type: "exec" },
+      meta: {},
+    };
+    const key = "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a";
+    const response = await post(body, { "Idempotency-Key": key });
+    expect(response.status).toBe(200);
+    expect(db.detection.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      agentId: "agent-db",
+      ingestId: key,
+      ingestPayloadHash: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+    }) });
+  });
+
+  it("acknowledges a retried detection without storing or counting it twice", async () => {
+    const body = {
+      timestamp_ns: 1_700_000_000_000_000_000,
+      technique: "T1059",
+      severity: "high",
+      event: { type: "exec" },
+      meta: {},
+    };
+    const key = "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a";
+    const hash = createHash("sha256").update(JSON.stringify(body)).digest("hex");
+    db.detection.create.mockRejectedValueOnce({ code: "P2002" });
+    db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash: hash });
+
+    const response = await post(body, { "Idempotency-Key": key });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "accepted" });
+    expect(db.detection.findUnique).toHaveBeenCalledWith({
+      where: { agentId_ingestId: { agentId: "agent-db", ingestId: key } },
+      select: { ingestPayloadHash: true },
+    });
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it("rejects reuse of an idempotency key for different evidence", async () => {
+    db.detection.create.mockRejectedValueOnce({ code: "P2002" });
+    db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash: "other" });
+    const response = await post({
+      timestamp_ns: 1_700_000_000_000_000_000,
+      technique: "T1059",
+      severity: "high",
+      event: { type: "exec" },
+      meta: {},
+    }, { "Idempotency-Key": "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a" });
+    expect(response.status).toBe(409);
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed idempotency key", async () => {
+    const response = await post({
+      timestamp_ns: 1_700_000_000_000_000_000,
+      technique: "T1059",
+      severity: "high",
+      event: {},
+      meta: {},
+    }, { "Idempotency-Key": "bad" });
     expect(response.status).toBe(400);
     expect(db.detection.create).not.toHaveBeenCalled();
   });
