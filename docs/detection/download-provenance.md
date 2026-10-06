@@ -21,8 +21,9 @@ ADR-0018). Two rules consume it:
 Removing a mark doesn't alert on its own. `Unblock-File` over a downloaded
 PowerShell module tree removes hundreds of marks legitimately. The removal is
 still in the telemetry, as a `FileDelete` of the `…:Zone.Identifier` stream
-path (Kernel-File event 26, `DeletePath`), so it can be hunted and matched by
-Sigma.
+path (Kernel-File event 26, `DeletePath`), so it can be hunted. Sigma rules
+can't match it: the Sigma engine evaluates only process creation
+(`ExecEvent`).
 
 ## Downloaders that write no mark
 
@@ -44,6 +45,11 @@ downloads:
   event to join.
 - **A mark stripped by rewriting the file** (a copy to a new file, or a tool
   that writes the data to a fresh name) instead of deleting the stream.
+- **A mark rewritten in place to `ZoneId=0`** (or any zone up to 2). Nothing
+  is deleted, and the rewrite reports no `FileQuarantine`, because zones 0–2
+  are dropped.
+- **A renamed stream** (Kernel-File event 27, `RenamePath`): only deletes
+  (event 26) are consumed.
 - **Raw-volume or driver-level stream tampering.**
 
 The minifilter (#136) supersedes this path: it sees stream deletes, renames
