@@ -37,8 +37,24 @@ const EXIT_RECVFROM: u32 = 4;
 static SYSCALL_DISPATCH: Array<u32> = Array::with_max_entries(MAX_SYSCALL_ID, 0);
 
 /// syscall id of an in-flight call whose event needs its return value.
+///
+/// One entry per thread blocked in `accept`, `accept4`, `memfd_create` or
+/// `recvfrom`. When the map is full the insert fails silently, `raw_sys_exit`
+/// finds nothing to route and the telemetry of all four syscalls is lost
+/// host-wide (#672). Measured on Alpine/WSL2 (6.6), threads blocked in `accept`
+/// then one normal accept that must still be reported: a plain map of 4,096
+/// entries kept up to 4,000 and lost 4,096; of 64, kept 40 and lost 100; of
+/// 65,536, kept 4,200 and 8,000 (16,000 failed in the test's child process, not
+/// in the sensor).
+///
+/// Sized above the default `kernel.pid_max` (32,768) so live blocked threads can
+/// never fill it. Not a leak fix: a thread killed while blocked never reaches
+/// `raw_sys_exit`, and its entry stays until the same `pid_tgid` is reused. An
+/// `LruHashMap` (the choice for `ACCEPT_ARGS` in #668) would evict those, but
+/// at 65,536 entries it still lost the accept at 4,200 blocked threads on the
+/// same host (passed up to 4,090) for a reason not found yet, so it is not used.
 #[map]
-static PENDING_SYSCALL_EXIT: HashMap<u64, u32> = HashMap::with_max_entries(4096, 0);
+static PENDING_SYSCALL_EXIT: HashMap<u64, u32> = HashMap::with_max_entries(65_536, 0);
 
 #[unsafe(no_mangle)]
 static TASK_PID_OFFSET: Global<u32> = Global::new(0);
