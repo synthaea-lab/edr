@@ -85,6 +85,11 @@ indistinguishable from policy-disabled — observe-only either way.
 - **Server unreachable / `--standalone`:** fully local; events spool (or are
   simply not spooled); alerts and detection unaffected. Reconnect drains the
   backlog, at-least-once.
+- **Upload cannot be set up (unreadable client certificate or key, a passphrase-protected
+  key, a missing CA):** with `server.offline_fallback` on (the default) the agent runs and
+  detects locally, logs `UPLOAD DISABLED` and writes an `UPLOAD-DISABLED` alert; with it off it
+  stops at start-up. Dying would turn a certificate problem into no detection and, under
+  the watchdog's probation, a rolled-back and banned release (#658).
 - **eBPF unavailable (old kernel, lockdown):** audit-fallback sensor, reduced
   fidelity, recorded in capabilities.
 - **Enrichment/scan overload:** shed-and-count; a lost enrichment is a lost
