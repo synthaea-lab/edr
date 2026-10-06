@@ -30,16 +30,32 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    `version`; a hunt records the version it was written for.
 3. **A hunt is versioned.** `Hunt.version` goes up when `query` changes; every `HuntRun` keeps
    the version and a copy of the query it ran, so editing a hunt never rewrites its history.
-4. **Runs are bounded.** Each runs in a transaction with a 10 s statement timeout; a run that
-   fails (a timeout, or a stored query that no longer parses) is recorded on the run with its
-   `error`, not thrown, so one bad hunt does not stop the scheduler's batch. A run keeps its
+4. **Runs are bounded.** Each runs in a transaction with a 10 s statement timeout, and the
+   transaction itself is allowed 12 s: Prisma closes an interactive transaction after 5 s by
+   default, which would end a slow search with "Transaction already closed" before Postgres
+   could cancel it. A run that fails (a timeout, or a stored query that no longer parses) is
+   recorded on the run with a short `error`, not thrown, so one bad hunt does not stop the
+   scheduler's batch. The `error` is one of three messages this module wrote (a validation
+   message, "exceeded its time limit", or "the run failed (see the server log)"): a driver
+   error can carry table names and connection details, so it goes to the log and not to the
+   client. A hunt whose stored query no longer parses is repaired by a PATCH carrying a valid
+   one. A run keeps its
    counts and the newest 100 matching detection ids; the newest 100 runs per hunt are kept.
 5. **"New match" means ingested since the hunt's previous successful run started**
    (`detection.created_at`), not "first seen on the fleet". It is a count on the run. Nothing
    is notified yet; a notification channel is a separate decision.
 6. **Scheduling is a cron route**, `GET /api/cron/run-hunts` (CRON_SECRET), called every few
    minutes: a hunt runs when its last run is older than its `scheduleMinutes` (5 minutes to a
-   week). At most 50 hunts per call; a tenant may have 200 hunts.
+   week). A call runs at most 20 hunts and starts no new one after 30 s, so one request stays
+   within a host's request limit; what is left stays due for the next call. Which hunts are
+   due is one grouped query, not one per hunt. A tenant may have 200 hunts.
+7. **A tenant may start 20 runs a minute**, manual and scheduled together (a 429 with
+   `Retry-After` beyond that), read from the run history so it needs no extra state and holds
+   across server instances. It bounds how much a user can chain expensive `text` searches.
+8. **`ownerId` is attribution, not authorization.** It records who made a hunt; every session
+   user of the tenant may read, edit, run and delete every hunt of the tenant, like the other
+   console resources (cases, rings). A per-owner rule needs roles, which the console does not
+   have yet; revisit then.
 
 ## Consequences
 

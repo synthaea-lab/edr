@@ -1,10 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
-import { HuntValidationError, parseHuntQuery } from "@/lib/hunt";
+import { HuntValidationError, parseHuntQuery, type HuntQuery } from "@/lib/hunt";
 import { parseHuntInput, sameQuery } from "@/lib/hunt-input";
 
 type Params = { params: { id: string } };
+
+/**
+ * Whether `next` replaces what is stored. A stored query that no longer parses (the case
+ * ADR-0025 point 4 anticipates: a hunt kept from an older query version) counts as
+ * different, so a PATCH carrying a valid query repairs the hunt instead of failing on it.
+ */
+function queryDiffers(next: HuntQuery, stored: unknown): boolean {
+  try {
+    return !sameQuery(next, parseHuntQuery(stored));
+  } catch (error) {
+    if (error instanceof HuntValidationError) return true;
+    throw error;
+  }
+}
 
 /**
  * GET /api/hunts/[id] — the hunt and its run history (newest first, `?limit=`, default 20).
@@ -39,7 +53,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     const hunt = await prisma.hunt.findFirst({ where: { id: params.id, tenantId } });
     if (!hunt) return NextResponse.json({ error: "Hunt not found" }, { status: 404 });
 
-    const queryChanged = input.query !== undefined && !sameQuery(input.query, parseHuntQuery(hunt.query));
+    const queryChanged = input.query !== undefined && queryDiffers(input.query, hunt.query);
     const updated = await prisma.hunt.update({
       where: { id: hunt.id },
       data: {

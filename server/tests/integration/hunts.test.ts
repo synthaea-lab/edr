@@ -12,7 +12,15 @@ import { GET as listHunts, POST as createHunt } from "@/app/api/hunts/route";
 import { DELETE as deleteHunt, GET as getHunt, PATCH as patchHunt } from "@/app/api/hunts/[id]/route";
 import { POST as runHuntRoute } from "@/app/api/hunts/[id]/run/route";
 import { GET as runHuntsCron } from "@/app/api/cron/run-hunts/route";
-import { HUNT_RUNS_KEPT, dueHunts, pruneHuntRuns, runHunt } from "@/lib/hunt";
+import {
+  HUNT_RUNS_KEPT,
+  HUNT_TRANSACTION_TIMEOUT_MS,
+  MAX_RUNS_PER_TENANT_PER_MINUTE,
+  dueHunts,
+  pruneHuntRuns,
+  runHunt,
+} from "@/lib/hunt";
+import { Prisma } from "@prisma/client";
 
 const HOUR = 3_600_000;
 const query = { version: 1, lastHours: 24, techniques: ["T1059"] };
@@ -169,6 +177,69 @@ describe("saved hunts (real database)", () => {
     const res = await runHuntsCron(new NextRequest("http://localhost/api/cron/run-hunts", { headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` } }));
     expect(await res.json()).toMatchObject({ ran: 1, failed: 0 });
     expect(await prisma.huntRun.count({ where: { huntId: fine.id, error: null } })).toBe(1);
+  });
+
+  it("lets Postgres cancel a search that outlasts Prisma's default 5 s transaction window", async () => {
+    // Prisma closes an interactive transaction after 5 s unless told otherwise, which would
+    // end a 10 s search with "Transaction already closed" before the statement timeout fires.
+    // A 6 s statement timeout and an 8 s sleep show which one wins.
+    expect(HUNT_TRANSACTION_TIMEOUT_MS).toBeGreaterThan(10_000);
+    const tenant = await createTestTenant();
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "slow", query } });
+    const run = await runHunt(prisma, hunt, "manual", new Date(), {
+      statementTimeoutMs: 6_000,
+      beforeQuery: (tx) => tx.$executeRaw(Prisma.sql`SELECT pg_sleep(8)`),
+    });
+    expect(run.error).toBe("the search exceeded its time limit and was cancelled");
+    expect(run).toMatchObject({ matchCount: 0, newMatchCount: 0 });
+  }, 20_000);
+
+  it("never stores or returns driver internals for a run that fails", async () => {
+    const tenant = await createTestTenant();
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "h", query } });
+    const run = await runHunt(prisma, hunt, "manual", new Date(), {
+      beforeQuery: (tx) => tx.$executeRaw(Prisma.sql`SELECT * FROM table_that_is_not_there`),
+    });
+    expect(run.error).toBe("the run failed (see the server log)");
+    expect(run.error).not.toMatch(/table_that_is_not_there|relation|public\./i);
+  });
+
+  it("repairs a hunt whose stored query no longer parses with a PATCH carrying a valid one", async () => {
+    const tenant = await createTestTenant();
+    const broken = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "old", query: { version: 0, whatever: true } } });
+
+    const res = await patchHunt(req(`/api/hunts/${broken.id}`, tenant.id, "PATCH", { query }), ctx(broken.id));
+
+    expect(res.status).toBe(200);
+    const hunt = (await res.json()).hunt;
+    expect(hunt.version).toBe(2);
+    expect(hunt.query).toEqual(query);
+    const run = (await (await runHuntRoute(req(`/api/hunts/${broken.id}/run`, tenant.id, "POST"), ctx(broken.id))).json()).run;
+    expect(run.error).toBeNull();
+  });
+
+  it("still rejects an invalid new query in a PATCH, whatever is stored", async () => {
+    const tenant = await createTestTenant();
+    const broken = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "old", query: { version: 0 } } });
+    const res = await patchHunt(req(`/api/hunts/${broken.id}`, tenant.id, "PATCH", { query: { version: 1, lastHours: 0 } }), ctx(broken.id));
+    expect(res.status).toBe(400);
+  });
+
+  it("answers 429 once a tenant has used its runs for the minute, and only for that tenant", async () => {
+    const mine = await createTestTenant();
+    const other = await createTestTenant();
+    const hunt = await create(mine.id);
+    const theirs = await create(other.id);
+    await prisma.huntRun.createMany({
+      data: Array.from({ length: MAX_RUNS_PER_TENANT_PER_MINUTE }, () => ({
+        huntId: hunt.id, tenantId: mine.id, queryVersion: 1, query, sampleDetectionIds: [], trigger: "manual",
+      })),
+    });
+
+    const blocked = await runHuntRoute(req(`/api/hunts/${hunt.id}/run`, mine.id, "POST"), ctx(hunt.id));
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get("Retry-After")).toBe("30");
+    expect((await runHuntRoute(req(`/api/hunts/${theirs.id}/run`, other.id, "POST"), ctx(theirs.id))).status).toBe(200);
   });
 
   it("the cron runs only due scheduled hunts, and prunes history", async () => {
