@@ -227,8 +227,25 @@ fn secure_payload(file: &std::fs::File) -> std::io::Result<()> {
 }
 
 fn secure_payload_path(path: &Path) -> std::io::Result<()> {
-    let file = std::fs::File::open(path)?;
+    let file = open_payload_for_security(path)?;
     secure_payload(&file)
+}
+
+fn open_payload_for_security(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        // Win32 access masks: changing the read-only attribute through the
+        // handle needs FILE_WRITE_ATTRIBUTES, which GENERIC_READ does not grant.
+        // Request no permission to write the payload's contents.
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        options.access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES);
+    }
+    options.open(path)
 }
 
 fn secure_sidecar(_path: &Path) -> std::io::Result<()> {
@@ -570,7 +587,7 @@ fn copy_open_file_to_quarantine(
 }
 
 fn open_quarantine_source(path: &Path) -> std::io::Result<std::fs::File> {
-    let file = std::fs::OpenOptions::new().read(true).open(path)?;
+    let file = open_payload_for_security(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(invalid("quarantine source must be a regular file"));
