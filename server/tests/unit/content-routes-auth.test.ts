@@ -79,4 +79,17 @@ describe("agent content routes authentication (issue #30)", () => {
     // Past authentication the artifact route reads storage, which has no such file here.
     expect((await getArtifact(artifactReq(headers))).status).toBe(404);
   });
+
+  it("passes a halted-ring response through both manifest and artifact routes", async () => {
+    db.contentRelease.findFirst.mockResolvedValue({ releaseVersion: 2, status: "halted" });
+    const headers = { ...MTLS, "X-Proxy-Secret": SECRET };
+
+    const manifest = await callManifest(headers);
+    const artifact = await getArtifact(artifactReq(headers));
+
+    expect(manifest.status).toBe(423);
+    expect((await manifest.json()).error).toMatch(/halted/i);
+    expect(artifact.status).toBe(423);
+    expect((await artifact.json()).error).toMatch(/halted/i);
+  });
 });

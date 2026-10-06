@@ -148,3 +148,50 @@ shipped deployment, and the packaged unit is the one this decision binds.
 
 This does not move the trust boundary: an adversary with root can still edit the unit.
 What it changes is how much an adversary who only compromises the agent process obtains.
+
+### Amendment (#594): the unit must see the host's `/tmp` and `/home`
+
+Events carry host paths and the agent acts on them by path: YARA scans the file, the
+enrich worker hashes it, quarantine moves it. The unit shipped with `PrivateTmp=true`
+and `ProtectHome=true`, so the agent had its own empty `/tmp` and `/var/tmp` and no
+`/home` at all. Measured under systemd as an unprivileged user holding
+`CAP_DAC_READ_SEARCH`, reading a `0600` file written by another user:
+
+| Sandbox | `/tmp`, `/var/tmp` | `/home` |
+|---|---|---|
+| `PrivateTmp=true`, `ProtectHome=true` (as shipped) | not found | not found |
+| `PrivateTmp=false`, `ProtectHome=true` | read | not found |
+| `PrivateTmp=false`, `ProtectHome=read-only` | read | read |
+
+**Decision: `PrivateTmp=false` and `ProtectHome=read-only`.** Hashing and YARA are the
+detection path, and for an EDR a payload dropped in `/tmp` or a home directory is the
+common case, so being blind there is not an acceptable hardening trade. `ProtectSystem=strict`,
+`NoNewPrivileges` and the capability set are unchanged: reading needs no capability beyond
+`CAP_DAC_READ_SEARCH`, which is already granted.
+
+Quarantine is a different case and stays opt-in. Moving a file out of another user's
+directory needs `CAP_DAC_OVERRIDE` and `CAP_FOWNER` (without them the move fails even
+with no sandbox at all) and a writable source directory, so `ReadWritePaths=/tmp
+/var/tmp /home` and `ProtectHome=no`. Together that is close to running as root, which
+is what the previous amendment avoided, for a feature that is off by default
+(`--enable-quarantine`). The shipped unit therefore does not grant it; the drop-in that
+does is documented in `docs/operations/response.md`, and measured with the same probe
+(read and move both succeed with those capabilities and paths). Until a host opts in,
+quarantine fails closed with a logged per-event failure.
+
+What this gives up: the agent no longer has a private `/tmp`, so a local user can plant
+or race files in the agent's own temporary directory. The agent keeps its state in
+`/var/lib/synthaea` and `/run/synthaea` (both `ReadWritePaths`), not in `/tmp`.
+
+It also exposes `/root` and `/home` to the agent's reads, and that matters because the
+agent scans whatever path a process opened for writing, even when the kernel refused the
+open (the sensor fires before the permission check): measured, a denied
+`open("/root/secret", "w")` by an unprivileged user still queued the file for YARA. Until
+the scan request is gated on what that user could read, this lets a local user aim the
+agent at a file they cannot read, with a rule match and a path as the only thing that
+comes back (to logs and the control plane, not to them). The gate is the change that
+carries the uid with the request and refuses what the user could not read themselves
+(#631); the exposure above lasts until that lands. Measured on Fedora 41 with
+SELinux Enforcing and the agent as `synthaea`: with both changes, a payload another user
+drops in `/tmp` or `/home` is scanned, and a denied open of a root-only file, by name or
+through a symlink they planted, is not.

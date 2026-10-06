@@ -47,11 +47,11 @@ function stubDb(
 }
 
 describe("loadRings (issue #83)", () => {
-  it("shows a halted newest release and the older one agents are still offered", async () => {
+  it("shows a halted newest release and offers no content until resume or rollback", async () => {
     const db = stubDb({ canary_0: [release(5, "halted"), release(4, "active")] }, []);
     const { rings } = await loadRings(db as never, "t1", NOW);
     const ring = rings.find((r) => r.ring === "canary_0");
-    expect(ring).toMatchObject({ rollout: "halted", latestVersion: 5, servedVersion: 4 });
+    expect(ring).toMatchObject({ rollout: "halted", latestVersion: 5, servedVersion: null });
   });
 
   it("reports a ring with no release, and one whose every release was rolled back", async () => {
