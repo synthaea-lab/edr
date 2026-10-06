@@ -62,3 +62,24 @@ certificate, enrolled agent) and are public to the session middleware for that r
 
 Setting `status` to `halted` on a row stops it being offered (there is no endpoint for
 that yet; ring-health auto-halt is a later slice).
+
+## Control plane on a private CA
+
+An agent trusts the built-in public roots by default, so a control plane whose
+certificate comes from a private CA (a self-hosted install, a lab, the dev CA from
+`server/scripts/generate-dev-certs.sh`) fails with `UnknownIssuer`, and installing the
+CA in the system store does not help: the agent does not read it. Point the command at
+the CA instead:
+
+```sh
+agent apply-release --server https://cp.internal --ca-cert /etc/synthaea/certs/ca.pem \
+  --cert /etc/synthaea/certs/client.crt --key /etc/synthaea/certs/client.key
+```
+
+`--ca-cert` takes a PEM bundle and is accepted by `apply-release`,
+`apply-content-manifest` and `check-content-manifest`. It **replaces** the public
+roots rather than adding to them, so the server is pinned to that CA. An unreadable
+file or a bundle with no certificate stops the command before it connects.
+
+Not covered yet: the `agent run` upload and heartbeat path, and `agent.toml` has no
+`server.ca_cert` field (#658).
