@@ -13,6 +13,7 @@ a pid seen before its exec) are read with `NtQueryInformationProcess` class 92
 (`PROCESS_QUERY_LIMITED_INFORMATION` suffices). Every other event reads its pid's and
 its parent's stamp from the pid store. An older `ProcessStart` version, an unreadable
 process, or a 0 value leaves the stamp `None`, which consumers treat as "cannot tell",
-never as a new process. Unlike Linux, the value survives an agent restart. The lab check
-(force a pid to repeat with a loop of short-lived processes and confirm the stamp
-changes) is still open.
+never as a new process. Unlike Linux, the value survives an agent restart. Lab-checked on
+Windows 11 25H2 (PR #728): recycled pids get a new stamp, and the ETW parent field agrees
+with the class-92 query. `listen_port` (the `sockets` snapshot) and the `eventlog` sensor
+do not stamp yet.
