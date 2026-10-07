@@ -94,6 +94,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1003.001 | 3 | `rules:crates/rules/src/amsi.rs` |
+| T1021.001 | 3 | `rules:crates/rules/src/state.rs` |
 | T1046 | 3 | `rules:crates/rules/src/state.rs` |
 | T1059.005 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
