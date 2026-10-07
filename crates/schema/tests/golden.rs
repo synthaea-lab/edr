@@ -21,8 +21,7 @@ use schema::{
     ReadlineInputEvent, RegistrySetEvent, ScriptBlockEvent, SessionEvent, SessionState, ShellType,
     SignalEvent, SmbConnectEvent, SocketAcceptEvent, SocketBindEvent, SocketCreateEvent,
     SocketListenEvent, TccDecisionEvent, TlsCaptureEvent, TlsDirection, TlsLibraryType,
-    UdpRecvEvent, UdpSendEvent,
-    User, WmiActivityEvent, XpcConnectEvent,
+    UdpRecvEvent, UdpSendEvent, User, WmiActivityEvent, XpcConnectEvent,
     detection::{Detection, DetectionSource, ScoreAttribution, Severity},
 };
 

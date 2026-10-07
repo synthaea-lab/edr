@@ -1995,7 +1995,8 @@ struct SocketCreateArgs {
 /// its entry; an LRU evicts the stalest one when full, same reasoning as
 /// `ACCEPT_ARGS` and `PENDING_SYSCALL_EXIT` (#672).
 #[map]
-static SOCKET_CREATE_ARGS: LruHashMap<u64, SocketCreateArgs> = LruHashMap::with_max_entries(1024, 0);
+static SOCKET_CREATE_ARGS: LruHashMap<u64, SocketCreateArgs> =
+    LruHashMap::with_max_entries(1024, 0);
 
 /// `SOCK_CLOEXEC`/`SOCK_NONBLOCK` (`<bits/socket_type.h>`): the kernel ORs these
 /// into the same `type` argument as `SOCK_STREAM`/`SOCK_DGRAM`/etc., so they are
@@ -2034,8 +2035,7 @@ fn try_sys_enter_socket(ctx: &TracePointContext) -> Result<u32, u32> {
     #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
     let domain: i64 = unsafe { ctx.read_at(SOCKET_DOMAIN_OFFSET).map_err(|_| 1u32)? };
     #[cfg(bpf_target_arch = "x86")]
-    let domain: i64 =
-        unsafe { ctx.read_at::<i32>(SOCKET_DOMAIN_OFFSET).map_err(|_| 1u32)? as i64 };
+    let domain: i64 = unsafe { ctx.read_at::<i32>(SOCKET_DOMAIN_OFFSET).map_err(|_| 1u32)? as i64 };
 
     #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
     let raw_type: i64 = unsafe { ctx.read_at(SOCKET_TYPE_OFFSET).map_err(|_| 1u32)? };
@@ -2045,8 +2045,10 @@ fn try_sys_enter_socket(ctx: &TracePointContext) -> Result<u32, u32> {
     #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
     let protocol: i64 = unsafe { ctx.read_at(SOCKET_PROTOCOL_OFFSET).map_err(|_| 1u32)? };
     #[cfg(bpf_target_arch = "x86")]
-    let protocol: i64 =
-        unsafe { ctx.read_at::<i32>(SOCKET_PROTOCOL_OFFSET).map_err(|_| 1u32)? as i64 };
+    let protocol: i64 = unsafe {
+        ctx.read_at::<i32>(SOCKET_PROTOCOL_OFFSET)
+            .map_err(|_| 1u32)? as i64
+    };
 
     let pid_tgid = bpf_get_current_pid_tgid();
     let args = SocketCreateArgs {

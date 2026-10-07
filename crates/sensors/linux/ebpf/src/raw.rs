@@ -21,8 +21,8 @@ use crate::{
     sys_enter_process_vm_writev, sys_enter_ptrace, sys_enter_recvfrom, sys_enter_removexattr,
     sys_enter_rename, sys_enter_renameat, sys_enter_renameat2, sys_enter_sendto,
     sys_enter_setfsgid, sys_enter_setfsuid, sys_enter_setgid, sys_enter_setns, sys_enter_setresgid,
-    sys_enter_setresuid, sys_enter_setuid, sys_enter_setxattr, sys_enter_tgkill, sys_enter_umount,
-    sys_enter_socket, sys_enter_unlink, sys_enter_unlinkat, sys_enter_unshare, sys_enter_write,
+    sys_enter_setresuid, sys_enter_setuid, sys_enter_setxattr, sys_enter_socket, sys_enter_tgkill,
+    sys_enter_umount, sys_enter_unlink, sys_enter_unlinkat, sys_enter_unshare, sys_enter_write,
     sys_exit_accept, sys_exit_accept4, sys_exit_memfd_create, sys_exit_recvfrom, sys_exit_socket,
 };
 
