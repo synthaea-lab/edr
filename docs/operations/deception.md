@@ -73,5 +73,9 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   `CAP_SYS_PTRACE`, which the packaged unit does not grant (ADR-0014): it is not recognised and
   still raises the detection. Add the capability in a drop-in only if you accept that trade
   (ADR-0023 makes the same one for memory scanning).
+- The exec route cannot see a mount namespace: a local user who can create user and mount
+  namespaces can bind-mount their own binary over a listed one and be recognised as it.
+  Where that matters, disable unprivileged user namespaces (`user.max_user_namespaces=0`); it
+  is a limit of the exec route, not of the `/proc` one (ADR-0029).
 - A process in a container, a relative exec, a replaced binary (`... (deleted)`, `/proc` route)
   and a process that cannot be resolved are not allowed: the detection is raised.

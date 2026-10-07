@@ -55,7 +55,17 @@ the semi-frozen `schema`.
      own view, so its `/usr/bin/updatedb` would equal the host's; it is not resolved and
      raises the hit. In the `/proc` fallback the agent's `/proc/<pid>/ns/mnt` is compared with
      the process's; for the exec table, a container context on the event disqualifies it. A
-     chroot is not a mount namespace and is covered by neither.
+     chroot is not a mount namespace and is covered by neither. **The exec table is weaker
+     here than the `/proc` route.** A user who can create a user and mount namespace
+     (`unshare -Urm`, on by default on Fedora, restricted by default on Ubuntu 24.04) can
+     bind-mount their own binary over a listed one (`/usr/bin/updatedb`) and run it: the
+     kernel's `bprm->filename` is exactly that path, the event carries no container context,
+     and the process is allowed. It needs the operator to have listed that binary, and the
+     canaries to be visible from the namespace, so it is narrow, but it is a way past the
+     list. Closing it takes the mount namespace in the exec event (a sensor and schema
+     change), not a change here; until then do not rely on the list against a local user
+     who can create namespaces (`kernel.unprivileged_userns_clone`,
+     `user.max_user_namespaces=0`). Read from the code, not run.
    - **No shells or interpreters.** A name such as `bash`, `python3.x`, `perl`, `find` or
      `env` is rejected at load: allowing it would exempt every script it runs. The list is a
      guard against the obvious mistake, not a complete one.
