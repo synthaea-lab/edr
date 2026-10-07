@@ -91,6 +91,12 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   https://<control-plane>/api/cron/detect-silent-agents
 ```
 
+**An upgraded host keeps its old canaries, and they carry no decoy.** `plant` never overwrites
+a file, so canaries planted by a build before the decoy tokens keep their old content, and the
+agent registers only the tokens it finds in the files on disk (none, for those). To get decoys
+on such a host, take its directories out of `canary_dirs` and restart (the canaries are
+removed), then put them back and restart. Nothing logs this case yet.
+
 Limits: only a token presented on a route that evaluates a bearer (today the `/api/cron/*`
 routes) is seen; a standalone agent plants tokens that nothing recognises; and the control
 plane learns of a token only when the agent registers, so after a server database reset

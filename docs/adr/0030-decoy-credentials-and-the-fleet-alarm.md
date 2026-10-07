@@ -75,7 +75,14 @@ server half (recognise it when presented).
    and absent from finance and notes canaries. At start it registers the SHA-256 of the planted
    tokens (lowercase hex of the UTF-8 bytes, the same constant asserted on both sides) in a
    detached thread, retrying over about half a day (5 s, 15 s, 1 min, 5 min, 15 min, 30 min,
-   then hourly, 12 tries) and stopping at once on a refusal that will not change (4xx).
+   then hourly, 12 tries) and stopping at once only on a refusal that will not change: a 400,
+   409, 413 or 422, or an error that cannot be fixed by asking again (serialization,
+   configuration). A 401, 403, 404, 408, 429 or any 5xx, a TLS or I/O error and every
+   network error are retried, because the thread runs once per start and a daemon may not
+   restart for days. The tokens registered are the ones **found in the canary files on
+   disk** after planting, read back, never the plan's: a canary planted by an earlier build
+   keeps its old content and holds no decoy, and a skipped or foreign file holds none of
+   ours.
    The next start tries again. Standalone, or with the upload disabled, the tokens are planted
    and nothing recognises them.
 ## Consequences
