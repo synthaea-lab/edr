@@ -73,6 +73,23 @@ if (-not $OutDir) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $summary = Join-Path $OutDir "summary.txt"
 
+function Invoke-Tool {
+    # Runs a native tool and returns its exit code and output. Windows PowerShell 5.1
+    # turns every stderr line of `2>&1` into a terminating error under
+    # $ErrorActionPreference = "Stop", so the tool runs under "Continue" and the
+    # caller tests the exit code.
+    param([string]$FilePath, [string[]]$Arguments = @())
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $FilePath @Arguments 2>&1 | ForEach-Object { "$_" }
+        return @{ Exit = $LASTEXITCODE; Output = @($output) }
+    }
+    finally {
+        $ErrorActionPreference = $saved
+    }
+}
+
 function Say {
     param([string]$Text = "")
     Write-Host $Text
@@ -195,8 +212,15 @@ function Start-BusyLoad {
 
 function Test-ProviderRegistered {
     param([string]$Name)
-    $list = & logman.exe query providers 2>&1 | Out-String
-    return $list.Contains($Name)
+    # Whole-name match on the name column: "Kernel-Process" must not match
+    # "Kernel-Processor-Power".
+    $result = Invoke-Tool -FilePath "logman.exe" -Arguments @("query", "providers")
+    if ($result.Exit -ne 0) { return "unknown (logman exit " + $result.Exit + ")" }
+    foreach ($line in $result.Output) {
+        $m = [regex]::Match($line, "^\s*(\S.*?)\s+\{[0-9A-Fa-f-]{36}\}\s*$")
+        if ($m.Success -and $m.Groups[1].Value -ieq $Name) { return $true }
+    }
+    return $false
 }
 
 function Invoke-EtwWindow {
@@ -206,9 +230,10 @@ function Invoke-EtwWindow {
     $xml = Join-Path $OutDir ($Label + ".xml")
     $started = $false
     try {
-        & logman.exe create trace $name -ets -p $Provider $Keyword 0xFF -o $etl -bs 64 -nb 16 64 -max 512 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Say ("    could not start a session for " + $Provider + " (logman exit " + $LASTEXITCODE + "): not enabled")
+        $create = Invoke-Tool -FilePath "logman.exe" -Arguments @("create", "trace", $name, "-ets", "-p", $Provider, $Keyword, "0xFF", "-o", $etl, "-bs", "64", "-nb", "16", "64", "-max", "512")
+        if ($create.Exit -ne 0) {
+            Say ("    could not start a session for " + $Provider + " (logman exit " + $create.Exit + "): not enabled")
+            foreach ($line in $create.Output) { Say ("      " + $line) }
             return
         }
         $started = $true
@@ -223,11 +248,11 @@ function Invoke-EtwWindow {
         $elapsed = ((Get-Date) - $t0).TotalSeconds
     }
     finally {
-        if ($started) { & logman.exe stop $name -ets 2>&1 | Out-Null }
+        if ($started) { [void](Invoke-Tool -FilePath "logman.exe" -Arguments @("stop", $name, "-ets")) }
     }
     if (-not (Test-Path $etl)) { Say "    no ETL written"; return }
-    & tracerpt.exe $etl -of XML -o $xml -y -summary (Join-Path $OutDir ($Label + "-summary.txt")) -report (Join-Path $OutDir ($Label + "-report.xml")) 2>&1 | Out-Null
-    if (-not (Test-Path $xml)) { Say "    tracerpt produced no XML"; return }
+    $report = Invoke-Tool -FilePath "tracerpt.exe" -Arguments @($etl, "-of", "XML", "-o", $xml, "-y", "-summary", (Join-Path $OutDir ($Label + "-summary.txt")), "-report", (Join-Path $OutDir ($Label + "-report.xml")))
+    if ($report.Exit -ne 0 -or -not (Test-Path $xml)) { Say ("    tracerpt failed (exit " + $report.Exit + "): no XML"); return }
     $stats = Get-EventStats -XmlPath $xml
     Write-EventStats -Stats $stats -Seconds $elapsed
     $lost = @(Select-String -Path $xml -Pattern 'Name="(EventsLost|BuffersLost)">\s*(\d+)' -AllMatches |
@@ -251,8 +276,8 @@ if (-not $SkipEtw) {
         Say ""
     }
     Say "Leftover syncap-* sessions (should be none):"
-    $left = & logman.exe query -ets 2>&1 | Out-String
-    $found = @($left -split "`r?`n" | Where-Object { $_ -match "^syncap-" })
+    $listing = Invoke-Tool -FilePath "logman.exe" -Arguments @("query", "-ets")
+    $found = @($listing.Output | Where-Object { $_ -match "^syncap-" })
     if ($found.Count -eq 0) { Say "  none (or logman cannot list; check Get-EtwTraceSession)" } else { $found | ForEach-Object { Say ("  " + $_) } }
     Say ""
 }
