@@ -14,3 +14,6 @@ notes: >
   Needs Apache with a second vhost on port 8081 writing a custom-format log, and an
   `access_combined` source on that file. At least 10 lines in a 60 s window, half of them
   rejected, are needed for a verdict; the script sends 20 and waits out the window.
+  Validated 2026-10-07 on Debian 13 (6.12.107), Apache 2.4: `LOG-SOURCE log source
+  /var/log/apache2/custom-format.log (AccessCombined): 21 of 21 lines in the last minute do not
+  match the declared kind`.

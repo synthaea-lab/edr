@@ -20,3 +20,9 @@ notes: >
   Needs Apache with PHP-FPM actually executing PHP (the script checks the answer and
   fails if the server returns nothing), root, and a `[[logs.sources]]` entry of kind
   `access_combined` for /var/log/apache2/access.log.
+  Validated 2026-10-07 on Debian 13 (6.12.107), Apache 2.4 + PHP-FPM 8.4, real agent run as root:
+  T1505.003 names the request (GET /uploads/c99.php param=cmd, status 200, 0 s), T1059 reports
+  `executed directly by ... php-fpm8.4 (service)`. Seen once in a longer run that sent other
+  signature requests first: the alert paired the shell with an earlier 404 request 11 s away
+  instead of this one, which the log line (written after the response) reaches the agent just
+  after the shell. Not reproduced when the scenario runs alone.
