@@ -17,10 +17,11 @@ that ring until it is lifted. The command prints the server's reason, for exampl
 
     ring canary_0: content delivery is halted by the control plane (Content delivery is halted for ring 'canary_0' at release 3); nothing was changed, the current content stays active
 
-and leaves the state file and the content directory untouched. The rules the
-agent already loaded keep running. The halt can also land between the manifest
-and an artifact download; it is reported the same way, and the entries already
-written stay recorded for the next run.
+and, when the halt arrives before any artifact is applied, leaves the state
+file and content directory untouched. The rules the agent already loaded keep
+running. The halt can also land between the manifest and an artifact download;
+it is reported the same way, and entries already written stay recorded for the
+next run. The release is not marked applied until every artifact has landed.
 
 ## Running it from a timer
 
