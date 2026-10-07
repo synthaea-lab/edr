@@ -53,7 +53,9 @@ the semi-frozen `schema`.
    Further limits of the list, from the review of #699:
    - **Same mount namespace only.** A process in a container or chroot reports a path in its
      own view, so its `/usr/bin/updatedb` would equal the host's; it is not resolved and
-     raises the hit (the agent's `/proc/<pid>/ns/mnt` is compared with the process's).
+     raises the hit. In the `/proc` fallback the agent's `/proc/<pid>/ns/mnt` is compared with
+     the process's; for the exec table, a container context on the event disqualifies it. A
+     chroot is not a mount namespace and is covered by neither.
    - **No shells or interpreters.** A name such as `bash`, `python3.x`, `perl`, `find` or
      `env` is rejected at load: allowing it would exempt every script it runs. The list is a
      guard against the obvious mistake, not a complete one.
@@ -63,12 +65,22 @@ the semi-frozen `schema`.
    - **"Trusted system location" is a heuristic** (`policy`): `/usr/` and `/opt/` qualify, and
      `/opt/<app>/` is often owned by the application's own user. Do not list a binary an
      unprivileged user can replace.
-   - **Another user's process needs ptrace access.** Reading `/proc/<pid>/exe` and `ns/mnt` of
-     a process of another user needs `CAP_SYS_PTRACE`, which the packaged unit does not grant
-     (see its capability notes). Without it nothing resolves for such a process, and a root
-     indexer such as `updatedb` still raises the hit.
-   - **Pid reuse** between the event and the `/proc` read, by an allowed process, is a very
-     narrow window that is not closed.
+   - **The image comes from the process's own `Exec` event when the agent saw it start**
+     (`image_path` as the sensor reports it, kept per pid with its `process_generation` in a
+     bounded table, 8192 pids). That needs no `/proc` read, so it needs no `CAP_SYS_PTRACE`
+     and has no pid-reuse race: an entry is used only when the pid's incarnation matches,
+     both stamped and equal. A process in a container (the event carries a container context)
+     is never allowed, and a relative exec never matches. An entry matches the image either
+     as the kernel resolves it or as the operator wrote it, because an exec through
+     `/usr/bin/updatedb` is reported under that name.
+   - **A process that predates the agent, or whose `Exec` was evicted or arrived after its
+     file event, falls back to `/proc/<pid>/exe`.** There the earlier limits hold: another
+     user's process needs `CAP_SYS_PTRACE`, which the packaged unit does not grant, so a root
+     indexer that was already running when the agent started is not recognised and still
+     raises the hit. A short-lived indexer started by cron after the agent is covered by the
+     table.
+   - **Pid reuse** in the `/proc` fallback, between the event and the read, by an allowed
+     process, is a very narrow window that is not closed.
 
 ## Consequences
 

@@ -66,9 +66,12 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   `env`, ...): allowing one allows every script it runs.
 - **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be
   replaceable by an unprivileged user. `/opt/<app>` is often the application's own.
-- **Another user's process needs `CAP_SYS_PTRACE`** to be looked up, which the packaged unit
-  does not grant (ADR-0014). Without it a root indexer is not recognised and still raises the
-  detection; add the capability in a drop-in only if you accept that trade (ADR-0023 makes the
-  same one for memory scanning).
-- A process that exited before the lookup, a replaced binary (`... (deleted)`) and a process
-  in a container are not allowed: the detection is raised.
+- **How a process is recognised.** From the `Exec` event the agent saw when it started
+  (needs no privilege, so it works for a cron-started `updatedb` run by root), and otherwise
+  from `/proc/<pid>/exe`. A process that was already running when the agent started, or
+  whose `Exec` was shed, only has the `/proc` route, and for another user's process that needs
+  `CAP_SYS_PTRACE`, which the packaged unit does not grant (ADR-0014): it is not recognised and
+  still raises the detection. Add the capability in a drop-in only if you accept that trade
+  (ADR-0023 makes the same one for memory scanning).
+- A process in a container, a relative exec, a replaced binary (`... (deleted)`, `/proc` route)
+  and a process that cannot be resolved are not allowed: the detection is raised.
