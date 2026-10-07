@@ -162,12 +162,23 @@ One incarnation is one `(pid, process_generation)`: a recycled pid's earlier lif
 feeds the next one's correlation counts or lineage. `tests/test_train_behavior.py` proves
 the pipeline mechanically on synthetic captures and says nothing about detection quality.
 
-**Not shippable yet:** the Rust half of the 23-feature vector exists
+**Not shippable yet:** the Rust side now has the 23-feature vector
 (`ml::features::t1::extract_features(bus, pid, generation)`, pinned against Python by
-`ml/tests/fixtures/t1_golden.jsonl`, checked from `crates/ml/tests/t1_golden.rs` and
-`ml/tests/test_t1_parity.py`), but there is no T1 scorer yet: nothing loads a T1 ONNX model,
-applies its conformal threshold and feature bounds, and feeds the result to the agent.
-Until that exists a T1 model can be trained and evaluated here but not run on-device.
+`ml/tests/fixtures/t1_golden.jsonl`) and the scorer, `ml::BehaviorScorer`. The scorer loads a
+T1 ONNX model with its `model_metadata.json`, applies the conformal threshold (a normal score
+returns `None`) and the feature bounds (an out-of-range vector is an error, not a score), and
+returns the score with its top attributions. Metadata means a calibrated model and must carry
+both the threshold and the bounds (`train_behavior.py` always writes both): one without the other
+is refused at load rather than leaving a guard off silently; no metadata at all is the explicit
+uncalibrated mode. It also refuses a model that is not 23 features wide and bounds that are not
+for exactly the T1 features, in order. It is pinned to onnxruntime by
+`crates/ml/tests/fixtures/t1_scorer_golden.jsonl` (`gen_t1_scorer_fixture.py`, checked from
+`crates/ml/tests/t1_scorer.rs`) on a small model trained on jittered synthetic vectors: that
+pins Rust and Python inference, not detection quality.
+
+Still missing: the agent does not load or run it (`agent/src/sink.rs` loads the T2 scorer only),
+and there is no T1 model trained on a real capture. Until both exist a T1 model can be trained
+and evaluated here but not run on-device.
 
 **A caveat for evaluation:** an Isolation Forest ranks a value beyond the training range
 no more anomalous than the range edge, so on its own it will not flag a feature value it

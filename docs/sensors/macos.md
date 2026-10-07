@@ -52,6 +52,10 @@ Download provenance is the network→file link: a `FileQuarantine` event's
 `origin_url` joins the later exec of the same path on a case — the macOS
 mark-of-the-web (`docs/sensors/sources.md`, cross-platform note).
 
+Credentials in the recorded URLs (userinfo, fragment, secret-named query
+values such as a pre-signed link's signature) are redacted by the agent before
+anything stores or sends the event (#440, ADR-0018).
+
 ## Persistence coverage
 
 Two deliberately distinct signals:

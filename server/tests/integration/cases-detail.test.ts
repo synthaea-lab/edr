@@ -28,6 +28,42 @@ describe("GET /api/cases/[id]", () => {
     await prisma.$disconnect();
   });
 
+  it("returns the damage manifest of a ransomware case, read from the detection's further events", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const case_ = await createTestCase(tenant.id, { title: "T1486 activity" });
+    const rename = (from: string, to: string, ns: number) => ({
+      type: "file_rename",
+      meta: { pid: 9, timestamp_ns: ns },
+      old_path: from,
+      new_path: to,
+    });
+    await createTestDetection(tenant.id, agent.id, {
+      caseId: case_.id,
+      technique: "T1486",
+      event: rename("/home/u/b.docx", "/home/u/b.docx.locked", 2_000_000_000),
+      meta: { additional_events: [rename("/home/u/a.docx", "/home/u/a.docx.locked", 1_000_000_000)] },
+    });
+    await createTestDetection(tenant.id, agent.id, { caseId: case_.id, technique: "T1059.001" });
+
+    const body = await (await GET(request(tenant.id), { params: { id: case_.id } })).json();
+
+    expect(body.damageManifest.truncated).toBe(false);
+    expect(body.damageManifest.files.map((f: { path: string }) => f.path)).toEqual([
+      "/home/u/a.docx",
+      "/home/u/b.docx",
+    ]);
+  });
+
+  it("returns an empty damage manifest for a case that is not ransomware", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const case_ = await createTestCase(tenant.id);
+    await createTestDetection(tenant.id, agent.id, { caseId: case_.id });
+    const body = await (await GET(request(tenant.id), { params: { id: case_.id } })).json();
+    expect(body.damageManifest).toEqual({ files: [], truncated: false });
+  });
+
   it("returns the case with its grouped detections", async () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);

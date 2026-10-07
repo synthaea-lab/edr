@@ -12,12 +12,15 @@ what, and the degraded modes. The system-level view and the invariants live in
 parses the CLI and dispatches to `commands/` — the only module tree with
 `cfg(target_os)`. Composition is plain constructor injection, checked at
 compile time; there is no registry or DI framework. (The config file also
-carries the control-plane URL and storage/ipc/resource sections; today's
-upload path is still driven by the `--server` flag — aligning the two is part
-of #314.)
+carries the control-plane URL, its mTLS material and CA, and the storage/ipc/resource
+sections; `agent run` uploads to `server.control_plane_url` by default, presenting
+`server.mtls_cert`/`mtls_key` and trusting only `server.ca_cert` when it is set, with
+`--server` as an override (a server named by hand never gets the configured client
+certificate) and `--standalone` to upload nothing — #658.)
 
 - `commands/common.rs` — the platform-independent spine of `run`:
-  optional transport (spool + upload thread, `--server`), the `DetectionSink`
+  optional transport (spool + upload thread, to the configured control plane unless
+  `--standalone`), the `DetectionSink`
   (spooling into it when transport is on), the operator banner, the
   progress-backed liveness heartbeat (#102). A new pipeline stage lands here
   once, not per platform.
@@ -75,13 +78,18 @@ indistinguishable from policy-disabled — observe-only either way.
 | `--events <path>` | every normalized event, enriched (raw capture for ML/lab). Off unless the flag is given: the file grows without bound, so the packaged service never writes it (#559) |
 | `<alerts>/../heartbeat` | progress counter for the watchdog (#102) |
 | `<alerts>/../quarantine/` | quarantined payloads (#25) |
-| `<alerts>/../spool/` | store-and-forward segments awaiting upload (`--server`) |
+| `<alerts>/../spool/` | store-and-forward segments awaiting upload (not with `--standalone`) |
 
 ## Degraded modes (each one deliberate, logged, and counted)
 
-- **Server unreachable / no `--server`:** fully local; events spool (or are
+- **Server unreachable / `--standalone`:** fully local; events spool (or are
   simply not spooled); alerts and detection unaffected. Reconnect drains the
   backlog, at-least-once.
+- **Upload cannot be set up (unreadable client certificate or key, a passphrase-protected
+  key, a missing CA):** with `server.offline_fallback` on (the default) the agent runs and
+  detects locally, logs `UPLOAD DISABLED` and writes an `UPLOAD-DISABLED` alert; with it off it
+  stops at start-up. Dying would turn a certificate problem into no detection and, under
+  the watchdog's probation, a rolled-back and banned release (#658).
 - **eBPF unavailable (old kernel, lockdown):** audit-fallback sensor, reduced
   fidelity, recorded in capabilities.
 - **Enrichment/scan overload:** shed-and-count; a lost enrichment is a lost
