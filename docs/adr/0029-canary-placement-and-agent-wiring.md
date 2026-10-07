@@ -70,6 +70,17 @@ the semi-frozen `schema`.
    - **Pid reuse** between the event and the `/proc` read, by an allowed process, is a very
      narrow window that is not closed.
 
+9. **The refresh policy: a deleted canary is planted again, and only that.** At each start,
+   and every hour while the agent runs (a detached thread), a canary that is inventoried and
+   whose file is gone is recreated with the content it had (`deception::refresh`). A file that
+   is present is never touched, whatever it holds (modified or replaced content is counted and
+   logged, `verify` says how); a canary the inventory does not know is not planted by it; a
+   path taken by a symlink or a directory is left alone; and content the plan no longer
+   produces (a newer build) is not restored under the old hash. The deletion was itself a
+   tripwire hit, so restoring the decoy hides nothing; the agent's own re-creation is ignored
+   like its other writes. An operator who wants a decoy gone removes the `[deception]`
+   entry, not the file.
+
 ## Consequences
 
 - A host running the agent outside the packaged unit turns the feature on with one config
@@ -86,4 +97,4 @@ the semi-frozen `schema`.
     canaries placed there never fire on a read (they still fire on delete, rename and a
     write-intent open). The agent warns at start for each such directory, using the sensor's
     own `is_filtered_path` so the check cannot drift; it still plants them.
-- Decoy credentials, honeypot listeners and the refresh policy are still to come.
+- Decoy credentials are ADR-0030; honeypot listeners are still to come.
