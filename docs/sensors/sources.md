@@ -88,7 +88,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **File activity** | eBPF · tracepoints | open/write/delete/rename/chmod/chown with paths + attribution; noisy /dev,/proc,/sys,/tmp filtered | ✅ used | T1105, T1485/T1486, T1070.004, T1222 | #262 |
 | **File activity** | eBPF · BPF-LSM | `file_open` at the security decision point — deliberate double observation (blinding check), io_uring-proof vantage; inline-block ready | ✅ used | T1562 context | #91 |
 | **File activity** | eBPF · BPF-LSM | timestomping via `inode_setattr` hook | 📋 planned | T1070.006 | matrix row |
-| **Network** | eBPF · tracepoints | connect/bind/listen/accept, UDP sends — discrete, real-time | ✅ used | T1071/T1041, backdoor listeners | #263 |
+| **Network** | eBPF · tracepoints | connect/bind/listen/accept/socket, UDP send+recv — discrete, real-time | ✅ used | T1071/T1041, backdoor listeners | #263 |
 | **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features | #92 |
 | **Network** | eBPF · tracepoints | mount/umount → platform-neutral v21 `Mount` | 📋 planned | staging, evidence destruction | #362 |
 | **DNS** | eBPF | query/answer joined to the resolving process (udp:53 parse vs. `getaddrinfo` uprobe — choice in-issue) | 📋 planned | T1071.004, DGA features | #267 |

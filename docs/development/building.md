@@ -31,5 +31,5 @@ See `crates/ml/README.md` and `lab/provisioning/onnxruntime-static-build.md` for
 
 **Platform support:**
 - Linux (Ubuntu 24.04+): Fully supported
-- Windows: Not yet implemented (issue #110)
+- Windows (MSVC): supported for the `ml` crate, CPU only; see `lab/provisioning/onnxruntime-static-build.md` (issue #337)
 - macOS: Not yet implemented (issue #110)
