@@ -50,6 +50,25 @@ the semi-frozen `schema`.
    past the tripwire. Unlike the exclusions that keep an unknown path, this **fails
    closed**: a process that exited before the lookup, a replaced binary (`... (deleted)`)
    and every non-Linux platform raise the hit. The lookup runs only on a hit, never per event.
+   Further limits of the list, from the review of #699:
+   - **Same mount namespace only.** A process in a container or chroot reports a path in its
+     own view, so its `/usr/bin/updatedb` would equal the host's; it is not resolved and
+     raises the hit (the agent's `/proc/<pid>/ns/mnt` is compared with the process's).
+   - **No shells or interpreters.** A name such as `bash`, `python3.x`, `perl`, `find` or
+     `env` is rejected at load: allowing it would exempt every script it runs. The list is a
+     guard against the obvious mistake, not a complete one.
+   - **Entries are canonicalised** when the agent starts, because `/proc/<pid>/exe` reports the
+     real file (`/usr/bin/updatedb` is `updatedb.plocate` on Debian; usrmerge makes `/bin/x`
+     `/usr/bin/x`). An entry that does not resolve is kept as written.
+   - **"Trusted system location" is a heuristic** (`policy`): `/usr/` and `/opt/` qualify, and
+     `/opt/<app>/` is often owned by the application's own user. Do not list a binary an
+     unprivileged user can replace.
+   - **Another user's process needs ptrace access.** Reading `/proc/<pid>/exe` and `ns/mnt` of
+     a process of another user needs `CAP_SYS_PTRACE`, which the packaged unit does not grant
+     (see its capability notes). Without it nothing resolves for such a process, and a root
+     indexer such as `updatedb` still raises the hit.
+   - **Pid reuse** between the event and the `/proc` read, by an allowed process, is a very
+     narrow window that is not closed.
 
 ## Consequences
 

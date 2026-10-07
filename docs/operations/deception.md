@@ -47,3 +47,28 @@ legitimate reads.
   `/dev`, `/sys` and `/proc`. A canary there still fires on delete, rename and write, never
   on a read, so it will not catch reconnaissance. Place canaries elsewhere.
 - Windows and macOS plant too, but the packaged-unit notes above are Linux-only.
+
+## Letting a known indexer or backup read the canaries
+
+```toml
+[deception]
+canary_dirs = ["/srv/share"]
+allow_exe = ["/usr/libexec/plocate/updatedb.plocate"]   # absolute path of the real binary
+```
+
+A process is allowed only when its executable, as the kernel reports it (`/proc/<pid>/exe`),
+is on the list and the process is in the agent's mount namespace. Never the process name.
+
+- **Use the real file, not a link**: the agent resolves symlinks at start (so
+  `/usr/bin/updatedb` is compared as `updatedb.plocate` on Debian), but check
+  `readlink -f` on the host rather than assume.
+- **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
+  `env`, ...): allowing one allows every script it runs.
+- **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be
+  replaceable by an unprivileged user. `/opt/<app>` is often the application's own.
+- **Another user's process needs `CAP_SYS_PTRACE`** to be looked up, which the packaged unit
+  does not grant (ADR-0014). Without it a root indexer is not recognised and still raises the
+  detection; add the capability in a drop-in only if you accept that trade (ADR-0023 makes the
+  same one for memory scanning).
+- A process that exited before the lookup, a replaced binary (`... (deleted)`) and a process
+  in a container are not allowed: the detection is raised.
