@@ -72,3 +72,26 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   same one for memory scanning).
 - A process that exited before the lookup, a replaced binary (`... (deleted)`) and a process
   in a container are not allowed: the detection is raised.
+
+## Decoy credentials
+
+The credentials and config canaries each carry a fake token (`api-token : syn_dk_...`,
+`cron_secret = syn_dk_...`) derived from the install's seed. When the agent starts it sends
+the control plane the SHA-256 of each one (never the token), retrying in the background if
+the server is down. A request that presents one as a bearer token to the control plane is
+rejected as usual and also raises a **high** `T1552.001` detection against this agent, with
+the host's name, the route and the client address, at most once a minute per token (ADR-0030).
+
+To check it by hand with the agent running and registered, read a token from a canary and
+present it to a cron route (it is refused with a 401; the detection appears in the console):
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $(grep -ho 'syn_dk_[0-9a-f]*' /srv/share/* | head -1)" \
+  https://<control-plane>/api/cron/detect-silent-agents
+```
+
+Limits: only a token presented on a route that evaluates a bearer (today the `/api/cron/*`
+routes) is seen; a standalone agent plants tokens that nothing recognises; and the control
+plane learns of a token only when the agent registers, so after a server database reset
+decoys are recognised again once the agent restarts.

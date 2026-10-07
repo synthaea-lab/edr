@@ -31,6 +31,12 @@ describe("decoy token helpers", () => {
     );
   });
 
+  it("hashes a decoy token to the value the agent computes (crates/deception, plan.rs)", () => {
+    expect(hashToken("syn_dk_0123456789abcdef0123456789abcdef")).toBe(
+      "a4f205745e0254733ec14acd490bab0ec51dfcb67eede6fce2c02397f4064f87"
+    );
+  });
+
   it("accepts only 64-hex hashes and a bounded count", () => {
     const hash = "a".repeat(64);
     expect(DecoyRegistration.safeParse({ tokens: [hash] }).success).toBe(true);
