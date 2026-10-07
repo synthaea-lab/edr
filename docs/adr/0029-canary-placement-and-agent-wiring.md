@@ -29,9 +29,12 @@ the semi-frozen `schema`.
    schema change (fixtures, version bump) and is deferred until the server needs to
    distinguish deception findings structurally (decoy-credential alarms will).
 5. **The agent's own pid never raises a hit**; it writes the canaries at start.
-   A process that touches the same canary again within 60 s (event time) raises no second
+   A process that *reads* the same canary again within 60 s (event time) raises no second
    detection (a `grep -r` opens every canary many times); absorbed touches are counted and
-   the table is bounded at 1024 `(canary, pid)` pairs.
+   the table is bounded at 1024 `(canary, pid, process incarnation)` triples, so a reused
+   pid is not absorbed as its predecessor. A delete, a rename or a write-intent open is
+   never absorbed: it is the destructive touch an encryptor makes after reading, and it is
+   bounded by the number of canaries.
 6. **Planting failures degrade, one directory at a time.** Canaries are planned once for
    every directory (so names differ) and planted per directory: a directory the agent
    cannot write costs its own canaries, logs why, and the rest are planted and watched.
