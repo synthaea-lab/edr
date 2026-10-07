@@ -871,8 +871,11 @@ pub struct SocketAcceptEvent {
 /// `AF_INET`/`AF_INET6` like its siblings: an `AF_PACKET` or `SOCK_RAW` creation
 /// (packet capture, spoofed-source tooling, a port scanner) is exactly the signal
 /// this event exists to carry, and those families have no `bind`/`connect`
-/// sockaddr `SocketBindEvent`/`ConnectEvent` would ever see. Only emitted on
-/// success — a failed `socket()` created nothing to report.
+/// sockaddr `SocketBindEvent`/`ConnectEvent` would ever see. The one exclusion is
+/// `AF_UNIX` (local IPC — systemd, journald, D-Bus, every Unix-domain client):
+/// pure volume with no `bind`/`connect`-shaped risk and no current consumer
+/// (#714 review). Only emitted on success — a failed `socket()` created nothing
+/// to report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocketCreateEvent {
     pub meta: EventMeta,

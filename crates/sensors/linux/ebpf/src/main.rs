@@ -2005,6 +2005,15 @@ static SOCKET_CREATE_ARGS: LruHashMap<u64, SocketCreateArgs> =
 const SOCK_CLOEXEC_FLAG: i32 = 0o2000000;
 const SOCK_NONBLOCK_FLAG: i32 = 0o4000;
 
+/// `AF_UNIX` (`<bits/socket.h>`): excluded from `socket_create` emission, not from
+/// `SocketCreateArgs` capture. Local IPC sockets (systemd, journald, D-Bus, every
+/// Unix-domain client) are a large share of all `socket()` calls on a running
+/// system and never carry a family/protocol surprise the way `AF_PACKET` or a raw
+/// socket does, so emitting one per call is pure correlator-bus volume for zero
+/// current consumer, with nothing #263 or this event type needs them for (#714
+/// review).
+const AF_UNIX: i32 = 1;
+
 /// Offsets of the `syscalls:sys_enter_socket` tracepoint (x86_64/aarch64):
 /// `domain`(16), `type`(24), `protocol`(32) — the standard three-plain-argument
 /// layout also verified for `tgkill`'s `(tgid, tid, sig)`. Verified on 2026-10-07
@@ -2081,7 +2090,7 @@ fn try_sys_exit_socket(ctx: TracePointContext) -> Result<u32, u32> {
     };
     let _ = SOCKET_CREATE_ARGS.remove(&pid_tgid);
 
-    if ret < 0 {
+    if ret < 0 || args.domain == AF_UNIX {
         return Ok(0);
     }
 
