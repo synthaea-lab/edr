@@ -1,0 +1,31 @@
+name: web-webshell
+platform: linux
+script: web-webshell.sh
+simulates: >
+  A web shell request followed by a shell spawned by the web server (T1505.003, Server
+  Software Component: Web Shell), plus one request per access-log signature (SQL
+  injection, path traversal, a scanner user agent), read from the web server's access
+  log by an `access_combined` source (issue #478 level 2, ADR-0022). The requests are
+  reads and 404s against a real local server; no data is changed.
+expected_detections:
+  - technique: "T1505.003"
+    rule: rule_web_request_shell   # crates/correlator/src/rules.rs — a web-server shell
+                                   # paired with the nearest signature request
+    min_count: 1
+    tolerance: 0
+  - technique: "T1059"
+    rule: check_web_server_spawns_shell   # crates/rules/src/state.rs, the lineage rule
+    min_count: 1
+    tolerance: 0
+notes: >
+  Needs a real nginx or Apache on 127.0.0.1:80, curl, and a `[[logs.sources]]` entry of
+  kind `access_combined` for the server's default access log. The four `http_request`
+  events (one per signature) and, after about a minute, one `http_summary` are checked in
+  the events file; they are not alert techniques. Validated with the real agent against
+  nginx 1.24 (Ubuntu 24.04, WSL2): T1505.003 names the WebshellLike request, T1059 fires,
+  four `http_request` events and one `http_summary` (6 requests, 4 failing) are written.
+  That run predates the redaction of the evidence value (ADR-0018): the value was cut but
+  not redacted then. It is now replaced by REDACTED when the matched parameter is named like
+  a secret (unit tests and a `poll_source` test); this scenario's parameters are not, and it
+  has not been re-run on a live nginx since.
+  Not covered: Apache, php-fpm as the parent, a custom LogFormat.
