@@ -31,7 +31,13 @@ the `libc` crate, a Unix-only dependency of `response`. An existing quarantine d
 owned by another user is left alone when it is already `0700` (an administrator running
 `list` or `restore`) and refused when its mode would have to change. Limits: `O_NOFOLLOW`
 covers the last path component only, and the check of the source's name and its removal are
-not atomic.
+not atomic. A source that is written to while it is processed is not refused, since a writer
+could then keep the quarantine from ever happening: it is copied from the descriptor into a
+private file, hashed as it is copied, and filed under that digest, so the stored bytes and
+their digest agree whatever the writer does. A payload that is hard-linked shares its inode
+with the source, so a process that already holds it open for writing can still change the
+quarantined file (`restore` then reports a hash mismatch); containment holds, since the file
+is `0400` and no name is left at the source.
 
 ## Consequences
 
