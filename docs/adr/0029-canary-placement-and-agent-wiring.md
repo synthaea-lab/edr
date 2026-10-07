@@ -61,5 +61,7 @@ the semi-frozen `schema`.
   - The Linux sensor reports `openat` paths as passed, so a relative open
     (`cd dir && cat name`) does not match an inventoried absolute path.
   - Read-only opens under `/tmp`, `/var/tmp` and `/dev/shm` are filtered by the sensor, so
-    canaries placed there never fire on a read.
+    canaries placed there never fire on a read (they still fire on delete, rename and a
+    write-intent open). The agent warns at start for each such directory, using the sensor's
+    own `is_filtered_path` so the check cannot drift; it still plants them.
 - Decoy credentials, honeypot listeners and the refresh policy are still to come.
