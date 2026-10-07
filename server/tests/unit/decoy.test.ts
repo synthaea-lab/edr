@@ -4,6 +4,7 @@ import {
   DecoyRegistration,
   MAX_DECOY_TOKENS_PER_AGENT,
   bearerToken,
+  clientAddress,
   hashToken,
   looksLikeDecoy,
 } from "@/lib/decoy";
@@ -40,5 +41,19 @@ describe("decoy token helpers", () => {
       DecoyRegistration.safeParse({ tokens: Array(MAX_DECOY_TOKENS_PER_AGENT + 1).fill(hash) })
         .success
     ).toBe(false);
+  });
+
+  it("prefers X-Real-IP and otherwise the last X-Forwarded-For hop", () => {
+    const h = (init: Record<string, string>) => new Headers(init);
+    expect(clientAddress(h({ "x-real-ip": "192.0.2.1", "x-forwarded-for": "6.6.6.6" }))).toBe("192.0.2.1");
+    expect(clientAddress(h({ "x-forwarded-for": "6.6.6.6, 7.7.7.7, 192.0.2.2" }))).toBe("192.0.2.2");
+    expect(clientAddress(h({ "x-forwarded-for": "192.0.2.3" }))).toBe("192.0.2.3");
+    expect(clientAddress(h({}))).toBeNull();
+    expect(clientAddress(h({ "x-forwarded-for": " , " }))).toBeNull();
+  });
+
+  it("bounds the echoed address", () => {
+    const long = "1".repeat(500);
+    expect(clientAddress(new Headers({ "x-real-ip": long }))?.length).toBe(200);
   });
 });

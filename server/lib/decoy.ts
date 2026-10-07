@@ -105,6 +105,22 @@ const echo = (value: string | null) =>
   value === null ? null : value.slice(0, MAX_HEADER_ECHO);
 
 /**
+ * The address the request came from, as far as the proxy saw it. `X-Real-IP` is set by nginx
+ * from the connection (and replaces any value the client sent); `X-Forwarded-For` is a list
+ * a client can prefix, and nginx's `$proxy_add_x_forwarded_for` appends the connection's
+ * address at the end, so its last hop is the trustworthy one and its first is whatever the
+ * attacker wrote. Behind any other proxy, neither is evidence.
+ */
+export function clientAddress(headers: Headers): string | null {
+  const real = headers.get("x-real-ip")?.trim();
+  if (real) return echo(real);
+  const forwarded = headers.get("x-forwarded-for");
+  if (!forwarded) return null;
+  const last = forwarded.split(",").pop()?.trim();
+  return last ? echo(last) : null;
+}
+
+/**
  * If the request presents a decoy token, records a high-severity detection against the agent
  * that planted it, naming its host. Best effort and silent: it never throws and never changes
  * the response the caller sends, so a probing client learns nothing from it. One alarm per
@@ -125,43 +141,98 @@ export async function reportDecoyUse(
     });
     if (!decoy) return;
 
-    const recent = await prisma.detection.findFirst({
-      where: {
-        agentId: decoy.agentId,
-        technique: "T1552.001",
-        timestamp: { gte: new Date(now.getTime() - DECOY_ALARM_COOLDOWN_MS) },
-        meta: { path: ["decoy_id"], equals: decoy.id },
-      },
-      select: { id: true },
-    });
-    if (recent) return;
-
-    const host = decoy.agent.hostname ?? decoy.agent.enrollmentId;
-    await prisma.detection.create({
-      data: {
-        tenantId: decoy.agent.tenantId,
-        agentId: decoy.agent.id,
-        timestamp: now,
-        technique: "T1552.001",
-        severity: "high",
-        event: {
-          type: "decoy_credential_used",
-          title: `Decoy credential planted on ${host} was presented to the control plane`,
-          decoy_token_sha256: decoy.tokenSha256.slice(0, 16),
-          route: req.nextUrl.pathname,
-          method: req.method,
-        },
-        meta: {
-          source: "deception",
-          decoy_id: decoy.id,
-          planting_host: host,
-          planting_agent_id: decoy.agent.id,
-          client_address: echo(req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip")),
-          user_agent: echo(req.headers.get("user-agent")),
-        },
-      },
-    });
+    // Presentations that arrive together are one event: the first to get here records it, the
+    // others stop, so the check below (a read, then a write) cannot let two through. Per
+    // server process; behind several, the database check still bounds it to about one.
+    if (inFlight.has(decoy.id)) return;
+    inFlight.add(decoy.id);
+    try {
+      await recordIfNotRecent(prisma, req, decoy, now);
+    } finally {
+      inFlight.delete(decoy.id);
+    }
   } catch (error) {
     console.error("Decoy credential check failed:", error);
   }
+}
+
+/** Decoys whose alarm is being recorded right now (see [`reportDecoyUse`]). */
+const inFlight = new Set<string>();
+
+/** Reports still running, so a test (or a shutdown hook) can wait for them. */
+const pending = new Set<Promise<void>>();
+
+/**
+ * [`reportDecoyUse`] started after the caller has its answer: the response of a rejected
+ * request must not take longer when the bearer is a decoy (three queries) than when it is
+ * not (none), or a client can tell them apart by timing. The work is started, not awaited;
+ * `reportDecoyUse` never throws, so nothing is left unhandled. On a long-running Node server
+ * (`next start`) the promise lives on; on a platform that freezes the process after the
+ * response it may be cut off, which is why the ADR names the deployment it assumes.
+ */
+export function scheduleDecoyReport(
+  prisma: PrismaClient,
+  req: NextRequest,
+  authorization: string | null
+): void {
+  const work = reportDecoyUse(prisma, req, authorization).finally(() => {
+    pending.delete(work);
+  });
+  pending.add(work);
+}
+
+/** Resolves when every scheduled report has finished. For tests and graceful shutdown. */
+export async function flushDecoyReports(): Promise<void> {
+  while (pending.size > 0) {
+    await Promise.all(Array.from(pending));
+  }
+}
+
+async function recordIfNotRecent(
+  prisma: PrismaClient,
+  req: NextRequest,
+  decoy: {
+    id: string;
+    tokenSha256: string;
+    agentId: string;
+    agent: { id: string; tenantId: string; hostname: string | null; enrollmentId: string };
+  },
+  now: Date
+): Promise<void> {
+  const recent = await prisma.detection.findFirst({
+    where: {
+      agentId: decoy.agentId,
+      technique: "T1552.001",
+      timestamp: { gte: new Date(now.getTime() - DECOY_ALARM_COOLDOWN_MS) },
+      meta: { path: ["decoy_id"], equals: decoy.id },
+    },
+    select: { id: true },
+  });
+  if (recent) return;
+
+  const host = decoy.agent.hostname ?? decoy.agent.enrollmentId;
+  await prisma.detection.create({
+    data: {
+      tenantId: decoy.agent.tenantId,
+      agentId: decoy.agent.id,
+      timestamp: now,
+      technique: "T1552.001",
+      severity: "high",
+      event: {
+        type: "decoy_credential_used",
+        title: `Decoy credential planted on ${host} was presented to the control plane`,
+        decoy_token_sha256: decoy.tokenSha256.slice(0, 16),
+        route: req.nextUrl.pathname,
+        method: req.method,
+      },
+      meta: {
+        source: "deception",
+        decoy_id: decoy.id,
+        planting_host: host,
+        planting_agent_id: decoy.agent.id,
+        client_address: clientAddress(req.headers),
+        user_agent: echo(req.headers.get("user-agent")),
+      },
+    },
+  });
 }

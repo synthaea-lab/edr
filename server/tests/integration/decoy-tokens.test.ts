@@ -4,7 +4,12 @@ import { cleanDatabase, createTestAgent, createTestTenant, prisma } from "../hel
 import { createMtlsHeaders } from "../helpers/http";
 import { POST as register } from "@/app/api/ingest/decoy/route";
 import { GET as cronSilentAgents } from "@/app/api/cron/detect-silent-agents/route";
-import { DECOY_ALARM_COOLDOWN_MS, MAX_DECOY_TOKENS_PER_AGENT, hashToken } from "@/lib/decoy";
+import {
+  DECOY_ALARM_COOLDOWN_MS,
+  MAX_DECOY_TOKENS_PER_AGENT,
+  flushDecoyReports,
+  hashToken,
+} from "@/lib/decoy";
 
 /**
  * Decoy credentials (issue #81) through the real routes and database: an agent registers the
@@ -26,6 +31,13 @@ function cron(authorization: string, extra: Record<string, string> = {}) {
   return new NextRequest("http://localhost/api/cron/detect-silent-agents", {
     headers: { Authorization: authorization, ...extra },
   });
+}
+
+/** A presentation of `header`, with the alarm (recorded after the answer) allowed to finish. */
+async function present(header: string, extra: Record<string, string> = {}) {
+  const res = await cronSilentAgents(cron(header, extra));
+  await flushDecoyReports();
+  return res;
 }
 
 const alarms = (agentId: string) =>
@@ -104,9 +116,11 @@ describe("decoy tokens (real database)", () => {
     const agent = await createTestAgent(tenant.id, undefined, { hostname: "web-01" });
     await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
 
-    const res = await cronSilentAgents(
-      cron(`Bearer ${TOKEN}`, { "x-forwarded-for": "203.0.113.9", "user-agent": "curl/8" })
-    );
+    const res = await present(`Bearer ${TOKEN}`, {
+      "x-real-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.77, 203.0.113.9",
+      "user-agent": "curl/8",
+    });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "Unauthorized" });
 
@@ -126,7 +140,7 @@ describe("decoy tokens (real database)", () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
     await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
-    for (let i = 0; i < 3; i++) await cronSilentAgents(cron(`Bearer ${TOKEN}`));
+    for (let i = 0; i < 3; i++) await present(`Bearer ${TOKEN}`);
     expect(await alarms(agent.id)).toHaveLength(1);
 
     // Past the cooldown it alarms again.
@@ -134,7 +148,7 @@ describe("decoy tokens (real database)", () => {
       where: { agentId: agent.id },
       data: { timestamp: new Date(Date.now() - DECOY_ALARM_COOLDOWN_MS - 1_000) },
     });
-    await cronSilentAgents(cron(`Bearer ${TOKEN}`));
+    await present(`Bearer ${TOKEN}`);
     expect(await alarms(agent.id)).toHaveLength(2);
   });
 
@@ -148,7 +162,7 @@ describe("decoy tokens (real database)", () => {
       `Basic ${TOKEN}`,
       "Bearer ",
     ]) {
-      expect((await cronSilentAgents(cron(header))).status).toBe(401);
+      expect((await present(header)).status).toBe(401);
     }
     expect(await alarms(agent.id)).toHaveLength(0);
   });
@@ -157,8 +171,27 @@ describe("decoy tokens (real database)", () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
     await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
-    const res = await cronSilentAgents(cron(`Bearer ${process.env.CRON_SECRET}`));
+    const res = await present(`Bearer ${process.env.CRON_SECRET}`);
     expect(res.status).not.toBe(401);
     expect(await alarms(agent.id)).toHaveLength(0);
+  });
+
+  it("records one alarm when the same decoy is presented many times at once", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    await Promise.all(Array.from({ length: 8 }, () => cronSilentAgents(cron(`Bearer ${TOKEN}`))));
+    await flushDecoyReports();
+    expect(await alarms(agent.id)).toHaveLength(1);
+  });
+
+  it("takes the address from X-Real-IP, never from the first X-Forwarded-For hop", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    // No X-Real-IP: nginx appended the connection's address last, the client wrote the rest.
+    await present(`Bearer ${TOKEN}`, { "x-forwarded-for": "10.0.0.1, 192.0.2.50" });
+    const [alarm] = await alarms(agent.id);
+    expect((alarm.meta as { client_address?: string }).client_address).toBe("192.0.2.50");
   });
 });
