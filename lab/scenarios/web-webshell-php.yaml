@@ -1,0 +1,22 @@
+name: web-webshell-php
+platform: linux
+script: web-webshell-php.sh
+simulates: >
+  A real PHP web shell on Apache + PHP-FPM (T1505.003, Server Software Component: Web
+  Shell). The script writes a one-line PHP file under the web root, requests it with a
+  command, and PHP-FPM spawns a real shell; the request is read from Apache's access log
+  by an `access_combined` source (issue #478 level 2, ADR-0022). The file is removed
+  when the script ends. Lab VM only.
+expected_detections:
+  - technique: "T1505.003"
+    rule: rule_web_request_shell   # crates/correlator/src/rules.rs
+    min_count: 1
+    tolerance: 0
+  - technique: "T1059"
+    rule: check_web_server_spawns_shell   # crates/rules/src/state.rs, parent php-fpm*
+    min_count: 1
+    tolerance: 0
+notes: >
+  Needs Apache with PHP-FPM actually executing PHP (the script checks the answer and
+  fails if the server returns nothing), root, and a `[[logs.sources]]` entry of kind
+  `access_combined` for /var/log/apache2/access.log.

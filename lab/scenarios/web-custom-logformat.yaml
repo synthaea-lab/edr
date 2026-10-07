@@ -1,0 +1,16 @@
+name: web-custom-logformat
+platform: linux
+script: web-custom-logformat.sh
+simulates: >
+  A site whose Apache LogFormat is not the combined format, read by an `access_combined`
+  source (issue #478 level 2, ADR-0022). Not an attack: the case where detection would
+  otherwise go blind without saying so.
+expected_detections:
+  - technique: "LOG-SOURCE"
+    rule: misparse watch   # agent/src/log_sources.rs, MisparseWatch (crates/sensors/linux/logs)
+    min_count: 1
+    tolerance: 0
+notes: >
+  Needs Apache with a second vhost on port 8081 writing a custom-format log, and an
+  `access_combined` source on that file. At least 10 lines in a 60 s window, half of them
+  rejected, are needed for a verdict; the script sends 20 and waits out the window.
