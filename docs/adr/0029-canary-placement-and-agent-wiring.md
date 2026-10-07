@@ -1,4 +1,4 @@
-# ADR-0028: Canary placement and how the agent raises a canary hit
+# ADR-0029: Canary placement and how the agent raises a canary hit
 
 - **Status**: proposed
 - **Date**: 2026-10-07
@@ -22,17 +22,31 @@ the semi-frozen `schema`.
    of the wrong length disables planting instead of being regenerated, because a new seed
    would rename the canaries and orphan the planted ones.
 3. **Removing the table removes the canaries.** With no directories configured, the agent
-   deletes what the inventory lists at start. That is the uninstall path for the decoys.
+   deletes what the inventory lists at start. That is the uninstall path for the decoys
+   (see 7 for when that can happen).
 4. **A hit is a `Rule` detection**, `rule_id = "DECEPTION-CANARY"`, severity High, technique
    T1083, with the triggering event attached. No new `DetectionSource` variant: that is a
    schema change (fixtures, version bump) and is deferred until the server needs to
    distinguish deception findings structurally (decoy-credential alarms will).
 5. **The agent's own pid never raises a hit**; it writes the canaries at start.
-6. Planting failures degrade: the agent runs without tripwires and logs why.
+6. **Planting failures degrade, one directory at a time.** Canaries are planned once for
+   every directory (so names differ) and planted per directory: a directory the agent
+   cannot write costs its own canaries, logs why, and the rest are planted and watched.
+   With none writable the agent runs without tripwires.
+7. **Dropping the table removes the canaries, and only a successfully loaded config can
+   drop it.** `config::load` fails fast on a missing or invalid file (ADR-0013) and the
+   agent exits; there is no fallback to defaults, so a broken `agent.toml` cannot
+   silently remove the canaries. Only a valid file without `[deception]` does.
 
 ## Consequences
 
-- A lab can turn the feature on with one config line, and off by deleting it.
+- A host running the agent outside the packaged unit turns the feature on with one config
+  line, and off by deleting it. **With the packaged unit it takes two steps**:
+  `ProtectSystem=strict` makes everything outside `ReadWritePaths` read-only to the
+  unprivileged `synthaea` user, so a `canary_dirs` entry under `/home`, `/srv` or `/var/www`
+  fails to plant until a drop-in adds it to `ReadWritePaths` and the directory is writable by
+  that user. `docs/operations/deception.md` gives the drop-in; without it the log says
+  "planting failed here" for that directory.
 - Known gaps, from the slice 1 review, that decide whether the tripwire fires in the field:
   - The Linux sensor reports `openat` paths as passed, so a relative open
     (`cd dir && cat name`) does not match an inventoried absolute path.
