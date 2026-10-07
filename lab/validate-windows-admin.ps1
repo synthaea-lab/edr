@@ -263,7 +263,7 @@ function Invoke-KernelFileMaskTest([string]$Mask) {
         $ErrorActionPreference = $previousPreference
     }
     foreach ($line in @($output)) {
-        $lineText = "$_"
+        $lineText = "$line"
         Write-Host $lineText
         if ($lineText -match "KERNEL_FILE_MASK_SESSION=(\S+)") {
             $candidate = $Matches[1]
@@ -572,10 +572,10 @@ try {
 
             $negative = Invoke-KernelFileMaskTest "0x1E80"
             $negativeTail = (($negative.Output -split "`r?`n") | Select-Object -Last 8) -join "; "
-            if ($negative.ExitCode -ne 0 -and $negative.Output -match "mask validation failed:") {
-                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "PASS" "the test failed on observed event IDs as expected; $negativeTail"
+            if ($negative.ExitCode -ne 0 -and $negative.Output -match "mask validation failed: unexpected Kernel-File IDs") {
+                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "PASS" "the test saw Kernel-File IDs outside 12, 26, 30 under the wider mask, as expected; $negativeTail"
             } else {
-                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected an event-ID assertion failure; $negativeTail"
+                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected the failure `unexpected Kernel-File IDs` (a `missing` failure or a session problem does not prove the bad mask lets extra IDs through); $negativeTail"
             }
         } finally {
             Pop-Location
