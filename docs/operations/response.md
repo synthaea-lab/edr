@@ -180,8 +180,13 @@ Known limits of the reflex, to read before enabling `--enable-kill` with canarie
 
 - **False positive: a backup or archiver.** One that walks every directory (so it reads a
   canary) and rotates archives (a burst of renames and deletes) meets both conditions and is
-  killed. List it in `[deception] allow_exe` once that exists (#699); until then keep
-  `--enable-kill` off on a host that runs one, and read the observe-only lines first.
+  killed unless it is listed in `[deception] allow_exe` (`docs/operations/deception.md`): a
+  listed executable never counts as a canary signal, so it is not killed even when it raises
+  the burst rule. The list needs the process to be resolvable: under the packaged unit that
+  holds for the agent's own user only (another user's `/proc/<pid>/exe` needs
+  `CAP_SYS_PTRACE`), so a root backup is not recognised and is still killed. Keep
+  `--enable-kill` off on a host running one until the capability is granted, and read the
+  observe-only lines first.
 - **System services.** The reflex does not consult the refusal of ADR-0028 (#652, a system
   service's main process is not killed on a `BAYES` crossing alone), because that guard is not
   on `main` yet. Whether the reflex honours it or bypasses it is a decision for the owner of
