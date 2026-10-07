@@ -28,8 +28,9 @@ To migrate from `old/lab` after review:
 | `response.sh` | One process beaconing once a second while a YARA-marked payload is written, run with response on or off (`EXPECT=enforce\|observe`) | `BAYES`, `RESPONSE-KILL`, `RESPONSE-QUARANTINE` (issue #25) — the message says killed/quarantined or observe-only; needs `response-marker.yar` installed under the content dir first. Not yet run on a VM |
 | `ransomware-rename-burst.sh` | Same-pid burst of file renames, each appending a suffix onto its own old name | T1486 — asserts `check_mass_rename_pattern`'s extension-agnostic mass-rename detection (issue #262) |
 | `pid-reuse.sh` | A real `sed` runs, its pid is forced to be recycled (`ns_last_pid`) by a forked child that sets `comm=sed` and renames files with a `.bak` suffix; run as root, `recycled` (default) or `real` (control) | T1486 — asserts the in-place-edit exclusion does not follow a recycled pid (#519); `real` expects no alert |
+| `windows-container.ps1` | A process-isolated container (`ping -t`, then `docker exec hostname.exe`) and a `hostname.exe` on the host; elevated, with `-AgentExe` it runs the agent and checks the result | No alert: asserts `EventMeta::container` on the container's exec events (the Docker id, including the process that exits at once) and none on the host's (#371). Needs the Containers feature and Docker in Windows mode (Server 2025 or Windows 11 22H2+ Pro). Not yet run on a VM |
 
-The four `.ps1` scenarios above are the Windows demo surface — see `../../demo/`
+The four persistence and PowerShell `.ps1` scenarios above are the Windows demo surface — see `../../demo/`
 for the runbook that chains them in the reviewer-facing order.
 
 New scenarios follow the same shape: one script, one documented expectation list,
