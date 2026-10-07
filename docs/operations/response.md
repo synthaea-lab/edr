@@ -25,7 +25,7 @@ Every outcome lands in the agent's alert log (`--alerts`, default
 
 | Technique | Message says |
 | --- | --- |
-| `RESPONSE-KILL` | `killed pid N …`, `pid N would have been killed … (observe-only)`, `failed to kill pid N …: <error>`, or `refused to kill pid N …: <reason>` |
+| `RESPONSE-KILL` | `killed pid N …`, `pid N would have been killed … (observe-only)`, `failed to kill pid N …: <error>`, or `refused to kill pid N …: <reason>`. The reason after `on` names the trigger: `a high-confidence correlated verdict` (the correlator's `BAYES` crossing) or `a corroborated ransomware signal (burst rule + canary touch)` (below) |
 | `RESPONSE-QUARANTINE` | `quarantined <path> (<sha256>) to <dir> …`, `<path> would have been quarantined … (observe-only)`, or `failed to quarantine <path> …: <error>` |
 | `RESPONSE-UNQUARANTINE` | `restored <path> (<sha256>) from quarantine …` or `failed to restore <sha256> …: <error>` |
 | `RESPONSE-ESCALATE` | `escalated <ppid>:<comm> at <severity> severity across N source(s): <techniques>`: the entity's fused verdict (rules, Sigma, YARA, correlator) reached High or Critical. Raised once per new verdict snapshot, not per finding. Non-destructive: it kills and quarantines nothing and does not depend on `--enable-kill` or `--enable-quarantine`, so it appears with both off. It is a prompt to triage; the kill gate still reads only the correlator's own `BAYES` crossing |
@@ -162,3 +162,16 @@ cli status                                  # lists every active suppression
   the kill call is injected per platform and only Linux injects one.
 - **Non-Linux `quarantine list|restore`** works everywhere (plain file operations)
   but has nothing to list there yet.
+
+## Ransomware reflex
+
+A second, separate kill trigger (issue #82). A process incarnation that raises the ransomware
+burst rule (T1486) **and** touches a planted canary (`docs/operations/deception.md`) within 60
+seconds of event time is killed, in either order. Neither signal kills alone: a burst alone is a
+backup, an export or an archiver, and a canary touch alone is an indexer nobody listed. It
+follows the same policy as every automated kill: with `--enable-kill` off the audit line says
+`pid N would have been killed on a corroborated ransomware signal ... (observe-only)` and
+nothing is signalled, and the pids `response` never signals (init, the agent) are refused. The
+detection is recorded before the kill. It needs `[deception] canary_dirs`: without canaries the
+reflex has nothing to corroborate and never fires. It kills the process only; killing the tree
+and quarantining its binary are not built.
