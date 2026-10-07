@@ -21,8 +21,12 @@
          Microsoft-Windows-Kernel-Audit-API-Calls (OpenProcess), whether the
          provider is registered, whether a non-PPL real-time session can enable
          it, and what arrives during an idle window and a busy window: events
-         per id, events/s, the data field names per id. The busy window runs a
-         benign load (short-lived processes, file reads, Get-Process).
+         per id, events/s, the data field names per id, and the session's own
+         loss counters. The busy window runs a benign load (bursts of
+         short-lived processes, file reads, a process listing every few
+         rounds). The sessions write to a file (logman -o), not to a real-time
+         consumer: this shows that a non-PPL session can enable the provider
+         and at what volume, not how a real-time consumer keeps up.
 
     Everything lands under -OutDir (summary.txt is the file to read; the .etl
     files are kept for a second look with tracerpt or WPA).
@@ -169,19 +173,20 @@ if (-not $SkipSysmon) {
 
 # ---- B. Driver-free candidates ---------------------------------------------------------
 function Start-BusyLoad {
-    # Benign: short-lived processes, file reads, and process enumeration (which opens
-    # handles on other processes the way an inventory tool does). Nothing is attacked.
+    # Benign: bursts of short-lived processes, file reads, and a process listing every
+    # few rounds (it opens handles on other processes the way an inventory tool does).
+    # Nothing is attacked. Get-Process is slow, so it runs on a fraction of the rounds.
     param([int]$Seconds)
     $dir = Join-Path $env:TEMP "syncap-load"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $end = (Get-Date).AddSeconds($Seconds)
     $n = 0
     while ((Get-Date) -lt $end) {
-        & cmd.exe /c ver | Out-Null
+        1..25 | ForEach-Object { & cmd.exe /c ver | Out-Null }
         $file = Join-Path $dir ("f" + ($n % 50) + ".txt")
         Set-Content -Path $file -Value ("line " + $n)
         [void](Get-Content -Path $file)
-        [void](Get-Process | Select-Object -Property Id, ProcessName, Path)
+        if (($n % 5) -eq 0) { [void](Get-Process | Select-Object -Property Id, ProcessName, Path) }
         $n++
     }
     Remove-Item -Recurse -Force -Path $dir -ErrorAction SilentlyContinue
@@ -225,10 +230,13 @@ function Invoke-EtwWindow {
     if (-not (Test-Path $xml)) { Say "    tracerpt produced no XML"; return }
     $stats = Get-EventStats -XmlPath $xml
     Write-EventStats -Stats $stats -Seconds $elapsed
+    $lost = @(Select-String -Path $xml -Pattern 'Name="(EventsLost|BuffersLost)">\s*(\d+)' -AllMatches |
+        ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value + "=" + $_.Groups[2].Value })
+    if ($lost.Count -gt 0) { Say ("    session losses: " + ($lost -join " ")) }
 }
 
 if (-not $SkipEtw) {
-    Say "## B. Driver-free candidates (non-PPL real-time session)"
+    Say "## B. Driver-free candidates (non-PPL session, file mode)"
     $candidates = @(
         @{ Provider = "Microsoft-Windows-Kernel-Process"; Keyword = $ThreadKeyword; Tag = "kproc"; Why = "thread start (Sysmon 8)" },
         @{ Provider = "Microsoft-Windows-Kernel-Audit-API-Calls"; Keyword = "0xFFFFFFFFFFFFFFFF"; Tag = "kaudit"; Why = "OpenProcess (Sysmon 10)" }
