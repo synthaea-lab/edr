@@ -1,0 +1,48 @@
+name: ransomware-reflex
+platform: linux
+script: ransomware-reflex.sh
+simulates: >
+  A benign "encryptor" (issue #82): one process reads the canary files planted in a
+  directory, then renames throwaway files in it one after another, appending a suffix
+  (doc_7.docx -> doc_7.docx.locked), until it is stopped or runs out. With
+  --enable-kill the agent kills it once it has raised the ransomware burst rule AND
+  touched a canary; without it the agent audits the kill it would have made. The
+  scenario creates and renames only its own empty files and only reads the canaries.
+expected_detections:
+  - technique: "T1083"
+    rule: DECEPTION-CANARY   # agent/src/sink.rs detect_canary; the canary read, rule_id DECEPTION-CANARY
+    min_count: 1
+    tolerance: 2   # one per canary the encryptor reads, absorbed repeats not counted
+  - technique: "T1486"
+    rule: check_mass_rename_pattern   # crates/rules/src/state.rs; one alert per 5 s window
+    min_count: 1
+    tolerance: 3
+  - technique: "RESPONSE-KILL"
+    rule: ransomware_join   # agent/src/ransomware_join.rs; "killed pid N on a corroborated ransomware signal"
+    min_count: 1
+    tolerance: 2
+notes: >
+  NOT YET RUN ON A VM. What is verified: the join and the kill through the real sink
+  in-process (agent/src/sink.rs, the `a_burst_then_a_canary_touch_...`,
+  `a_canary_touch_then_a_burst_...`, `with_kill_disabled_the_reflex_is_observe_only` and
+  allow-list tests), and this script's own mechanics with no agent (observe passes; enforce
+  fails when nothing kills the process; a simulated SIGKILL gives 137 and the file count
+  check; the /tmp guard; no-canary exit 2). What only a VM can show: that the eBPF sensor
+  delivers the canary read by absolute path, the renames and the same process_generation on
+  both, and that the SIGKILL lands before more than N files are renamed.
+
+  The acceptance bound N is MAX_ENCRYPTED, default 60. The earliest the reflex can act is the
+  20th rename (RANSOMWARE_RENAME_THRESHOLD, 20 in 5 s); 60 leaves room for the sensor, ring
+  buffer and drain latency at 25 renames per second (PAUSE 0.04). It is a starting value to
+  confirm or tighten on the first run, not a measured one.
+
+  RESPONSE-KILL matches by string only, so it passes in both modes: read the message
+  ("killed pid N ..." versus "... (observe-only)") and run the script with the matching
+  EXPECT.
+
+  Needs root and the eBPF sensor, a CANARY_DIR outside /tmp, /var/tmp and /dev/shm that the
+  agent can write (listed in [deception] canary_dirs; with the packaged unit also in
+  ReadWritePaths), and the agent started first so the canaries exist. The encryptor must not
+  be in [deception] allow_exe. Covers the single-process shape only: a shell loop of short-lived
+  `mv` pids (ransomware-rename-burst.sh loop mode) is alerted per parent, and the reflex does
+  not join it.
