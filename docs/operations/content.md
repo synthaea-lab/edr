@@ -36,3 +36,14 @@ SuccessExitStatus=75
 ```
 
 Anything else non-zero is a real failure and should stay one.
+
+`check-content-manifest` is different on purpose: it is a read-only check run by a
+person, not a timer, and it exits 1 on a `423` (it still prints the reason). A check
+that returned 75 would show a halted ring as an accepted outcome in the one place an
+operator looks for it. Do not add `SuccessExitStatus=75` to a unit that runs it.
+
+A ring that stays halted for weeks is silent from the timer's side once 75 counts as
+success; the agent does not count consecutive halts or put them in the health beacon
+(a new beacon field is a schema change for a state the control plane already knows).
+Watch the halt where it is set, on the control plane, or run `apply-content-manifest`
+by hand and read the reason it prints.
