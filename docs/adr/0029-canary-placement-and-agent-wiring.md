@@ -29,6 +29,9 @@ the semi-frozen `schema`.
    schema change (fixtures, version bump) and is deferred until the server needs to
    distinguish deception findings structurally (decoy-credential alarms will).
 5. **The agent's own pid never raises a hit**; it writes the canaries at start.
+   A process that touches the same canary again within 60 s (event time) raises no second
+   detection (a `grep -r` opens every canary many times); absorbed touches are counted and
+   the table is bounded at 1024 `(canary, pid)` pairs.
 6. **Planting failures degrade, one directory at a time.** Canaries are planned once for
    every directory (so names differ) and planted per directory: a directory the agent
    cannot write costs its own canaries, logs why, and the rest are planted and watched.
@@ -53,5 +56,4 @@ the semi-frozen `schema`.
   - Read-only opens under `/tmp`, `/var/tmp` and `/dev/shm` are filtered by the sensor, so
     canaries placed there never fire on a read.
   - Known indexers and backup agents will touch canaries; there is no allow-list yet.
-  - Repeated opens raise one detection each; there is no per-canary cooldown yet.
 - Decoy credentials, honeypot listeners and the refresh policy are still to come.
