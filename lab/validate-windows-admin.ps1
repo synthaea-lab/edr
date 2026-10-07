@@ -323,7 +323,11 @@ worker_threads = 0
 max_reconnect_backoff_ms = 60000
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding Ascii
 
-Write-Host "agent:  $AgentExe ($((Get-Item $AgentExe).LastWriteTime))"
+if ($needsAgent) {
+    Write-Host "agent:  $AgentExe ($((Get-Item $AgentExe).LastWriteTime))"
+} else {
+    Write-Host "agent:  not needed"
+}
 Write-Host "output: $OutDir"
 
 $LabDirs = @()
