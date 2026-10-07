@@ -175,3 +175,18 @@ nothing is signalled, and the pids `response` never signals (init, the agent) ar
 detection is recorded before the kill. It needs `[deception] canary_dirs`: without canaries the
 reflex has nothing to corroborate and never fires. It kills the process only; killing the tree
 and quarantining its binary are not built.
+
+Known limits of the reflex, to read before enabling `--enable-kill` with canaries:
+
+- **False positive: a backup or archiver.** One that walks every directory (so it reads a
+  canary) and rotates archives (a burst of renames and deletes) meets both conditions and is
+  killed. List it in `[deception] allow_exe` once that exists (#699); until then keep
+  `--enable-kill` off on a host that runs one, and read the observe-only lines first.
+- **System services.** The reflex does not consult the refusal of ADR-0028 (#652, a system
+  service's main process is not killed on a `BAYES` crossing alone), because that guard is not
+  on `main` yet. Whether the reflex honours it or bypasses it is a decision for the owner of
+  the correlator's kill gate; the conservative answer, to treat it the same way, is the one to
+  prefer until it is made.
+- **Same process only.** Signals join on the pid, and on the process incarnation when both
+  carry one (an unstamped event is the same pid, as everywhere else). An encryptor that spawns
+  a child per file does not aggregate: only the process is judged, not its tree.
