@@ -19,7 +19,7 @@ const TIME_BUDGET_MS = 30_000;
  */
 export async function GET(req: NextRequest) {
   try {
-    const denied = verifyCronRequest(req);
+    const denied = await verifyCronRequest(req);
     if (denied) return denied;
 
     const due = await dueHunts(prisma);

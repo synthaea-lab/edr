@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { reportDecoyUse } from "@/lib/decoy";
 
 export type CronAuthResult = "ok" | "unconfigured" | "unauthorized";
 
@@ -35,18 +37,24 @@ export function checkCronAuth(
 /**
  * Route guard for the `/api/cron/*` endpoints. Returns the error response to
  * send, or `null` when the call is authorized.
+ *
+ * A rejected bearer that is one of an agent's decoy credentials (issue #81) also raises an
+ * alarm naming the host it was planted on; the response is the same 401 either way.
  */
-export function verifyCronRequest(req: NextRequest): NextResponse | null {
-  switch (checkCronAuth(req.headers.get("Authorization"), process.env.CRON_SECRET)) {
+export async function verifyCronRequest(req: NextRequest): Promise<NextResponse | null> {
+  const authorization = req.headers.get("Authorization");
+  switch (checkCronAuth(authorization, process.env.CRON_SECRET)) {
     case "ok":
       return null;
     case "unconfigured":
+      await reportDecoyUse(prisma, req, authorization);
       console.error("CRON_SECRET environment variable is not configured");
       return NextResponse.json(
         { error: "Server misconfiguration - CRON_SECRET not set" },
         { status: 500 }
       );
     case "unauthorized":
+      await reportDecoyUse(prisma, req, authorization);
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 }

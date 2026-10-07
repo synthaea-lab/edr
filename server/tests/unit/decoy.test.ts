@@ -1,0 +1,44 @@
+import { describe, expect, it } from "vitest";
+import {
+  DECOY_TOKEN_PREFIX,
+  DecoyRegistration,
+  MAX_DECOY_TOKENS_PER_AGENT,
+  bearerToken,
+  hashToken,
+  looksLikeDecoy,
+} from "@/lib/decoy";
+
+describe("decoy token helpers", () => {
+  it("takes the token of a Bearer header and nothing else", () => {
+    expect(bearerToken("Bearer abc")).toBe("abc");
+    expect(bearerToken("bearer abc")).toBeNull();
+    expect(bearerToken("Basic abc")).toBeNull();
+    expect(bearerToken("Bearer a b")).toBeNull();
+    expect(bearerToken(null)).toBeNull();
+  });
+
+  it("only treats a prefixed, bounded token as decoy-shaped", () => {
+    expect(looksLikeDecoy(`${DECOY_TOKEN_PREFIX}abc`)).toBe(true);
+    expect(looksLikeDecoy("abc")).toBe(false);
+    expect(looksLikeDecoy(null)).toBe(false);
+    expect(looksLikeDecoy(DECOY_TOKEN_PREFIX + "x".repeat(300))).toBe(false);
+  });
+
+  it("hashes to the lowercase SHA-256 hex the agent sends", () => {
+    expect(hashToken("abc")).toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+  });
+
+  it("accepts only 64-hex hashes and a bounded count", () => {
+    const hash = "a".repeat(64);
+    expect(DecoyRegistration.safeParse({ tokens: [hash] }).success).toBe(true);
+    expect(DecoyRegistration.safeParse({ tokens: ["A".repeat(64)] }).success).toBe(false);
+    expect(DecoyRegistration.safeParse({ tokens: ["abc"] }).success).toBe(false);
+    expect(DecoyRegistration.safeParse({ tokens: [`${DECOY_TOKEN_PREFIX}real-token`] }).success).toBe(false);
+    expect(
+      DecoyRegistration.safeParse({ tokens: Array(MAX_DECOY_TOKENS_PER_AGENT + 1).fill(hash) })
+        .success
+    ).toBe(false);
+  });
+});

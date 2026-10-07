@@ -29,6 +29,7 @@ model Tenant {
   prevalenceSightings PrevalenceSighting[]
   hunts               Hunt[]
   huntRuns            HuntRun[]
+  decoyTokens         DecoyToken[]
 
   @@map("tenants")
 }
@@ -44,8 +45,9 @@ model Agent {
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  health AgentHealth?
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  health      AgentHealth?
+  decoyTokens DecoyToken[]
 
   @@index([tenantId, lastSeen])
   @@index([tenantId, ring])
@@ -72,6 +74,27 @@ model AgentHealth {
 
   @@index([tenantId])
   @@map("agent_health")
+}
+
+// Decoy credentials an agent planted (issue #81). Only the SHA-256 of a token is stored,
+// never the token: the control plane can recognise a decoy when it is presented, and
+// cannot hand one out. Append-only on purpose: an agent that removes its decoys does not
+// make an old copy of the file safe to use. A hash belongs to the agent that registered it
+// first (unique), so another agent cannot claim it.
+model DecoyToken {
+  id               String   @id @default(uuid())
+  tenantId         String   @map("tenant_id")
+  agentId          String   @map("agent_id")
+  tokenSha256      String   @unique @map("token_sha256")
+  createdAt        DateTime @default(now()) @map("created_at")
+  lastRegisteredAt DateTime @default(now()) @map("last_registered_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@map("decoy_tokens")
 }
 
 // Detection storage - events that triggered rules

@@ -33,19 +33,19 @@ describe("verifyCronRequest", () => {
       headers: auth ? { Authorization: auth } : {},
     });
 
-  it("returns null for an authorized call", () => {
-    expect(verifyCronRequest(request(`Bearer ${process.env.CRON_SECRET}`))).toBeNull();
+  it("returns null for an authorized call", async () => {
+    expect(await verifyCronRequest(request(`Bearer ${process.env.CRON_SECRET}`))).toBeNull();
   });
 
-  it("returns 401 for a bad token", () => {
-    expect(verifyCronRequest(request("Bearer nope"))?.status).toBe(401);
+  it("returns 401 for a bad token", async () => {
+    expect((await verifyCronRequest(request("Bearer nope")))?.status).toBe(401);
   });
 
-  it("returns 500 and rejects 'Bearer undefined' when CRON_SECRET is unset", () => {
+  it("returns 500 and rejects 'Bearer undefined' when CRON_SECRET is unset", async () => {
     const saved = process.env.CRON_SECRET;
     delete process.env.CRON_SECRET;
     try {
-      expect(verifyCronRequest(request("Bearer undefined"))?.status).toBe(500);
+      expect((await verifyCronRequest(request("Bearer undefined")))?.status).toBe(500);
     } finally {
       process.env.CRON_SECRET = saved;
     }
