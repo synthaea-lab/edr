@@ -40,6 +40,13 @@ the semi-frozen `schema`.
    drop it.** `config::load` fails fast on a missing or invalid file (ADR-0013) and the
    agent exits; there is no fallback to defaults, so a broken `agent.toml` cannot
    silently remove the canaries. Only a valid file without `[deception]` does.
+8. **Known readers are allowed by executable, not by name.** `[deception] allow_exe`
+   lists absolute paths (at most 32). A touch is allowed only when `/proc/<pid>/exe` of the
+   toucher equals an entry that sits in a trusted system location
+   (`policy::name_exclusion_applies`); a `comm` match would let any process rename itself
+   past the tripwire. Unlike the exclusions that keep an unknown path, this **fails
+   closed**: a process that exited before the lookup, a replaced binary (`... (deleted)`)
+   and every non-Linux platform raise the hit. The lookup runs only on a hit, never per event.
 
 ## Consequences
 
@@ -55,5 +62,4 @@ the semi-frozen `schema`.
     (`cd dir && cat name`) does not match an inventoried absolute path.
   - Read-only opens under `/tmp`, `/var/tmp` and `/dev/shm` are filtered by the sensor, so
     canaries placed there never fire on a read.
-  - Known indexers and backup agents will touch canaries; there is no allow-list yet.
 - Decoy credentials, honeypot listeners and the refresh policy are still to come.
