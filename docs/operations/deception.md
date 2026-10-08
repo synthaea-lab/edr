@@ -81,6 +81,8 @@ is on the list and the process is in the agent's mount namespace. Never the proc
 - The exec table is only as fresh as the events the agent received: a process that execs an
   allowed binary and then something else, with that second event lost, is still recognised as the
   first where the agent cannot read `/proc/<pid>/exe`. Where it can, a disagreement denies.
+- A listed script (`#!`) is checked against `/proc` by its interpreter; an `env` shebang cannot be, so
+  the table alone decides it.
 - An entry whose own path is outside a trusted location (a link in `/tmp` to `/usr/bin/x`) is
   matched by its resolved path only; the agent warns at start.
 - The exec route cannot see a mount namespace: a local user who can create user and mount

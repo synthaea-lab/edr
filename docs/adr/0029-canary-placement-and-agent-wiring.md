@@ -75,6 +75,15 @@ the semi-frozen `schema`.
      alone and this gap is open. "No pid-reuse race" holds for a recycled pid, not for a
      re-exec whose event was lost. A lookup refreshes the entry's recency, so a long-running
      allowed process is not evicted by the execs of others; the eviction count is the map's.
+   - **A listed script is judged by its interpreter.** `/proc/<pid>/exe` of a `#!` script is
+     the interpreter, never the script, so the cross-check above accepts a difference when the
+     file the table names starts with `#!` and its interpreter is what `/proc` shows. An `env`
+     shebang (`#!/usr/bin/env python3`) names `env` while `/proc` shows the program it found,
+     so it cannot be told from the file and `/proc` does not contradict the table: such a
+     script is decided by the table alone, like any process whose `/proc` cannot be read. A
+     process that exec'd one script and then another with the same interpreter is not seen as
+     stale. The table is filled only when an executable may be allowed (a non-empty
+     `allow_exe`), and the string checks run before any `/proc` read.
    - **The container flag is read on the `Exec` event.** The container id comes from the
      event's cgroup id, synchronously (`container_context`); only the image and name arrive
      later, and they are not used here.
