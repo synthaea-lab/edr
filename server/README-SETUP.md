@@ -52,8 +52,10 @@ After editing `prisma/schema.prisma` in the dev stack, `db push` updates the dat
 start but the Prisma client inside the container stays the one generated when the image was
 built: rebuild the image (`docker compose build server`) to regenerate it.
 
-The production image serves the standalone build with `node server.js`; `npm start`
-(`next start`) is for a plain `next build` and does not apply to it.
+The production image serves the standalone build with `node server.js`. Outside Docker,
+`npm run build` then `npm start` does the same: `scripts/start-standalone.mjs` copies the static
+assets and `public/` beside the standalone server (as the image does) and starts it, with `PORT`
+and `HOSTNAME` read as usual. `next start` does not serve this output.
 
 On a host with SELinux enforcing (Fedora, RHEL) the compose bind mounts carry `:z`, which
 relabels `server/` and `server/certs/` for the containers. The first build also downloads
