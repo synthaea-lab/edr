@@ -131,7 +131,21 @@ function Get-EtsSessionNames {
     # terminating error under "Stop"; the exit code is checked instead.
     $ErrorActionPreference = "Continue"
     $out = & logman query -ets 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "logman query -ets failed: $out" }
+    if ($LASTEXITCODE -ne 0) {
+        # logman lists sessions through WMI and stops at the first one whose provider
+        # GUID it cannot read ("the GUID passed was not recognized as valid by a WMI
+        # data provider", seen on a Windows 11 host in 2026-10, and not always: it
+        # depends on the sessions running). Get-EtwTraceSession reads the same
+        # sessions through the ETW API and does not depend on that provider.
+        try {
+            $names = @(Get-EtwTraceSession -Name "*" -ErrorAction Stop | ForEach-Object { $_.Name })
+        } catch {
+            throw "logman query -ets failed ($out) and so did Get-EtwTraceSession: $_"
+        }
+        if ($names.Count -eq 0) { throw "logman query -ets failed: $out" }
+        $names
+        return
+    }
     $out | ForEach-Object { ("$_".Trim() -split '\s+')[0] } | Where-Object { $_ }
 }
 
