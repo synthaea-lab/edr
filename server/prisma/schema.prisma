@@ -90,7 +90,9 @@ model DecoyToken {
   lastRegisteredAt DateTime @default(now()) @map("last_registered_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  // NoAction: deleting an agent that holds decoy hashes fails instead of silently disarming
+  // them (an attacker may hold an old copy); deleting the tenant still removes both.
+  agent  Agent  @relation(fields: [agentId], references: [id], onDelete: NoAction)
 
   @@index([tenantId])
   @@index([agentId])

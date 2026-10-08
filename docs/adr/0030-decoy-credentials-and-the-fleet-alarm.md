@@ -19,7 +19,18 @@ server half (recognise it when presented).
 2. **Registration is append-only, idempotent and bounded.** At most 256 hashes per agent
    (409 beyond), a hash belongs to the first agent that registered it (another agent's claim
    is counted as a conflict, not a transfer), and removing the decoys on the host does not
-   delete the row: an attacker may hold an old copy of the file.
+   delete the row: an attacker may hold an old copy of the file. The same holds for the agent
+   row: `decoy_tokens.agent_id` is `NoAction`, so deleting an agent that holds decoy hashes
+   fails instead of disarming them (deleting the tenant removes both). A registration takes a
+   per-agent advisory lock for its transaction, so the cap is not a count-then-insert two
+   requests can both pass, and `registered` is read back from the table: the loser of a
+   same-hash race is told it is a conflict.
+   **Ownership is global on purpose.** The alarm looks a presented bearer up with no tenant
+   (the cron routes are unauthenticated), so `token_sha256` stays unique across tenants. An
+   agent that has read another's decoy token can therefore register its hash first and have
+   the alarm name it; the `conflicts` count tells a caller a hash it already knows is taken.
+   Both need a token the caller already holds. Scoping uniqueness to the tenant would need
+   the lookup to know the tenant, which it cannot.
 3. **A decoy is a `syn_dk_`-prefixed bearer token.** Only a presented bearer with that prefix
    and at most 256 characters is hashed and looked up, so ordinary rejected requests cost
    nothing.
@@ -48,7 +59,13 @@ server half (recognise it when presented).
 7. **The source address is what nginx saw.** `X-Real-IP` (set by nginx from the connection,
    replacing any client value) first; otherwise the **last** `X-Forwarded-For` hop, which is
    the address nginx appended, never the first, which is whatever the client wrote. Behind
-   any other proxy neither is evidence. `nginx.conf` sets `X-Real-IP` for this.
+   any other proxy neither is evidence. `nginx.conf` sets `X-Real-IP` for this. The address
+   is recorded only when the request carries the proxy secret (`verifyProxyAuth`); a call
+   straight to the app port records `unverified`, since it can write any header. The
+   host name in the alarm is **self-declared** at enrollment (bounded to 253 printable
+   characters there and in the title): the title leads with the agent id, which the server
+   issued, and `meta.planting_agent_id` is the identifier to trust. An alarm is deduplicated per
+   decoy **and source address** within the minute, so a second address is a second alarm.
 8. **The `syn_dk_` prefix is a label, accepted.** It makes the cheap rejection possible (only
    a prefixed bearer is hashed and looked up), and it tells whoever reads the file that the
    token is a Synthaea decoy. The canary file already says so in its first line
@@ -70,6 +87,11 @@ server half (recognise it when presented).
    per second per address, burst 20, in `nginx.conf` (429 beyond), since a flood of
    `syn_dk_`-prefixed bearers is otherwise one indexed query each.
 ## Consequences
+
+- **Known gaps, not closed here.** There is no shutdown hook calling `flushDecoyReports()`
+  (Next 14 has none we use), so an alarm started just before a SIGTERM can be lost; and the
+  server does not check at start that `decoy_tokens` exists, so without it registration is a
+  500 and the alarm logs and drops. Cooldown across several server processes is "about one".
 
 - The alarm fires for a decoy used against a cron route. A decoy presented anywhere else
   (a session route, a third-party service) is not seen: widening it needs the server to read
