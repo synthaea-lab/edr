@@ -575,7 +575,7 @@ try {
             if ($negative.ExitCode -ne 0 -and $negative.Output -match "mask validation failed: unexpected Kernel-File IDs") {
                 Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "PASS" "the test saw Kernel-File IDs outside 12, 26, 30 under the wider mask, as expected; $negativeTail"
             } else {
-                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected the failure `unexpected Kernel-File IDs` (a `missing` failure or a session problem does not prove the bad mask lets extra IDs through); $negativeTail"
+                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected the failure 'unexpected Kernel-File IDs' (a 'missing' failure or a session problem does not prove the bad mask lets extra IDs through); $negativeTail"
             }
         } finally {
             Pop-Location
