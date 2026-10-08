@@ -27,7 +27,15 @@ function registration(enrollmentId: string, tokens: string[]) {
   });
 }
 
+/** A call as nginx forwards it: with the proxy secret, which is what vouches for X-Real-IP. */
 function cron(authorization: string, extra: Record<string, string> = {}) {
+  return new NextRequest("http://localhost/api/cron/detect-silent-agents", {
+    headers: { Authorization: authorization, "X-Proxy-Secret": SECRET, ...extra },
+  });
+}
+
+/** The same call straight to the app port: no proxy secret, headers written by the client. */
+function cronDirect(authorization: string, extra: Record<string, string> = {}) {
   return new NextRequest("http://localhost/api/cron/detect-silent-agents", {
     headers: { Authorization: authorization, ...extra },
   });
@@ -183,6 +191,77 @@ describe("decoy tokens (real database)", () => {
     await Promise.all(Array.from({ length: 8 }, () => cronSilentAgents(cron(`Bearer ${TOKEN}`))));
     await flushDecoyReports();
     expect(await alarms(agent.id)).toHaveLength(1);
+  });
+
+  it("records no source address for a call that did not come through the proxy", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    await cronSilentAgents(cronDirect(`Bearer ${TOKEN}`, { "x-real-ip": "10.1.1.1" }));
+    await flushDecoyReports();
+    const [alarm] = await alarms(agent.id);
+    expect((alarm.meta as { client_address?: string }).client_address).toBe("unverified");
+  });
+
+  it("alarms again for the same decoy from another address within the cooldown", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    await present(`Bearer ${TOKEN}`, { "x-real-ip": "192.0.2.1" });
+    await present(`Bearer ${TOKEN}`, { "x-real-ip": "192.0.2.1" });
+    expect(await alarms(agent.id)).toHaveLength(1);
+    await present(`Bearer ${TOKEN}`, { "x-real-ip": "192.0.2.2" });
+    const found = await alarms(agent.id);
+    expect(found.map((a) => (a.meta as { client_address?: string }).client_address).sort()).toEqual([
+      "192.0.2.1",
+      "192.0.2.2",
+    ]);
+  });
+
+  it("raises the alarm for a decoy sent with a lowercase scheme", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    expect((await present(`bearer ${TOKEN}`)).status).toBe(401);
+    expect(await alarms(agent.id)).toHaveLength(1);
+  });
+
+  it("does not exceed the cap when two registrations race", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const hashes = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => hashToken(`syn_dk_race_${from + i}`));
+    const results = await Promise.all([
+      register(registration(agent.enrollmentId, hashes(0, 200))),
+      register(registration(agent.enrollmentId, hashes(1_000, 200))),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect(await prisma.decoyToken.count({ where: { agentId: agent.id } })).toBeLessThanOrEqual(
+      MAX_DECOY_TOKENS_PER_AGENT
+    );
+  });
+
+  it("tells the loser of a same-hash race that it does not own the hash", async () => {
+    const tenant = await createTestTenant();
+    const first = await createTestAgent(tenant.id);
+    const second = await createTestAgent(tenant.id);
+    const hash = hashToken(TOKEN);
+    const [a, b] = await Promise.all([
+      register(registration(first.enrollmentId, [hash])).then((r) => r.json()),
+      register(registration(second.enrollmentId, [hash])).then((r) => r.json()),
+    ]);
+    expect(a.registered + b.registered).toBe(1);
+    expect(a.conflicts + b.conflicts).toBe(1);
+    const owner = (await prisma.decoyToken.findUniqueOrThrow({ where: { tokenSha256: hash } })).agentId;
+    expect([first.id, second.id]).toContain(owner);
+  });
+
+  it("refuses to delete an agent that holds decoy hashes", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await register(registration(agent.enrollmentId, [hashToken(TOKEN)]));
+    await expect(prisma.agent.delete({ where: { id: agent.id } })).rejects.toThrow();
+    expect(await prisma.decoyToken.count({ where: { agentId: agent.id } })).toBe(1);
   });
 
   it("takes the address from X-Real-IP, never from the first X-Forwarded-For hop", async () => {

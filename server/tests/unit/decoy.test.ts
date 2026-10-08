@@ -10,9 +10,12 @@ import {
 } from "@/lib/decoy";
 
 describe("decoy token helpers", () => {
-  it("takes the token of a Bearer header and nothing else", () => {
+  it("takes the token of a Bearer header whatever the case or spacing, and nothing else", () => {
     expect(bearerToken("Bearer abc")).toBe("abc");
-    expect(bearerToken("bearer abc")).toBeNull();
+    // HTTP auth schemes are case-insensitive: a decoy sent this way must still be looked up.
+    expect(bearerToken("bearer abc")).toBe("abc");
+    expect(bearerToken("BEARER abc")).toBe("abc");
+    expect(bearerToken("Bearer   abc  ")).toBe("abc");
     expect(bearerToken("Basic abc")).toBeNull();
     expect(bearerToken("Bearer a b")).toBeNull();
     expect(bearerToken(null)).toBeNull();
