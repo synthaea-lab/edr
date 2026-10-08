@@ -1,6 +1,6 @@
 # ADR-0022: Application log ingestion — what the agent reads, how, and what leaves the host
 
-- **Status**: proposed
+- **Status**: accepted (2026-10-07)
 - **Date**: 2026-10-01
 
 ## Context
@@ -41,9 +41,9 @@ detect. What the repository already settles, and therefore bounds the answers:
   in the agent, at the sink boundary, unconditionally and only credentials, and says a
   future producer carrying a URL "must not add a second redaction path". The raw URL
   exists only in process memory between the producer and the wrapper. ADR-0018 and its
-  `agent/src/redact.rs` are in #550, which is open and not yet on `main`: until it
-  lands, the invariant this ADR relies on is pending, not accepted, and the access-log
-  wiring below depends on it.
+  `agent/src/redact.rs` are on `main` (#550). The access-log wiring (#478) applies the
+  same `redact::redact_event` to an `HttpRequest`'s evidence value, in
+  `log_sources::deliver`, the one place an access-log event leaves that module.
   `policy::RedactionPolicy` has one flag, off by default, and no policy reaches the agent
   at runtime yet (ADR-0010).
 - **Allowlist plus counters, and the local-versus-policy split.** ADR-0006 decided that
@@ -199,5 +199,12 @@ log paths; Level 3.
 4. **Silence of a log source.** No alert in v1. A quiet site is normal, and the ADR
    does not fake a canary.
 
-What still stands between this ADR and `accepted` is the lab validation listed under
-Consequences (real Apache, nginx and MariaDB logs), and a review.
+Validation, completed 2026-10-07: nginx 1.24 with the real agent (`web-webshell.sh`, earlier),
+then Debian 13 (kernel 6.12.107) with Apache 2.4, PHP-FPM 8.4 and MariaDB, the agent run as
+root: a webshell request followed by a shell spawned by an `apache2` parent
+(`web-webshell.sh`, `FAKE_COMM=apache2`) and by a real php-fpm worker
+(`web-webshell-php.sh`), both paired as T1505.003 and T1059; the evidence value of a
+parameter named `password` leaves as `REDACTED`; six failed logins raise T1110 from the
+MariaDB error log; a custom `LogFormat` raises `LOG-SOURCE` (`web-custom-logformat.sh`);
+one `http_summary` per source. Not validated: MySQL 8 against the full agent, and a client
+logged with a resolved IP.

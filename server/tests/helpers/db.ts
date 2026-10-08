@@ -9,6 +9,8 @@ const prisma = new PrismaClient();
  */
 export async function cleanDatabase() {
   // Delete in order respecting foreign keys
+  await prisma.huntRun.deleteMany();
+  await prisma.hunt.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.caseNarrative.deleteMany();
   await prisma.case.deleteMany();

@@ -27,6 +27,8 @@ model Tenant {
   corpusVersions      CorpusVersion[]
   corpusSamples       CorpusSample[]
   prevalenceSightings PrevalenceSighting[]
+  hunts               Hunt[]
+  huntRuns            HuntRun[]
 
   @@map("tenants")
 }
@@ -42,7 +44,7 @@ model Agent {
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   health AgentHealth?
 
   @@index([tenantId, lastSeen])
@@ -74,19 +76,19 @@ model AgentHealth {
 
 // Detection storage - events that triggered rules
 model Detection {
-  id        String   @id @default(uuid())
-  tenantId  String   @map("tenant_id")
-  agentId   String   @map("agent_id")
+  id                String   @id @default(uuid())
+  tenantId          String   @map("tenant_id")
+  agentId           String   @map("agent_id")
   // Grouped into a Case by the cron/group-detections sweep (issue #50); null
   // until grouped, so "caseId: null" is the query for "ungrouped evidence".
-  caseId    String?  @map("case_id")
-  timestamp DateTime
-  technique String // MITRE ATT&CK technique (e.g., T1059.001)
-  severity  String // low/medium/high/critical
+  caseId            String?  @map("case_id")
+  timestamp         DateTime
+  technique         String // MITRE ATT&CK technique (e.g., T1059.001)
+  severity          String // low/medium/high/critical
   // Optional for older agents. A durable uploader reuses the same key across
   // retries; uniqueness is scoped to its mTLS-authenticated agent.
-  ingestId          String? @map("ingest_id")
-  ingestPayloadHash String? @map("ingest_payload_hash")
+  ingestId          String?  @map("ingest_id")
+  ingestPayloadHash String?  @map("ingest_payload_hash")
 
   // Event data (JSON) - normalized schema::Event
   event Json
@@ -110,11 +112,11 @@ model Detection {
   // evidence it was built from.
   case   Case?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
+  @@unique([agentId, ingestId])
   @@index([tenantId, timestamp])
   @@index([agentId, timestamp])
   @@index([technique])
   @@index([caseId])
-  @@unique([agentId, ingestId])
   @@map("detections")
 }
 
@@ -290,4 +292,65 @@ model PrevalenceSighting {
   @@unique([tenantId, kind, key, agentId])
   @@index([tenantId, kind, key])
   @@map("prevalence_sightings")
+}
+
+// Saved hunt (issue #61): a versioned, structured query over the tenant's
+// detections, with an owner and an optional schedule. Not raw SQL: `query` is
+// the `HuntQuery` of lib/hunt.ts, validated on every write and compiled to
+// parameterized SQL, so a hunt cannot name a table or reach another tenant.
+// Result history is HuntRun; a hunt that keeps matching is what detection
+// content graduates from (#618). See ADR-0025.
+model Hunt {
+  id              String   @id @default(uuid())
+  tenantId        String   @map("tenant_id")
+  name            String
+  description     String?
+  // Session user that created it; kept as a plain id (the auth tables are not
+  // in this schema).
+  ownerId         String   @map("owner_id")
+  query           Json
+  // Starts at 1 and goes up on every change to `query`, so a run says which
+  // query it ran (HuntRun.queryVersion) and an edit never rewrites history.
+  version         Int      @default(1)
+  // Minutes between scheduled runs; null = manual only.
+  scheduleMinutes Int?     @map("schedule_minutes")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs   HuntRun[]
+
+  @@index([tenantId, createdAt])
+  @@index([active, scheduleMinutes])
+  @@map("hunts")
+}
+
+// One execution of a hunt. Append-only; the cron keeps the newest
+// HUNT_RUNS_KEPT per hunt, so history is bounded.
+model HuntRun {
+  id                 String    @id @default(uuid())
+  huntId             String    @map("hunt_id")
+  tenantId           String    @map("tenant_id")
+  startedAt          DateTime  @default(now()) @map("started_at")
+  finishedAt         DateTime? @map("finished_at")
+  // The query version and a copy of the query as it ran.
+  queryVersion       Int       @map("query_version")
+  query              Json
+  // Detections matching the query in its window.
+  matchCount         Int       @default(0) @map("match_count")
+  // Of those, ingested since the hunt's previous run started (all of them on
+  // the first run): what a "notify on new matches" would key on.
+  newMatchCount      Int       @default(0) @map("new_match_count")
+  // Newest matching detection ids, at most HUNT_SAMPLE_SIZE.
+  sampleDetectionIds Json      @map("sample_detection_ids")
+  // Set when the run failed (e.g. the statement timeout); counts stay 0.
+  error              String?
+  trigger            String // manual | schedule
+
+  hunt   Hunt   @relation(fields: [huntId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([huntId, startedAt])
+  @@map("hunt_runs")
 }

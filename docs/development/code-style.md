@@ -63,7 +63,8 @@ not to hope.
   Sensor crates depend only on `schema` (+ their wire crate); detection crates never
   depend on a sensor; leaf crates depend only on the base tier. Enforced by
   `tools/check-deps.py` in CI — a new crate is classified in the same change.
-- Platform-specific code lives **only** in `crates/sensors/*`, target-gated.
+- Platform-specific code lives in `crates/sensors/*` and the narrow exceptions
+  documented in `CLAUDE.md`, target-gated.
 - `pub(crate)` by default. A crate's `pub` surface is its contract: minimal,
   deliberate, documented. `#[must_use]` on value-returning methods
   (`must_use_candidate` enforces it).

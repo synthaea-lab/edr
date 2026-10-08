@@ -49,6 +49,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1127 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218.011 | 3 | `sigma:rules/sigma/windows/lolbas_rundll32.yml` |
+| T1553.005 | 3 | `rules:crates/rules/src/state.rs` |
 | T1562.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/defender.rs`, `rules:crates/rules/src/stateless.rs` |
 | T1574.006 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1620 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs` |
@@ -64,6 +65,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1021.002 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1563.002 | 3 | `rules:crates/rules/src/session.rs` |
 
 ## Command and Control
 
