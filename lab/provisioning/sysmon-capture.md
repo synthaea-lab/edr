@@ -30,6 +30,12 @@ The sample config is [sysmon-adr0026.xml](sysmon-adr0026.xml). It enables only t
    .\Sysmon64.exe -accepteula -i .\sysmon-adr0026.xml
    ```
 
+   The config logs events 17, 18 and 26 without any rule, so the channel (64 MB by default) can wrap during the capture, and a wrap drops the oldest records first, which are the rare ones we most want (9, 25, 2, 23). Right after the install, once the channel exists, raise its size (1 GiB here; adjust to the VM disk):
+
+   ```powershell
+   wevtutil.exe sl 'Microsoft-Windows-Sysmon/Operational' /ms:1073741824
+   ```
+
    Event 23 (`FileDelete`) archives the contents of the files it logs under Sysmon's archive directory. The sample config limits it to `C:\Lab\SysmonDeleteTest\`: create that folder, and delete a file in it during the capture to get a sample of event 23. Watch free space anyway, and do not delete archived evidence before Nikolas confirms it is no longer needed.
 
    After installing, check that the filters took effect: `.\Sysmon64.exe -c` prints the active configuration, and the events of types 2, 9, 15, 17, 18, 25 and 26 should appear in the channel within a few minutes of ordinary use (17 and 18 within seconds). If an event type stays absent, say so in the capture report; do not conclude that Windows does not emit it.
@@ -56,6 +62,8 @@ Get-WinEvent -FilterHashtable @{
 } -MaxEvents 100 | Select-Object TimeCreated, Id, Message
 ```
 
+The install itself already produces a 4 (service started) and a 16 (configuration loaded), and the uninstall a 4 (service stopped), so those two ids need no extra step. Only 255 (an error) needs a deliberate failure, which this guide does not script: note it as not captured rather than inducing one.
+
 From the repository root inside the VM, run the existing lab capture as Administrator **without** `-SkipSysmon`:
 
 ```powershell
@@ -64,7 +72,7 @@ From the repository root inside the VM, run the existing lab capture as Administ
     -IdleSeconds 60 -BusySeconds 60 -SysmonSample 5000
 ```
 
-Let both phases finish. Send the entire output directory to Nikolas: `summary.txt`, raw Sysmon XML sample(s), ETL files, and any other files written there. Keep the ETLs; they are needed to re-check provider data and loss counters.
+Let both phases finish. Note that `-SysmonSample` takes the newest events only, so a flood of 17/18 can push the rare ids out of that sample: the EVTX export below is the complete record, and `summary.txt` is only a view of the tail of the channel. Send the entire output directory to Nikolas: `summary.txt`, raw Sysmon XML sample(s), ETL files, and any other files written there. Keep the ETLs; they are needed to re-check provider data and loss counters.
 
 Export the complete retained Sysmon channel as EVTX as well. `wevtutil epl` exports the event log records without converting them to rendered text or a filtered sample:
 
