@@ -7,6 +7,7 @@ import { GET as cronSilentAgents } from "@/app/api/cron/detect-silent-agents/rou
 import {
   DECOY_ALARM_COOLDOWN_MS,
   MAX_DECOY_TOKENS_PER_AGENT,
+  checkDecoyTable,
   flushDecoyReports,
   hashToken,
 } from "@/lib/decoy";
@@ -68,9 +69,11 @@ describe("decoy tokens (real database)", () => {
 
     const first = await register(registration(agent.enrollmentId, [hash]));
     expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({ registered: 1, conflicts: 0 });
+    const firstBody = await first.json();
+    expect(firstBody).toMatchObject({ registered: 1 });
+    expect(firstBody, "no per-hash outcome is exposed").not.toHaveProperty("conflicts");
     const again = await register(registration(agent.enrollmentId, [hash, hash]));
-    expect(await again.json()).toMatchObject({ registered: 1, conflicts: 0 });
+    expect(await again.json()).toMatchObject({ registered: 1 });
 
     const rows = await prisma.decoyToken.findMany({ where: { agentId: agent.id } });
     expect(rows).toHaveLength(1);
@@ -96,16 +99,26 @@ describe("decoy tokens (real database)", () => {
     expect(await prisma.decoyToken.count()).toBe(0);
   });
 
-  it("does not let another agent take a hash that is already registered", async () => {
+  it("lets two agents hold the same hash, so a squatter cannot hide the owner's alarm", async () => {
     const tenant = await createTestTenant();
-    const first = await createTestAgent(tenant.id);
-    const second = await createTestAgent(tenant.id);
+    const other = await createTestTenant();
+    const owner = await createTestAgent(tenant.id, undefined, { hostname: "web-01" });
+    const squatter = await createTestAgent(other.id, undefined, { hostname: "db-07" });
     const hash = hashToken(TOKEN);
-    await register(registration(first.enrollmentId, [hash]));
 
-    const res = await register(registration(second.enrollmentId, [hash]));
-    expect(await res.json()).toMatchObject({ registered: 0, conflicts: 1 });
-    expect((await prisma.decoyToken.findUniqueOrThrow({ where: { tokenSha256: hash } })).agentId).toBe(first.id);
+    const first = await (await register(registration(owner.enrollmentId, [hash]))).json();
+    const second = await (await register(registration(squatter.enrollmentId, [hash]))).json();
+    // Nobody is told the hash was taken: there is nothing to take, and nothing to learn.
+    expect(first).toMatchObject({ registered: 1 });
+    expect(second).toMatchObject({ registered: 1 });
+    expect(second).not.toHaveProperty("conflicts");
+    expect(await prisma.decoyToken.count({ where: { tokenSha256: hash } })).toBe(2);
+
+    await present(`Bearer ${TOKEN}`);
+    const hosts = async (agentId: string) =>
+      (await alarms(agentId)).map((a) => (a.meta as { planting_host?: string }).planting_host);
+    expect(await hosts(owner.id), "the owner is alarmed, naming its own host").toEqual(["web-01"]);
+    expect(await hosts(squatter.id), "so is whoever registered the same hash").toEqual(["db-07"]);
   });
 
   it("bounds the hashes one agent may hold", async () => {
@@ -241,7 +254,7 @@ describe("decoy tokens (real database)", () => {
     );
   });
 
-  it("tells the loser of a same-hash race that it does not own the hash", async () => {
+  it("registers the same hash for both agents when they race", async () => {
     const tenant = await createTestTenant();
     const first = await createTestAgent(tenant.id);
     const second = await createTestAgent(tenant.id);
@@ -250,10 +263,13 @@ describe("decoy tokens (real database)", () => {
       register(registration(first.enrollmentId, [hash])).then((r) => r.json()),
       register(registration(second.enrollmentId, [hash])).then((r) => r.json()),
     ]);
-    expect(a.registered + b.registered).toBe(1);
-    expect(a.conflicts + b.conflicts).toBe(1);
-    const owner = (await prisma.decoyToken.findUniqueOrThrow({ where: { tokenSha256: hash } })).agentId;
-    expect([first.id, second.id]).toContain(owner);
+    expect(a).toMatchObject({ registered: 1 });
+    expect(b).toMatchObject({ registered: 1 });
+    expect(await prisma.decoyToken.count({ where: { tokenSha256: hash } })).toBe(2);
+  });
+
+  it("finds its table", async () => {
+    expect(await checkDecoyTable(prisma)).toBe(true);
   });
 
   it("refuses to delete an agent that holds decoy hashes", async () => {

@@ -23,6 +23,16 @@ const MAX_TOKEN_LENGTH = 256;
 /** One alarm per decoy per minute: a client retrying a rejected token is one event. */
 export const DECOY_ALARM_COOLDOWN_MS = 60_000;
 
+/**
+ * Alarms one presentation may raise: one per agent holding the hash. A token is normally held
+ * by one agent; many holders means copies or squatting, and the cap keeps one request from
+ * writing an unbounded number of rows.
+ */
+export const MAX_ALARMS_PER_PRESENTATION = 32;
+
+/** Decoy-shaped bearers looked up at once; the rest are counted and dropped (flood bound). */
+export const MAX_CONCURRENT_LOOKUPS = 16;
+
 /** Longest attacker-supplied header value kept in an alarm. */
 const MAX_HEADER_ECHO = 200;
 
@@ -54,16 +64,18 @@ export function looksLikeDecoy(token: string | null): token is string {
 }
 
 export interface RegistrationResult {
+  /** Hashes this agent now holds, of the ones it sent. Always all of them. */
   registered: number;
-  /** Hashes already held by another agent: not re-assigned. */
-  conflicts: number;
 }
 
 export class DecoyLimitError extends Error {}
 
 /**
- * Registers an agent's decoy hashes. Idempotent (the agent re-sends them), bounded per agent,
- * and a hash another agent registered first is a conflict, not a transfer.
+ * Registers an agent's decoy hashes. Idempotent (the agent re-sends them) and bounded per agent.
+ * A hash belongs to the agent that registered it, **and to any other that registers the same
+ * one**: nothing is first-come-first-served, so an agent that has read another's decoy token
+ * cannot take its hash, and a caller learns nothing about hashes it did not register. The
+ * presentation of a token alarms for every agent that holds it (see [`reportDecoyUse`]).
  */
 export async function registerDecoyTokens(
   prisma: PrismaClient,
@@ -75,15 +87,13 @@ export async function registerDecoyTokens(
   // two concurrent requests would both pass. The lock is released when the transaction ends.
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${agent.id}))`;
-    const existing = await tx.decoyToken.findMany({
-      where: { tokenSha256: { in: unique } },
-      select: { tokenSha256: true, agentId: true },
+    const held = await tx.decoyToken.findMany({
+      where: { agentId: agent.id },
+      select: { tokenSha256: true },
     });
-    const owner = new Map(existing.map((t) => [t.tokenSha256, t.agentId]));
-    const fresh = unique.filter((h) => !owner.has(h));
-
-    const held = await tx.decoyToken.count({ where: { agentId: agent.id } });
-    if (held + fresh.length > MAX_DECOY_TOKENS_PER_AGENT) {
+    const have = new Set(held.map((t) => t.tokenSha256));
+    const fresh = unique.filter((h) => !have.has(h));
+    if (held.length + fresh.length > MAX_DECOY_TOKENS_PER_AGENT) {
       throw new DecoyLimitError(
         `at most ${MAX_DECOY_TOKENS_PER_AGENT} decoy tokens per agent`
       );
@@ -96,22 +106,17 @@ export async function registerDecoyTokens(
           agentId: agent.id,
           tokenSha256,
         })),
-        // Another agent registering the same hash at this instant wins the unique index; the
-        // read below says who owns what, so the loser is told it is a conflict.
         skipDuplicates: true,
       });
     }
-    const owned = await tx.decoyToken.findMany({
-      where: { agentId: agent.id, tokenSha256: { in: unique } },
-      select: { tokenSha256: true },
-    });
-    if (owned.length > 0) {
+    const kept = unique.filter((h) => have.has(h));
+    if (kept.length > 0) {
       await tx.decoyToken.updateMany({
-        where: { agentId: agent.id, tokenSha256: { in: owned.map((t) => t.tokenSha256) } },
+        where: { agentId: agent.id, tokenSha256: { in: kept } },
         data: { lastRegisteredAt: new Date() },
       });
     }
-    return { registered: owned.length, conflicts: unique.length - owned.length };
+    return { registered: unique.length };
   });
 }
 
@@ -171,23 +176,28 @@ export async function reportDecoyUse(
   try {
     const token = bearerToken(authorization);
     if (!looksLikeDecoy(token)) return;
-    const decoy = await prisma.decoyToken.findUnique({
+    // Every agent that registered this hash: the lookup has no tenant (the cron routes are
+    // unauthenticated), and registering a hash someone else holds must not hide their alarm.
+    const decoys = await prisma.decoyToken.findMany({
       where: { tokenSha256: hashToken(token) },
+      take: MAX_ALARMS_PER_PRESENTATION,
       include: { agent: { select: { id: true, tenantId: true, hostname: true, enrollmentId: true } } },
     });
-    if (!decoy) return;
+    if (decoys.length === 0) return;
 
     // Presentations that arrive together are one event: the first to get here records it, the
     // others stop, so the check below (a read, then a write) cannot let two through. Per
     // server process; behind several, the database check still bounds it to about one.
     const address = recordedAddress(req);
-    const key = `${decoy.id}|${address}`;
-    if (inFlight.has(key)) return;
-    inFlight.add(key);
-    try {
-      await recordIfNotRecent(prisma, req, decoy, address, now);
-    } finally {
-      inFlight.delete(key);
+    for (const decoy of decoys) {
+      const key = `${decoy.id}|${address}`;
+      if (inFlight.has(key)) continue;
+      inFlight.add(key);
+      try {
+        await recordIfNotRecent(prisma, req, decoy, address, now);
+      } finally {
+        inFlight.delete(key);
+      }
     }
   } catch (error) {
     console.error("Decoy credential check failed:", error);
@@ -213,10 +223,71 @@ export function scheduleDecoyReport(
   req: NextRequest,
   authorization: string | null
 ): void {
+  // Anything that is not decoy-shaped costs nothing: no promise, no query.
+  if (!looksLikeDecoy(bearerToken(authorization))) return;
+  // A flood of decoy-shaped bearers would queue one lookup each on the database pool. Past the
+  // bound they are counted, not queued, and the count is said at powers of two. nginx
+  // limits the rate per address; this bounds what one process holds whatever the rate.
+  if (pending.size >= MAX_CONCURRENT_LOOKUPS) {
+    dropped += 1;
+    if ((dropped & (dropped - 1)) === 0) {
+      console.error(`Decoy reports dropped under load: ${dropped} so far`);
+    }
+    return;
+  }
   const work = reportDecoyUse(prisma, req, authorization).finally(() => {
     pending.delete(work);
   });
   pending.add(work);
+}
+
+let dropped = 0;
+
+/** Reports not started because [`MAX_CONCURRENT_LOOKUPS`] were already running. */
+export function droppedDecoyReports(): number {
+  return dropped;
+}
+
+/** Test seam: forget the drop count. */
+export function resetDroppedDecoyReports(): void {
+  dropped = 0;
+}
+
+/**
+ * Lets the pending alarms finish when the process is asked to stop: a SIGTERM between the
+ * response and the write would otherwise lose the alarm. Waits at most `waitMs`, then exits
+ * anyway so a stuck database cannot keep the process alive.
+ */
+export function installDecoyShutdownFlush(
+  proc: Pick<NodeJS.Process, "once" | "exit">,
+  waitMs = 5_000
+): void {
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    proc.once(signal, () => {
+      const limit = new Promise<void>((resolve) => setTimeout(resolve, waitMs).unref?.());
+      void Promise.race([flushDecoyReports(), limit]).finally(() => proc.exit(0));
+    });
+  }
+}
+
+/**
+ * Whether the `decoy_tokens` table exists. Without it a registration answers 500 and an alarm
+ * is logged and dropped (the schema ships with `db push`, no tracked migration creates it), so
+ * the server says so at start instead of when a decoy is first used. Never throws.
+ */
+export async function checkDecoyTable(prisma: PrismaClient): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<{ present: boolean }[]>`
+      SELECT to_regclass('public.decoy_tokens') IS NOT NULL AS present`;
+    if (rows[0]?.present === true) return true;
+    console.error(
+      "decoy_tokens table is missing: decoy registration will fail and decoy alarms will be " +
+        "lost. Create the schema (`prisma db push`)."
+    );
+  } catch (error) {
+    console.error("Could not check the decoy_tokens table:", error);
+  }
+  return false;
 }
 
 /** Resolves when every scheduled report has finished. For tests and graceful shutdown. */

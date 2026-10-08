@@ -85,7 +85,7 @@ model DecoyToken {
   id               String   @id @default(uuid())
   tenantId         String   @map("tenant_id")
   agentId          String   @map("agent_id")
-  tokenSha256      String   @unique @map("token_sha256")
+  tokenSha256      String   @map("token_sha256")
   createdAt        DateTime @default(now()) @map("created_at")
   lastRegisteredAt DateTime @default(now()) @map("last_registered_at")
 
@@ -94,6 +94,10 @@ model DecoyToken {
   // them (an attacker may hold an old copy); deleting the tenant still removes both.
   agent  Agent  @relation(fields: [agentId], references: [id], onDelete: NoAction)
 
+  // One row per (agent, hash): an agent cannot take a hash another holds, and a presented
+  // token alarms for every holder.
+  @@unique([agentId, tokenSha256])
+  @@index([tokenSha256])
   @@index([tenantId])
   @@index([agentId])
   @@map("decoy_tokens")

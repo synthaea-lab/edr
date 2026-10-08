@@ -34,9 +34,9 @@ vi.mock("@/lib/prisma", () => ({
     },
     decoyToken: {
       // The lookup for a decoy-shaped bearer: held until the test lets it go.
-      findUnique: vi.fn(async () => {
+      findMany: vi.fn(async () => {
         await gate.blocked;
-        return null;
+        return [];
       }),
     },
   },
@@ -54,14 +54,14 @@ const request = (auth: string) =>
 describe("verifyCronRequest and decoy lookups", () => {
   beforeEach(() => {
     process.env.CRON_SECRET = "test_cron_secret";
-    vi.mocked(prisma.decoyToken.findUnique).mockClear();
+    vi.mocked(prisma.decoyToken.findMany).mockClear();
   });
 
   it("answers a decoy-shaped bearer while its lookup is still pending", async () => {
     const answered = await verifyCronRequest(request("Bearer syn_dk_0123456789abcdef0123456789abcdef"));
     expect(answered?.status).toBe(401);
     // The lookup was started, and it has not finished: the answer did not wait for it.
-    expect(prisma.decoyToken.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.decoyToken.findMany).toHaveBeenCalledTimes(1);
     gate.release();
     await flushDecoyReports();
   });
@@ -73,7 +73,7 @@ describe("verifyCronRequest and decoy lookups", () => {
       agentId: "agent-1",
       agent: { id: "agent-1", tenantId: "tenant-1", hostname: "web-01", enrollmentId: "e-1" },
     };
-    vi.mocked(prisma.decoyToken.findUnique).mockImplementation((async () => decoy) as never);
+    vi.mocked(prisma.decoyToken.findMany).mockImplementation((async () => [decoy]) as never);
     gate.release();
     for (let i = 0; i < 5; i++) {
       await verifyCronRequest(request("Bearer syn_dk_0123456789abcdef0123456789abcdef"));
@@ -90,7 +90,7 @@ describe("verifyCronRequest and decoy lookups", () => {
     const answered = await verifyCronRequest(request("Bearer not-a-decoy"));
     expect(answered?.status).toBe(401);
     await flushDecoyReports();
-    expect(prisma.decoyToken.findUnique).not.toHaveBeenCalled();
+    expect(prisma.decoyToken.findMany).not.toHaveBeenCalled();
   });
 
   it("hashes with the same function the registration uses", () => {

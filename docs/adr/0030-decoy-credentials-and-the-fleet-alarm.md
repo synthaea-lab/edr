@@ -17,20 +17,22 @@ server half (recognise it when presented).
    token (`POST /api/ingest/decoy`, nginx proxy secret and mTLS like the other ingest routes).
    The control plane can recognise a decoy and cannot issue one or leak one.
 2. **Registration is append-only, idempotent and bounded.** At most 256 hashes per agent
-   (409 beyond), a hash belongs to the first agent that registered it (another agent's claim
-   is counted as a conflict, not a transfer), and removing the decoys on the host does not
-   delete the row: an attacker may hold an old copy of the file. The same holds for the agent
-   row: `decoy_tokens.agent_id` is `NoAction`, so deleting an agent that holds decoy hashes
-   fails instead of disarming them (deleting the tenant removes both). A registration takes a
-   per-agent advisory lock for its transaction, so the cap is not a count-then-insert two
-   requests can both pass, and `registered` is read back from the table: the loser of a
-   same-hash race is told it is a conflict.
-   **Ownership is global on purpose.** The alarm looks a presented bearer up with no tenant
-   (the cron routes are unauthenticated), so `token_sha256` stays unique across tenants. An
-   agent that has read another's decoy token can therefore register its hash first and have
-   the alarm name it; the `conflicts` count tells a caller a hash it already knows is taken.
-   Both need a token the caller already holds. Scoping uniqueness to the tenant would need
-   the lookup to know the tenant, which it cannot.
+   (409 beyond), and removing the decoys on the host does not delete the row: an attacker may
+   hold an old copy of the file. The same holds for the agent row: `decoy_tokens.agent_id` is
+   `NoAction`, so deleting an agent that holds decoy hashes fails instead of disarming them
+   (deleting the tenant removes both). A registration takes a per-agent advisory lock for its
+   transaction, so the cap is not a count-then-insert two requests can both pass.
+   **A hash is held per agent, not first-come-first-served.** The row is unique on
+   `(agent_id, token_sha256)`, and the same hash may be held by several agents, in any tenant.
+   The alarm looks a presented bearer up with no tenant (the cron routes are unauthenticated),
+   so it cannot pick *the* owner; instead it raises one alarm **per holder** (at most 32 per
+   presentation). That removes the three problems of a global unique key together: an agent
+   that has read another's token cannot take its hash (registering the same one just adds a
+   second alarm, naming the squatter too, which is itself worth an analyst's look); there is no
+   "already taken" answer, so the response carries only `registered` and a caller learns
+   nothing about hashes it did not send; and two agents racing on one hash both succeed. The
+   cost is that one presentation can produce several alarms, each naming its own agent and
+   host, when a hash is held twice.
 3. **A decoy is a `syn_dk_`-prefixed bearer token.** Only a presented bearer with that prefix
    and at most 256 characters is hashed and looked up, so ordinary rejected requests cost
    nothing.
@@ -55,7 +57,8 @@ server half (recognise it when presented).
    guess by response time. The report is started, not awaited. That assumes a long-running
    Node server (`next start`, the Docker image); a platform that freezes the process once the
    response is sent may cut it off, and would need Next's `after()` (Next 15) instead.
-   `flushDecoyReports()` lets tests and a shutdown hook wait for the pending ones.
+   `flushDecoyReports()` waits for the pending ones: `instrumentation.ts` calls it on SIGTERM
+   and SIGINT (waiting at most 5 s), so an alarm written just before a stop is not lost.
 7. **The source address is what nginx saw.** `X-Real-IP` (set by nginx from the connection,
    replacing any client value) first; otherwise the **last** `X-Forwarded-For` hop, which is
    the address nginx appended, never the first, which is whatever the client wrote. Behind
@@ -81,8 +84,9 @@ server half (recognise it when presented).
    `prisma migrate deploy`, which with no tracked migration creates nothing in a clean
    checkout: that stack needs `db push` for this table as for all the others. Without the
    table a registration answers 500 and the alarm fails silently (it logs and moves on),
-   which is the worst failure for this feature, so a deployment should check that
-   registrations arrive (the `decoy_tokens` table fills; the agent logs the outcome).
+   which is the worst failure for this feature: the server now says so at start (item 13),
+   and a deployment should still check that registrations arrive (the `decoy_tokens` table
+   fills; the agent logs the outcome).
 10. **Unauthenticated lookups are rate limited at the proxy**: `/api/cron/` gets 10 requests
    per second per address, burst 20, in `nginx.conf` (429 beyond), since a flood of
    `syn_dk_`-prefixed bearers is otherwise one indexed query each.
@@ -102,13 +106,18 @@ server half (recognise it when presented).
    ours.
    The next start tries again. Standalone, or with the upload disabled, the tokens are planted
    and nothing recognises them.
+12. **Unauthenticated lookups are bounded in the process too.** At most 16 decoy-shaped
+    bearers are looked up at once; past that they are counted and dropped, the count said in
+    the log at powers of two (a bearer that is not decoy-shaped costs nothing). A flood can
+    therefore shed a real alarm, which is the price of not queueing unbounded queries on the
+    database pool; the proxy limit (item 10) keeps one address from doing it alone.
+13. **The server says at start if the table is missing.** `instrumentation.ts` checks that
+    `decoy_tokens` exists and logs the fix (`prisma db push`) if not; it never fails the start
+    (the database may not be reachable yet).
+
 ## Consequences
 
-- **Known gaps, not closed here.** There is no shutdown hook calling `flushDecoyReports()`
-  (Next 14 has none we use), so an alarm started just before a SIGTERM can be lost; and the
-  server does not check at start that `decoy_tokens` exists, so without it registration is a
-  500 and the alarm logs and drops. Cooldown across several server processes is "about one".
-
+- **Known gap, not closed here.** The cooldown across several server processes is "about one": the in-flight set is per process, the database check bounds it and does not eliminate it. A process killed with SIGKILL (not SIGTERM) can still lose an alarm written just before.
 - The alarm fires for a decoy used against a cron route. A decoy presented anywhere else
   (a session route, a third-party service) is not seen: widening it needs the server to read
   bearer tokens on more routes, which is a separate decision.
