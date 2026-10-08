@@ -15,6 +15,11 @@ contents come from a per-install seed kept in `<state_dir>/deception/seed`, so t
 get different files. Every canary starts with a line saying it is a machine-generated,
 inert decoy. Remove the `[deception]` table and restart to take them all back out.
 
+A canary that gets deleted is planted again, with the content it had, at the next start and
+within the hour while the agent runs (the deletion itself already raised a detection). A file
+that was modified or replaced is never overwritten. To get rid of a decoy, take its directory
+out of `canary_dirs`; deleting the file only makes it come back.
+
 ## With the packaged systemd unit
 
 The unit runs the agent as the unprivileged `synthaea` user with `ProtectSystem=strict`,
