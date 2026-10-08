@@ -331,6 +331,8 @@ fn resolve_pass(
 mod tests {
     use std::sync::mpsc;
 
+    use proptest::prelude::*;
+
     use super::*;
 
     const ID_A: &str = "4f2b1c0e9d8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c";
@@ -400,6 +402,19 @@ mod tests {
         }
         assert!(dir.entries.len() <= SILO_CAP);
         assert_eq!(dir.evicted(), SILO_CAP as u64 * 3);
+    }
+
+    #[test]
+    fn lookups_and_resolution_advance_lru_recency() {
+        let mut dir = SiloDirectory::new();
+        dir.lookup(1, SEC);
+        let first = dir.entries[&1].last_used;
+        dir.lookup(2, SEC);
+        let second = dir.entries[&2].last_used;
+        assert!(second > first);
+
+        dir.resolved(1, ID_A.to_string());
+        assert!(dir.entries[&1].last_used > second);
     }
 
     #[test]
@@ -545,5 +560,149 @@ mod tests {
         drop(tx);
         run_resolver(&rx, &directory, &DownHcs, |_, _| Some(41));
         assert_eq!(directory.lock().unwrap().lookup(41, SEC).0.id, "silo:41");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        #[test]
+        fn directory_stays_bounded_for_arbitrary_lookup_resolution_and_forget_sequences(
+            operations in prop::collection::vec((any::<u32>(), any::<u64>(), any::<bool>()), 0..800)
+        ) {
+            let mut directory = SiloDirectory::new();
+            for (silo, time, resolve) in operations {
+                if resolve {
+                    directory.resolved(silo, format!("container-{silo}"));
+                } else {
+                    let _ = directory.lookup(silo, time);
+                }
+                prop_assert!(directory.entries.len() <= SILO_CAP);
+            }
+        }
+
+        #[test]
+        fn forgetting_a_resolved_silo_never_recovers_its_old_container(
+            silo in 1u32..u32::MAX,
+            time in any::<u64>(),
+            id in "[a-z0-9]{1,40}"
+        ) {
+            let mut directory = SiloDirectory::new();
+            directory.resolved(silo, id.clone());
+            directory.forget(silo);
+            let (context, ask) = directory.lookup(silo, time);
+            prop_assert_eq!(context.id, provisional_id(silo));
+            prop_assert!(ask);
+        }
+
+        #[test]
+        fn nonzero_silo_lookup_never_returns_the_host(
+            silo in 1u32..u32::MAX,
+            resolved in any::<bool>()
+        ) {
+            let mut directory = SiloDirectory::new();
+            if resolved {
+                directory.resolved(silo, format!("container-{silo}"));
+            }
+            let context = directory.lookup(silo, 0).0;
+            prop_assert_ne!(&context.id, "host");
+            let expected = if resolved { format!("container-{silo}") } else { provisional_id(silo) };
+            prop_assert_eq!(&context.id, &expected);
+        }
+
+        #[test]
+        fn container_order_does_not_change_silo_matching(
+            silos in prop::collection::vec(any::<u32>(), 1..40)
+        ) {
+            let containers: Vec<_> = silos.iter().enumerate().map(|(i, _)| {
+                container(&format!("container-{i}"), &[(i as u32 + 1, "worker.exe")])
+            }).collect();
+            let probe = |pid: u32, _: &str| silos.get(pid as usize - 1).copied();
+            let expected = match_containers(&containers, probe);
+            prop_assert!(expected.iter().all(|(silo, _)| *silo != 0));
+            let mut reversed = containers;
+            reversed.reverse();
+            let actual = match_containers(&reversed, |pid, _| silos.get(pid as usize - 1).copied());
+            prop_assert_eq!(&actual, &expected);
+            let mut mapped_silos: Vec<_> = actual.iter().map(|(silo, _)| *silo).collect();
+            mapped_silos.sort_unstable();
+            mapped_silos.dedup();
+            prop_assert_eq!(mapped_silos.len(), actual.len());
+        }
+
+        #[test]
+        fn duplicate_container_claims_never_produce_a_mapping(silo in 1u32..u32::MAX) {
+            let containers = [
+                container("first", &[(11, "one.exe")]),
+                container("second", &[(22, "two.exe")]),
+            ];
+            let result = match_containers(&containers, |pid, _| match pid {
+                11 | 22 => Some(silo),
+                _ => None,
+            });
+            prop_assert!(!result.iter().any(|(mapped, _)| *mapped == silo));
+        }
+
+        #[test]
+        fn container_id_parser_matches_only_container_entries(
+            entries in prop::collection::vec((any::<String>(), any::<bool>(), any::<bool>()), 0..80)
+        ) {
+            let input: Vec<_> = entries.iter().map(|(id, is_container, valid_id)| {
+                serde_json::json!({
+                    "Id": if *valid_id { serde_json::Value::String(id.clone()) } else { serde_json::json!(17) },
+                    "SystemType": if *is_container { serde_json::json!("Container") } else { serde_json::json!("VirtualMachine") }
+                })
+            }).collect();
+            let expected: Vec<_> = entries.iter()
+                .filter(|(id, is_container, valid_id)| *is_container && *valid_id && !id.is_empty())
+                .map(|(id, _, _)| id.clone())
+                .collect();
+            prop_assert_eq!(parse_container_ids(&serde_json::to_string(&input).unwrap()), expected);
+        }
+
+        #[test]
+        fn process_list_parser_filters_wrong_types_and_invalid_pids(
+            entries in prop::collection::vec((any::<i64>(), any::<String>(), any::<u8>()), 0..80)
+        ) {
+            let input: Vec<_> = entries.iter().map(|(pid, image, kind)| {
+                let process_id = match kind % 4 {
+                    0 => serde_json::json!(pid),
+                    1 => serde_json::json!(pid.to_string()),
+                    2 => serde_json::json!(true),
+                    _ => serde_json::Value::Null,
+                };
+                serde_json::json!({"ProcessId": process_id, "ImageName": image})
+            }).collect();
+            let expected: Vec<_> = entries.iter()
+                .filter(|(pid, image, kind)| *kind % 4 == 0 && *pid > 0 && *pid <= i64::from(u32::MAX) && !image.is_empty())
+                .map(|(pid, image, _)| (*pid as u32, image.clone()))
+                .collect();
+            let json = serde_json::to_string(&serde_json::json!({"ProcessList": input})).unwrap();
+            prop_assert_eq!(parse_process_list(&json), expected);
+        }
+    }
+
+    #[test]
+    fn hostile_hcs_json_shapes_are_rejected_or_filtered_without_panicking() {
+        let megabyte = "x".repeat(1024 * 1024);
+        let deep = format!("{}0{}", "[".repeat(256), "]".repeat(256));
+        let hostile = [
+            r#"[{"Id":17,"SystemType":"Container"}]"#,
+            r#"[{"Id":"x","SystemType":false}]"#,
+            r#"[{"Id":"","SystemType":"Container"}]"#,
+            r#"{"ProcessList":[{"ProcessId":-1,"ImageName":"x.exe"}]}"#,
+            r#"{"ProcessList":[{"ProcessId":18446744073709551615,"ImageName":"x.exe"}]}"#,
+            r#"{"ProcessList":[{"ProcessId":"42","ImageName":4}]}"#,
+            r#"{"ProcessList":[{"ProcessId":42,"ImageName":"x.exe"},{"ProcessId":42,"ImageName":"x.exe"}]}"#,
+        ];
+        for json in hostile {
+            let _ = parse_container_ids(json);
+            let _ = parse_process_list(json);
+        }
+        let large = serde_json::json!({"ProcessList":[{"ProcessId":42,"ImageName":megabyte}]});
+        let parsed = parse_process_list(&large.to_string());
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].1.len(), 1024 * 1024);
+        assert!(parse_container_ids(&deep).is_empty());
+        assert!(parse_process_list(&deep).is_empty());
     }
 }
