@@ -86,6 +86,22 @@ server half (recognise it when presented).
 10. **Unauthenticated lookups are rate limited at the proxy**: `/api/cron/` gets 10 requests
    per second per address, burst 20, in `nginx.conf` (429 beyond), since a flood of
    `syn_dk_`-prefixed bearers is otherwise one indexed query each.
+11. **The agent plants one token in each credentials canary and each config canary**
+   (`api-token : syn_dk_<32 hex>`, `cron_secret = syn_dk_<32 hex>`), derived from the install's
+   seed and the canary's index: different per install and per canary, stable across restarts,
+   and absent from finance and notes canaries. At start it registers the SHA-256 of the planted
+   tokens (lowercase hex of the UTF-8 bytes, the same constant asserted on both sides) in a
+   detached thread, retrying over about half a day (5 s, 15 s, 1 min, 5 min, 15 min, 30 min,
+   then hourly, 12 tries) and stopping at once only on a refusal that will not change: a 400,
+   409, 413 or 422, or an error that cannot be fixed by asking again (serialization,
+   configuration). A 401, 403, 404, 408, 429 or any 5xx, a TLS or I/O error and every
+   network error are retried, because the thread runs once per start and a daemon may not
+   restart for days. The tokens registered are the ones **found in the canary files on
+   disk** after planting, read back, never the plan's: a canary planted by an earlier build
+   keeps its old content and holds no decoy, and a skipped or foreign file holds none of
+   ours.
+   The next start tries again. Standalone, or with the upload disabled, the tokens are planted
+   and nothing recognises them.
 ## Consequences
 
 - **Known gaps, not closed here.** There is no shutdown hook calling `flushDecoyReports()`
@@ -96,7 +112,9 @@ server half (recognise it when presented).
 - The alarm fires for a decoy used against a cron route. A decoy presented anywhere else
   (a session route, a third-party service) is not seen: widening it needs the server to read
   bearer tokens on more routes, which is a separate decision.
-- The agent half (generating the token from the install's seed, planting it in a canary,
-  registering the hashes) is a separate change; until it lands nothing registers a token.
+- Registration happens once per start. If the control plane loses its table, decoys are
+  recognised again only after the agent restarts.
+- A token the operator removes by deleting its canary is still recognised: rows are never
+  deleted.
 - Stored `event` and `meta` carry attacker-supplied header text: bounded and never rendered
   as markup, but console views that show `meta` must treat it as untrusted.
