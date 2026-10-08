@@ -40,6 +40,11 @@
          administrator. It checks that mask 0x1480 delivers only event IDs
          12, 26, and 30, then proves the assertion rejects 0x1E80.
 
+      G. #726. The same for Kernel-Process: mask 0x50 (process and image) must
+         deliver process start, process stop and image load for a child process
+         the test starts and no thread start/stop, and 0x70 (adds THREAD) must
+         fail on the thread ids. Skipped with -SkipKernelProcessMask.
+
     The verdicts are printed and saved to summary.txt; everything else (agent
     logs, events.jsonl, alerts.ndjson, the raw D trace) stays in -OutDir.
 
@@ -66,7 +71,8 @@ param(
     [switch]$SkipRootCause,
     [switch]$SkipLongPath,
     [switch]$SkipMarkRemoval,
-    [switch]$SkipKernelFileMask
+    [switch]$SkipKernelFileMask,
+    [switch]$SkipKernelProcessMask
 )
 
 # Defaults resolved here, not in param(): Windows PowerShell 5.1 leaves
@@ -96,10 +102,11 @@ $ProbePrefix = "synthaea408-probe-"
 $CapturePrefix = "synthaea442-"
 $AgentPrefix = "wtrace-"
 $KernelFileMaskPrefix = "synthaea-kf-mask-"
+$KernelProcessMaskPrefix = "synthaea-kp-mask-"
 $Results = New-Object System.Collections.ArrayList
 $Current = $null
-$KernelFileMaskSession = $null
-$KernelFileMaskNeedsCleanup = $false
+$MaskTestSession = $null
+$MaskTestNeedsCleanup = $false
 
 # -- Output ------------------------------------------------------------------
 
@@ -124,7 +131,21 @@ function Get-EtsSessionNames {
     # terminating error under "Stop"; the exit code is checked instead.
     $ErrorActionPreference = "Continue"
     $out = & logman query -ets 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "logman query -ets failed: $out" }
+    if ($LASTEXITCODE -ne 0) {
+        # logman lists sessions through WMI and stops at the first one whose provider
+        # GUID it cannot read ("the GUID passed was not recognized as valid by a WMI
+        # data provider", seen on a Windows 11 host in 2026-10, and not always: it
+        # depends on the sessions running). Get-EtwTraceSession reads the same
+        # sessions through the ETW API and does not depend on that provider.
+        try {
+            $names = @(Get-EtwTraceSession -Name "*" -ErrorAction Stop | ForEach-Object { $_.Name })
+        } catch {
+            throw "logman query -ets failed ($out) and so did Get-EtwTraceSession: $_"
+        }
+        if ($names.Count -eq 0) { throw "logman query -ets failed: $out" }
+        $names
+        return
+    }
     $out | ForEach-Object { ("$_".Trim() -split '\s+')[0] } | Where-Object { $_ }
 }
 
@@ -249,12 +270,12 @@ function Test-SensorFailed([string]$Log) {
     $Log -match "ETW sensor failed" -or $Log -match "produced no events for 30s"
 }
 
-function Invoke-KernelFileMaskTest([string]$Mask) {
+function Invoke-MaskTest([string]$TestFile, [string]$TestName, [string]$EnvName, [string]$SessionMarker, [string]$SessionPrefix, [string]$Mask) {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $env:SYNTHAEA_KERNEL_FILE_MASK = $Mask
-        $output = & cargo test -p sensor-windows --test kernel_file_keyword_mask -- --ignored --exact kernel_file_keyword_mask_respects_the_requested_event_ids --nocapture 2>&1
+        Set-Item -Path "Env:$EnvName" -Value $Mask
+        $output = & cargo test -p sensor-windows --test $TestFile -- --ignored --exact $TestName --nocapture 2>&1
         $exitCode = $LASTEXITCODE
     } catch {
         $output = @($_.Exception.Message)
@@ -265,17 +286,25 @@ function Invoke-KernelFileMaskTest([string]$Mask) {
     foreach ($line in @($output)) {
         $lineText = "$line"
         Write-Host $lineText
-        if ($lineText -match "KERNEL_FILE_MASK_SESSION=(\S+)") {
+        if ($lineText -match "$SessionMarker=(\S+)") {
             $candidate = $Matches[1]
-            if ($candidate.StartsWith($KernelFileMaskPrefix, [StringComparison]::Ordinal)) {
-                $script:KernelFileMaskSession = $candidate
+            if ($candidate.StartsWith($SessionPrefix, [StringComparison]::Ordinal)) {
+                $script:MaskTestSession = $candidate
             }
         }
     }
     if ((@($output) -join "`n") -notmatch "test result:") {
-        $script:KernelFileMaskNeedsCleanup = [bool]$script:KernelFileMaskSession
+        $script:MaskTestNeedsCleanup = [bool]$script:MaskTestSession
     }
     [pscustomobject]@{ ExitCode = $exitCode; Output = (@($output) -join "`n") }
+}
+
+function Invoke-KernelFileMaskTest([string]$Mask) {
+    Invoke-MaskTest "kernel_file_keyword_mask" "kernel_file_keyword_mask_respects_the_requested_event_ids" "SYNTHAEA_KERNEL_FILE_MASK" "KERNEL_FILE_MASK_SESSION" $KernelFileMaskPrefix $Mask
+}
+
+function Invoke-KernelProcessMaskTest([string]$Mask) {
+    Invoke-MaskTest "kernel_process_keyword_mask" "kernel_process_keyword_mask_respects_the_requested_event_ids" "SYNTHAEA_KERNEL_PROCESS_MASK" "KERNEL_PROCESS_MASK_SESSION" $KernelProcessMaskPrefix $Mask
 }
 
 # -- Setup -------------------------------------------------------------------
@@ -586,12 +615,45 @@ try {
             }
         }
     }
+
+    # -- G. #726: event IDs delivered by the Kernel-Process keyword mask ------
+    if (-not $SkipKernelProcessMask) {
+        Write-Section "G. #726 Kernel-Process keyword mask"
+        $hadKernelProcessMask = Test-Path Env:SYNTHAEA_KERNEL_PROCESS_MASK
+        $previousKernelProcessMask = $env:SYNTHAEA_KERNEL_PROCESS_MASK
+        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+        Push-Location $repoRoot
+        try {
+            $positive = Invoke-KernelProcessMaskTest "0x50"
+            $positiveTail = (($positive.Output -split "`r?`n") | Select-Object -Last 8) -join "; "
+            if ($positive.ExitCode -eq 0) {
+                Add-Result "#726 0x50 delivers process start/stop and image load, no thread events" "PASS" "real ETW session; child process and own threads; $positiveTail"
+            } else {
+                Add-Result "#726 0x50 delivers process start/stop and image load, no thread events" "FAIL" "cargo test exit $($positive.ExitCode); $positiveTail"
+            }
+
+            $negative = Invoke-KernelProcessMaskTest "0x70"
+            $negativeTail = (($negative.Output -split "`r?`n") | Select-Object -Last 8) -join "; "
+            if ($negative.ExitCode -ne 0 -and $negative.Output -match "mask validation failed: unexpected Kernel-Process thread IDs") {
+                Add-Result "#726 mask 0x70 (adds THREAD) is rejected by the same assertion" "PASS" "thread events 3/4 arrived under the wider mask, as expected; $negativeTail"
+            } else {
+                Add-Result "#726 mask 0x70 (adds THREAD) is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected the failure 'unexpected Kernel-Process thread IDs' (a 'missing' failure or a session problem does not prove that the wider mask lets thread events through); $negativeTail"
+            }
+        } finally {
+            Pop-Location
+            if ($hadKernelProcessMask) {
+                $env:SYNTHAEA_KERNEL_PROCESS_MASK = $previousKernelProcessMask
+            } else {
+                Remove-Item Env:SYNTHAEA_KERNEL_PROCESS_MASK -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 finally {
     Write-Section "Cleanup"
     Stop-LabAgent $Current
-    if ($KernelFileMaskNeedsCleanup -and $KernelFileMaskSession) {
-        Invoke-NativeCleanup "ETW session $KernelFileMaskSession" logman.exe @("stop", $KernelFileMaskSession, "-ets")
+    if ($MaskTestNeedsCleanup -and $MaskTestSession) {
+        Invoke-NativeCleanup "ETW session $MaskTestSession" logman.exe @("stop", $MaskTestSession, "-ets")
     }
     Stop-EtsSessions $ProbePrefix
     Stop-EtsSessions $CapturePrefix
