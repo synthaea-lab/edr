@@ -66,6 +66,22 @@ the semi-frozen `schema`.
      change), not a change here; until then do not rely on the list against a local user
      who can create namespaces (`kernel.unprivileged_userns_clone`,
      `user.max_user_namespaces=0`). Read from the code, not run.
+   - **The exec table is a record, not a witness.** `process_generation` is stamped at fork,
+     not at exec, so a process that execs an allowed binary and then execs something else
+     keeps its generation, and if that second `Exec` event is shed or arrives after the file
+     event the table still says "allowed". Where the agent can read `/proc/<pid>/exe` it
+     checks the table against it and a disagreement denies; where it cannot (no
+     `CAP_SYS_PTRACE` for another user's process, another mount namespace) the table decides
+     alone and this gap is open. "No pid-reuse race" holds for a recycled pid, not for a
+     re-exec whose event was lost. A lookup refreshes the entry's recency, so a long-running
+     allowed process is not evicted by the execs of others; the eviction count is the map's.
+   - **The container flag is read on the `Exec` event.** The container id comes from the
+     event's cgroup id, synchronously (`container_context`); only the image and name arrive
+     later, and they are not used here.
+   - **An entry's own path must be trusted too.** The name an exec is reported under is
+     matched as text, so a listed link outside a trusted location (a user-writable
+     `/tmp/tools/updatedb` pointing into `/usr`) is matched by its resolved path only, with a
+     warning at load.
    - **No shells or interpreters.** A name such as `bash`, `python3.x`, `perl`, `find` or
      `env` is rejected at load: allowing it would exempt every script it runs. The list is a
      guard against the obvious mistake, not a complete one.

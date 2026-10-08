@@ -78,6 +78,11 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   `CAP_SYS_PTRACE`, which the packaged unit does not grant (ADR-0014): it is not recognised and
   still raises the detection. Add the capability in a drop-in only if you accept that trade
   (ADR-0023 makes the same one for memory scanning).
+- The exec table is only as fresh as the events the agent received: a process that execs an
+  allowed binary and then something else, with that second event lost, is still recognised as the
+  first where the agent cannot read `/proc/<pid>/exe`. Where it can, a disagreement denies.
+- An entry whose own path is outside a trusted location (a link in `/tmp` to `/usr/bin/x`) is
+  matched by its resolved path only; the agent warns at start.
 - The exec route cannot see a mount namespace: a local user who can create user and mount
   namespaces can bind-mount their own binary over a listed one and be recognised as it.
   Where that matters, disable unprivileged user namespaces (`user.max_user_namespaces=0`); it
