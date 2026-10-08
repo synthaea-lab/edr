@@ -48,6 +48,13 @@ This starts:
 The server creates its schema on startup with `prisma db push` (`prisma/migrations` is not
 tracked, so there is no migration history to apply).
 
+After editing `prisma/schema.prisma` in the dev stack, `db push` updates the database on the next
+start but the Prisma client inside the container stays the one generated when the image was
+built: rebuild the image (`docker compose build server`) to regenerate it.
+
+The production image serves the standalone build with `node server.js`; `npm start`
+(`next start`) is for a plain `next build` and does not apply to it.
+
 On a host with SELinux enforcing (Fedora, RHEL) the compose bind mounts carry `:z`, which
 relabels `server/` and `server/certs/` for the containers. The first build also downloads
 the Node and nginx images, so it needs network access.
