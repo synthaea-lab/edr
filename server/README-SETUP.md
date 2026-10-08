@@ -45,7 +45,12 @@ This starts:
 - **Next.js server** (port 3000)
 - **Nginx mTLS proxy** (port 8443)
 
-The server runs migrations automatically on startup.
+The server creates its schema on startup with `prisma db push` (`prisma/migrations` is not
+tracked, so there is no migration history to apply).
+
+On a host with SELinux enforcing (Fedora, RHEL) the compose bind mounts carry `:z`, which
+relabels `server/` and `server/certs/` for the containers. The first build also downloads
+the Node and nginx images, so it needs network access.
 
 ### 5. Verify
 
