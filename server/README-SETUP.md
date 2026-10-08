@@ -57,6 +57,39 @@ The production image serves the standalone build with `node server.js`. Outside 
 assets and `public/` beside the standalone server (as the image does) and starts it, with `PORT`
 and `HOSTNAME` read as usual. `next start` does not serve this output.
 
+### Reaching the stack from an agent on another machine (a lab VM)
+
+The dev certificate names `localhost`, `127.0.0.1` and `::1` only, and the agent's TLS client
+(rustls) refuses a server name that is not in the certificate's `subjectAltName`. To reach the
+proxy from a VM or another host, name its address when generating the certificates, and tell
+the agent which CA to trust (it trusts the public roots only by default):
+
+```bash
+DEV_CERT_SANS="IP:192.0.2.10" ./scripts/generate-dev-certs.sh      # the address the agent will use
+agent check-content-manifest --server https://192.0.2.10:8443 --ring canary_0 \
+  --ca-cert certs/ca.crt --cert certs/agent-test.crt --key certs/agent-test.key
+```
+
+`--ca-cert`, `--cert` and `--key` are also on `agent run`, `apply-release` and
+`apply-content-manifest`; `server.ca_cert` in `agent.toml` does the same for a configured agent
+(`docs/operations/binary-releases.md`, "Control plane on a private CA"). The server identifies
+an agent by the certificate's CN: an `agents` row whose `enrollment_id` is that CN must exist
+(`agent-test-001` for the test certificate), or the routes answer `403 Agent not enrolled`.
+
+**The compose file publishes PostgreSQL (`5432`, with the dev password) and the proxy (`8443`) on
+every interface of the host.** On a shared network, publish only what the lab needs, with an
+override file, and nothing for the database:
+
+```yaml
+# override.yml, used with: docker compose -f docker-compose.yml -f override.yml up
+services:
+  postgres:
+    ports: !reset []
+  proxy:
+    ports: !override
+      - "192.0.2.10:8443:8443"   # only the lab bridge address
+```
+
 On a host with SELinux enforcing (Fedora, RHEL) the compose bind mounts carry `:z`, which
 relabels `server/` and `server/certs/` for the containers. The first build also downloads
 the Node and nginx images, so it needs network access.
