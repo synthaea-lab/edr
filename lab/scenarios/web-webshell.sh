@@ -45,7 +45,10 @@
 set -euo pipefail
 
 BASE=${1:-http://127.0.0.1}
-FAKE_WEBSERVER=/tmp/nginx
+# The spawning parent's name: nginx by default, `apache2`, `httpd` or `php-fpm8.4` to
+# exercise the other names the lineage rule and the correlator accept.
+FAKE_COMM=${FAKE_COMM:-nginx}
+FAKE_WEBSERVER=/tmp/$FAKE_COMM
 
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
 curl -s -o /dev/null --max-time 3 "$BASE/" || { echo "no web server answers at $BASE" >&2; exit 1; }
@@ -75,7 +78,7 @@ if [[ "$SH_TARGET" == *busybox* ]]; then
 else
     cp /bin/sh "$FAKE_WEBSERVER"
 fi
-echo "Spawning a shell from a process named 'nginx' ($FAKE_WEBSERVER) ..."
+echo "Spawning a shell from a process named '$FAKE_COMM' ($FAKE_WEBSERVER) ..."
 # The subshell forces the fork that `sh -c` would otherwise skip (see lineage.sh).
 "$FAKE_WEBSERVER" -c '(/bin/sh -c "id >/dev/null")'
 
