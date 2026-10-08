@@ -45,6 +45,11 @@ the implant from `NetworkManager` is provenance, not the amount of evidence.
 5. **Corroboration does not lift the refusal.** The rule is about what the process is, not
    how much evidence exists; a service that is compromised is dealt with by escalation and
    the responder, not by an automatic `SIGKILL` of a unit systemd would restart.
+6. **Only the correlator's `BAYES` gate is covered.** The ransomware reflex (#82: the
+   burst rule fires and the process touches a canary) is a separate trigger that rests on
+   its own evidence, not on a calibrated belief score, and it keeps killing as before. This
+   was a choice made when this branch was rebased over #82: whether a service's main process
+   that trips the reflex should also be spared is open and is the reviewers' call.
 
 ## Consequences
 
