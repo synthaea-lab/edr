@@ -4,7 +4,7 @@
     sessions), #489 (8.3 short paths), #442 point 2 (mark-of-the-web removal).
 
 .DESCRIPTION
-    Five phases, each skippable, all writing under -OutDir:
+    Six phases, each skippable, with results written under -OutDir:
 
       A. #408 cleanup. Leaves one real orphan (agent killed with -Force) plus
          two synthetic `wtrace-` sessions, starts the agent, and checks that
@@ -36,17 +36,25 @@
          both, and checks one `file_delete` of each stream and one T1553.005
          alert per file. Skipped with -SkipMarkRemoval, like D.
 
+      F. #708. Runs the ignored Kernel-File keyword-mask integration test as
+         administrator. It checks that mask 0x1480 delivers only event IDs
+         12, 26, and 30, then proves the assertion rejects 0x1E80.
+
     The verdicts are printed and saved to summary.txt; everything else (agent
     logs, events.jsonl, alerts.ndjson, the raw D trace) stays in -OutDir.
 
 .NOTES
     Run from an elevated Windows PowerShell 5.1+ prompt, with no other agent
-    running:
+    running. For the full validation, build agent.exe first:
         cargo build --release -p agent        (from the branch under test)
         powershell -ExecutionPolicy Bypass -File lab\validate-windows-admin.ps1
 
-    About 6 minutes with the default -ProbeCounts. Stops only what it created
-    plus `wtrace-` sessions, which are the agent's own by construction.
+    To run only the #708 ETW mask phase, skip the agent-dependent phases:
+        powershell -ExecutionPolicy Bypass -File lab\validate-windows-admin.ps1 -SkipOrphans -SkipRootCause -SkipLongPath -SkipMarkRemoval
+
+    About 6 minutes with the default -ProbeCounts, plus the short #708 ETW
+    test. Stops only what it created plus `wtrace-` sessions, which are the
+    agent's own by construction.
 #>
 [CmdletBinding()]
 param(
@@ -57,7 +65,8 @@ param(
     [switch]$SkipOrphans,
     [switch]$SkipRootCause,
     [switch]$SkipLongPath,
-    [switch]$SkipMarkRemoval
+    [switch]$SkipMarkRemoval,
+    [switch]$SkipKernelFileMask
 )
 
 # Defaults resolved here, not in param(): Windows PowerShell 5.1 leaves
@@ -86,8 +95,11 @@ $AgentProviders = [ordered]@{
 $ProbePrefix = "synthaea408-probe-"
 $CapturePrefix = "synthaea442-"
 $AgentPrefix = "wtrace-"
+$KernelFileMaskPrefix = "synthaea-kf-mask-"
 $Results = New-Object System.Collections.ArrayList
 $Current = $null
+$KernelFileMaskSession = $null
+$KernelFileMaskNeedsCleanup = $false
 
 # -- Output ------------------------------------------------------------------
 
@@ -237,16 +249,46 @@ function Test-SensorFailed([string]$Log) {
     $Log -match "ETW sensor failed" -or $Log -match "produced no events for 30s"
 }
 
+function Invoke-KernelFileMaskTest([string]$Mask) {
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $env:SYNTHAEA_KERNEL_FILE_MASK = $Mask
+        $output = & cargo test -p sensor-windows --test kernel_file_keyword_mask -- --ignored --exact kernel_file_keyword_mask_respects_the_requested_event_ids --nocapture 2>&1
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $output = @($_.Exception.Message)
+        $exitCode = 1
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    foreach ($line in @($output)) {
+        $lineText = "$line"
+        Write-Host $lineText
+        if ($lineText -match "KERNEL_FILE_MASK_SESSION=(\S+)") {
+            $candidate = $Matches[1]
+            if ($candidate.StartsWith($KernelFileMaskPrefix, [StringComparison]::Ordinal)) {
+                $script:KernelFileMaskSession = $candidate
+            }
+        }
+    }
+    if ((@($output) -join "`n") -notmatch "test result:") {
+        $script:KernelFileMaskNeedsCleanup = [bool]$script:KernelFileMaskSession
+    }
+    [pscustomobject]@{ ExitCode = $exitCode; Output = (@($output) -join "`n") }
+}
+
 # -- Setup -------------------------------------------------------------------
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Run this script from an elevated PowerShell: the ETW kernel providers need Administrator."
 }
-if (-not (Test-Path $AgentExe)) {
+if (-not ($SkipOrphans -and $SkipRootCause -and $SkipLongPath -and $SkipMarkRemoval) -and -not (Test-Path $AgentExe)) {
     throw "agent.exe not found at $AgentExe - build it first (cargo build --release -p agent) or pass -AgentExe"
 }
-$AgentExe = (Resolve-Path $AgentExe).Path
+$needsAgent = -not ($SkipOrphans -and $SkipRootCause -and $SkipLongPath -and $SkipMarkRemoval)
+if ($needsAgent) { $AgentExe = (Resolve-Path $AgentExe).Path }
 if (Get-Process -Name "agent" -ErrorAction SilentlyContinue) {
     throw "An agent.exe is already running; stop it first (its ETW session would be swept by this test)."
 }
@@ -281,7 +323,11 @@ worker_threads = 0
 max_reconnect_backoff_ms = 60000
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding Ascii
 
-Write-Host "agent:  $AgentExe ($((Get-Item $AgentExe).LastWriteTime))"
+if ($needsAgent) {
+    Write-Host "agent:  $AgentExe ($((Get-Item $AgentExe).LastWriteTime))"
+} else {
+    Write-Host "agent:  not needed"
+}
 Write-Host "output: $OutDir"
 
 $LabDirs = @()
@@ -507,10 +553,46 @@ try {
             }
         }
     }
+
+    # -- F. #708: event IDs delivered by the Kernel-File keyword mask -------
+    if (-not $SkipKernelFileMask) {
+        Write-Section "F. #708 Kernel-File keyword mask"
+        $hadKernelFileMask = Test-Path Env:SYNTHAEA_KERNEL_FILE_MASK
+        $previousKernelFileMask = $env:SYNTHAEA_KERNEL_FILE_MASK
+        $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+        Push-Location $repoRoot
+        try {
+            $positive = Invoke-KernelFileMaskTest "0x1480"
+            $positiveTail = (($positive.Output -split "`r?`n") | Select-Object -Last 8) -join "; "
+            if ($positive.ExitCode -eq 0) {
+                Add-Result "#708 0x1480 emits only Kernel-File IDs 12, 26, 30" "PASS" "real ETW session; create/write/rename/delete observed; $positiveTail"
+            } else {
+                Add-Result "#708 0x1480 emits only Kernel-File IDs 12, 26, 30" "FAIL" "cargo test exit $($positive.ExitCode); $positiveTail"
+            }
+
+            $negative = Invoke-KernelFileMaskTest "0x1E80"
+            $negativeTail = (($negative.Output -split "`r?`n") | Select-Object -Last 8) -join "; "
+            if ($negative.ExitCode -ne 0 -and $negative.Output -match "mask validation failed: unexpected Kernel-File IDs") {
+                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "PASS" "the test saw Kernel-File IDs outside 12, 26, 30 under the wider mask, as expected; $negativeTail"
+            } else {
+                Add-Result "#708 bad mask 0x1E80 is rejected by the same assertion" "FAIL" "exit $($negative.ExitCode), expected the failure `unexpected Kernel-File IDs` (a `missing` failure or a session problem does not prove the bad mask lets extra IDs through); $negativeTail"
+            }
+        } finally {
+            Pop-Location
+            if ($hadKernelFileMask) {
+                $env:SYNTHAEA_KERNEL_FILE_MASK = $previousKernelFileMask
+            } else {
+                Remove-Item Env:SYNTHAEA_KERNEL_FILE_MASK -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 finally {
     Write-Section "Cleanup"
     Stop-LabAgent $Current
+    if ($KernelFileMaskNeedsCleanup -and $KernelFileMaskSession) {
+        Invoke-NativeCleanup "ETW session $KernelFileMaskSession" logman.exe @("stop", $KernelFileMaskSession, "-ets")
+    }
     Stop-EtsSessions $ProbePrefix
     Stop-EtsSessions $CapturePrefix
     Stop-EtsSessions $AgentPrefix
