@@ -17,8 +17,8 @@ is a false positive: `fp_rate_test_*` in the model record is the empirical FP ra
 model at its own calibrated threshold. The split is by **time**, not random: a random split
 would put an event's near-duplicates on both sides and flatter both models.
 
-What this does not do: ship a model. The Rust half of the rarity feature waits for ADR-0020
-to be accepted, so the agent cannot load an 11-feature model yet; and the global-model-floor
+What this does not do: ship a model. The Rust half of the rarity feature is not written yet
+(ADR-0020 is accepted), so the agent cannot load an 11-feature model yet; and the global-model-floor
 check of `train_site_model.py` (a site model must not lose detections the global model has)
 still has to pass before any site model leaves the lab. Detection quality is not measured
 here: only the false-positive side, on benign corpora.

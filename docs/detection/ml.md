@@ -53,7 +53,7 @@ Constraints that keep the loop safe:
 
 ### The rarity feature (Python side, #640)
 
-ADR-0020 (proposed) defines the fleet-derived feature a site model can use: whether the executed
+ADR-0020 (accepted) defines the fleet-derived feature a site model can use: whether the executed
 image's hash is on the tenant's **common set** (seen on at least K hosts), as a small ordinal
 rather than a count, because the device can only compute what a pushed snapshot lets it.
 `ml/synthaea_ml/features/rarity.py` is two numbers: `rarity_known` (a snapshot exists, covers
@@ -72,8 +72,8 @@ and records each model's false-positive rate on the untouched test slice in `mod
 Only the false-positive side is measured (the corpus is benign); the global-model-floor check of
 `train_site_model.py` still has to pass before a site model leaves the lab.
 
-**Not shippable:** there is no Rust mirror yet. Nothing agent-side is written until ADR-0020 is
-accepted, so the agent cannot load an 11-feature model; the mirror must take the same two inputs
+**Not shippable:** there is no Rust mirror yet. ADR-0020 is accepted but the agent side is not written yet,
+so the agent cannot load an 11-feature model; the mirror must take the same two inputs
 (a membership test and the "covers enough hosts" flag) and be pinned to the Python module by a
 golden fixture.
 
