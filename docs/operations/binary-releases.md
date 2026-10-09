@@ -41,6 +41,17 @@ store URL is fetched over the network, as for content manifests).
 
    Key generation, custody and rotation are not decided here (ADR-0015, Deferred): the
    tool takes whatever key file it is given.
+
+   **Which key a build trusts (ADR-0027).** An agent embeds a trust set of `release`,
+   `content` and `recovery` public keys from `crates/updater/keys/*.pub`. Those files say
+   `unprovisioned` until the real keys are committed, so a build without the `test-key`
+   cargo feature verifies nothing: `apply-release` and `apply-content-manifest` refuse with
+   "no production signing key". The default (development and lab) build has the feature,
+   which embeds the public test key; it then refuses both commands unless you pass
+   `--allow-test-key`, because anyone who can serve the routes can sign for it. Packaged
+   builds (`packaging/linux`) turn the feature off (`--no-default-features`), and CI's
+   `tools/check-no-test-key.sh` fails if the test key reaches them. A lab that applies a
+   release or content with a package therefore needs its own build with the feature.
 3. Put the manifest and the files at the paths above.
 4. `POST /api/release` (session-authenticated) with
    `{ "ring", "releaseVersion", "manifestUrl", "manifestSha256" }`. The server refuses
