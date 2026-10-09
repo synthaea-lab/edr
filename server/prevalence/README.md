@@ -52,5 +52,6 @@ doesn't exist), so prevalence cannot be rebuilt from history if the counting rul
 change. The triage counts include the event that raised the detection, so "seen on 1
 host" means only this host has shown it.
 
-Open, and waiting on a decision: the correlator evidence, the ML rarity feature and
-opt-in global statistics. ADR-0020 (proposed) lays out the options.
+Decided (ADR-0020, accepted): the correlator evidence and the ML rarity feature, both fed
+from a pushed common-set snapshot. Not decided: opt-in global statistics (decision 3 of
+ADR-0020 is left open).
