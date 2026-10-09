@@ -28,7 +28,7 @@ function positiveInt(name: string, fallback: number): number {
  */
 export async function GET(req: NextRequest) {
   try {
-    const denied = verifyCronRequest(req);
+    const denied = await verifyCronRequest(req);
     if (denied) return denied;
 
     const retentionDays = positiveInt("PREVALENCE_RETENTION_DAYS", DEFAULT_RETENTION_DAYS);
