@@ -20,6 +20,10 @@ filesystem permission enforcement. On Unix, tighten the quarantine directory to
 created by an older version. Reject a symlink used as the quarantine directory.
 New sidecars record the original Unix mode and restore it when an analyst restores the
 payload. The earlier path-only sidecar format remains readable and restores as `0400`.
+The new sidecar format is not backward-readable: an older agent expects the sidecar to
+contain only a UTF-8 path and cannot list or restore entries written by this version.
+Before rolling back to an older agent, restore quarantined files while this version is
+available, or retain this version to perform recovery.
 Before enabling Windows quarantine, implement and test an ACL that limits access to
 the service identity and administrators.
 
