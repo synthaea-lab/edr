@@ -22,6 +22,25 @@ The restore action leaves the payload non-executable; an analyst must explicitly
 change its mode before running it. Before enabling Windows quarantine, implement
 and test an ACL that limits access to the service identity and administrators.
 
+Amended for #689: the same exception covers opening and moving the quarantine source by
+descriptor, on Unix only. The source is opened once with `O_NOFOLLOW`, checked with `fstat`,
+hashed from that descriptor and linked into the quarantine through `/proc/self/fd`
+(`linkat`, `AT_SYMLINK_FOLLOW`), or copied from the same descriptor, so the file that was
+checked is the file that is stored and no `chmod` can follow a swapped symlink. This needs
+the `libc` crate, a Unix-only dependency of `response`. An existing quarantine directory
+owned by another user is left alone when it is already `0700` (an administrator running
+`list` or `restore`) and refused when its mode would have to change. Limits: `O_NOFOLLOW`
+covers the last path component only, and the check of the source's name and its removal are
+not atomic. A source that is written to while it is processed is not refused, since a writer
+could then keep the quarantine from ever happening: it is copied from the descriptor into a
+private file, hashed as it is copied, and filed under that digest, so the stored bytes and
+their digest agree whatever the writer does. The copy stops at the length the file had when
+it started, so a writer that keeps appending cannot make it grow or run without end, and a
+partial snapshot left by an agent that was killed mid-copy is removed by the next one. A payload that is hard-linked shares its inode
+with the source, so a process that already holds it open for writing can still change the
+quarantined file (`restore` then reports a hash mismatch); containment holds, since the file
+is `0400` and no name is left at the source.
+
 ## Consequences
 
 The privileged response boundary owns the permissions it relies on, while the
