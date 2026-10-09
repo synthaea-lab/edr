@@ -53,7 +53,49 @@ the semi-frozen `schema`.
    Further limits of the list, from the review of #699:
    - **Same mount namespace only.** A process in a container or chroot reports a path in its
      own view, so its `/usr/bin/updatedb` would equal the host's; it is not resolved and
-     raises the hit (the agent's `/proc/<pid>/ns/mnt` is compared with the process's).
+     raises the hit. In the `/proc` fallback the agent's `/proc/<pid>/ns/mnt` is compared with
+     the process's; for the exec table, a container context on the event disqualifies it. A
+     chroot is not a mount namespace and is covered by neither. **The exec table is weaker
+     here than the `/proc` route.** A user who can create a user and mount namespace
+     (`unshare -Urm`, on by default on Fedora, restricted by default on Ubuntu 24.04) can
+     bind-mount their own binary over a listed one (`/usr/bin/updatedb`) and run it: the
+     kernel's `bprm->filename` is exactly that path, the event carries no container context,
+     and the process is allowed. It needs the operator to have listed that binary, and the
+     canaries to be visible from the namespace, so it is narrow, but it is a way past the
+     list. Closing it takes the mount namespace in the exec event (a sensor and schema
+     change), not a change here; until then do not rely on the list against a local user
+     who can create namespaces (`kernel.unprivileged_userns_clone`,
+     `user.max_user_namespaces=0`). Read from the code, not run.
+   - **The exec table is a record, not a witness.** `process_generation` is stamped at fork,
+     not at exec, so a process that execs an allowed binary and then execs something else
+     keeps its generation, and if that second `Exec` event is shed or arrives after the file
+     event the table still says "allowed". Where the agent can read `/proc/<pid>/exe` it
+     checks the table against it and a disagreement denies; where it cannot (no
+     `CAP_SYS_PTRACE` for another user's process) the table decides
+     alone and this gap is open. "No pid-reuse race" holds for a recycled pid, not for a
+     re-exec whose event was lost. A lookup refreshes the entry's recency, so a long-running
+     allowed process is not evicted by the execs of others; the eviction count is the map's.
+   - **A listed script is judged by its interpreter.** `/proc/<pid>/exe` of a `#!` script is
+     the interpreter, never the script, so the cross-check above accepts a difference when the
+     file the table names starts with `#!` and its interpreter is what `/proc` shows. An `env`
+     shebang (`#!/usr/bin/env python3`) names `env` while `/proc` shows the program it found,
+     so it cannot be told from the file: where `/proc` is readable the program it shows must be
+     in a trusted system location (a `PATH=/tmp/x:$PATH` interpreter is refused), and where
+     it is not the table decides alone, like any process whose `/proc` cannot be read. A
+     process that exec'd one script and then another with the same interpreter is not seen as
+     stale. The table is filled only when an executable may be allowed (a non-empty
+     `allow_exe`), and the string checks run before any `/proc` read. A name the table does
+     not match is not a refusal: that process takes the `/proc` route, which canonicalises
+     links (`/bin/x` under usrmerge). A process positively in another mount namespace (both
+     links readable and different) is denied whatever the table says; only "unreadable" lets
+     the table decide alone.
+   - **The container flag is read on the `Exec` event.** The container id comes from the
+     event's cgroup id, synchronously (`container_context`); only the image and name arrive
+     later, and they are not used here.
+   - **An entry's own path must be trusted too.** The name an exec is reported under is
+     matched as text, so a listed link outside a trusted location (a user-writable
+     `/tmp/tools/updatedb` pointing into `/usr`) is matched by its resolved path only, with a
+     warning at load.
    - **No shells or interpreters.** A name such as `bash`, `python3.x`, `perl`, `find` or
      `env` is rejected at load: allowing it would exempt every script it runs. The list is a
      guard against the obvious mistake, not a complete one.
@@ -63,12 +105,22 @@ the semi-frozen `schema`.
    - **"Trusted system location" is a heuristic** (`policy`): `/usr/` and `/opt/` qualify, and
      `/opt/<app>/` is often owned by the application's own user. Do not list a binary an
      unprivileged user can replace.
-   - **Another user's process needs ptrace access.** Reading `/proc/<pid>/exe` and `ns/mnt` of
-     a process of another user needs `CAP_SYS_PTRACE`, which the packaged unit does not grant
-     (see its capability notes). Without it nothing resolves for such a process, and a root
-     indexer such as `updatedb` still raises the hit.
-   - **Pid reuse** between the event and the `/proc` read, by an allowed process, is a very
-     narrow window that is not closed.
+   - **The image comes from the process's own `Exec` event when the agent saw it start**
+     (`image_path` as the sensor reports it, kept per pid with its `process_generation` in a
+     bounded table, 8192 pids). That needs no `/proc` read, so it needs no `CAP_SYS_PTRACE`
+     and has no pid-reuse race: an entry is used only when the pid's incarnation matches,
+     both stamped and equal. A process in a container (the event carries a container context)
+     is never allowed, and a relative exec never matches. An entry matches the image either
+     as the kernel resolves it or as the operator wrote it, because an exec through
+     `/usr/bin/updatedb` is reported under that name.
+   - **A process that predates the agent, or whose `Exec` was evicted or arrived after its
+     file event, falls back to `/proc/<pid>/exe`.** There the earlier limits hold: another
+     user's process needs `CAP_SYS_PTRACE`, which the packaged unit does not grant, so a root
+     indexer that was already running when the agent started is not recognised and still
+     raises the hit. A short-lived indexer started by cron after the agent is covered by the
+     table.
+   - **Pid reuse** in the `/proc` fallback, between the event and the read, by an allowed
+     process, is a very narrow window that is not closed.
 
 9. **The refresh policy: a deleted canary is planted again, and only that.** At each start,
    and every hour while the agent runs (a detached thread), a canary that is inventoried and
