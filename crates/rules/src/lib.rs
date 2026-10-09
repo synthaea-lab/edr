@@ -15,6 +15,7 @@ mod defender;
 mod exclusions;
 mod ld_trust;
 mod ldap;
+mod ntlm;
 mod session;
 mod sliding;
 mod state;
@@ -27,6 +28,8 @@ pub use defender::evaluate_defender_event;
 // LDAP search rules (#364): the single-search dispatcher; the burst rule is
 // `RuleState::on_ldap_search`.
 pub use ldap::evaluate_ldap_search;
+// NTLM rules (#364): Internet-bound authentication and weak versions.
+pub use ntlm::evaluate_ntlm_auth;
 use schema::detection::Severity;
 pub use state::RuleState;
 #[cfg(test)]
