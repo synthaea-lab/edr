@@ -179,10 +179,25 @@ export function extractGraphFacts(hostKey: string, event: unknown, at: Date): Gr
   return { nodes, edges };
 }
 
+/** Picks the fact that should win a merge tie: the later `at`, or — when two
+ * facts about the same node/edge key carry the same `at` (two detections
+ * sharing a timestamp; a Windows path that differs only by case sharing a
+ * key but not a label) — the one whose label sorts first. Order-independent
+ * either way, unlike "whichever came first in `parts`"; without this, two
+ * foldings of the same facts in a different order could disagree on which
+ * label a tied node keeps, breaking the very property `mergeGraphs` exists
+ * to guarantee.
+ */
+function wins<T extends { at: Date; label: string }>(candidate: T, incumbent: T): boolean {
+  if (candidate.at.getTime() !== incumbent.at.getTime()) return candidate.at > incumbent.at;
+  return candidate.label < incumbent.label;
+}
+
 /** Folds many per-host events into one deduplicated graph: for a repeated
- * node or edge, the fact with the latest `at` wins — deterministic
- * regardless of the order `parts` is given in, unlike picking whichever
- * happened to be seen last in that particular iteration. */
+ * node or edge, the fact with the latest `at` wins (ties broken by label,
+ * see [`wins`]) — deterministic regardless of the order `parts` is given
+ * in, unlike picking whichever happened to be seen last in that particular
+ * iteration. */
 export function mergeGraphs(parts: Graph[]): Graph {
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
@@ -190,11 +205,14 @@ export function mergeGraphs(parts: Graph[]): Graph {
     for (const node of part.nodes) {
       const id = nodeId(node);
       const seen = nodes.get(id);
-      if (!seen || node.at > seen.at) nodes.set(id, node);
+      if (!seen || wins(node, seen)) nodes.set(id, node);
     }
     for (const edge of part.edges) {
       const id = edgeId(edge);
       const seen = edges.get(id);
+      // Edges carry no label; a tie just keeps the incumbent, which is fine
+      // since an edge's fields are entirely determined by its id (kind +
+      // endpoints) — there is nothing left for a tie to disagree about.
       if (!seen || edge.at > seen.at) edges.set(id, edge);
     }
   }
@@ -211,21 +229,40 @@ export function caseSubgraph(detections: { agentId: string; event: unknown; time
 }
 
 /**
+ * The pivot kinds that actually name one entity. `transition` is excluded on
+ * purpose (see [`hashPivot`]'s doc) — a `PrevalenceKind`-typed `kind` the
+ * route hasn't checked yet does not satisfy this at compile time, so the
+ * route is forced to reject `transition` before it can reach `hashPivot`.
+ */
+export type PivotKind = Exclude<PrevalenceKind, "transition">;
+
+/**
  * "Everywhere this hash ran": one `file` node and one `host` node per agent
  * that showed it, from already-queried `PrevalenceSighting` rows for a single
  * `(kind, key)` — cheaper and wider than replaying `Detection` rows, since
  * prevalence counts every execution, not just the ones that fired a rule.
- * `kind` is widened beyond `sha256` to any prevalence kind the caller already
- * has sightings for (`image_path`, `domain`), rendered as a `file`/`network`
- * node respectively — same two node kinds `extractGraphFacts` uses for them.
+ * `kind` is widened beyond `sha256` to `image_path`/`domain`, rendered as a
+ * `file`/`network` node respectively — same two node kinds `extractGraphFacts`
+ * uses for them, and the **same key format**: a `sha256`/`image_path` subject
+ * is keyed `sha256:<hash>`/`path:<normalized path>`, not `${kind}:${key}` —
+ * otherwise a pivot's file node can never join the matching node in a case
+ * subgraph (`path` is what `extractGraphFacts`/`fileKey` actually key files
+ * by; `sha256:`/`path:` are the only two file-key shapes anywhere in this
+ * module). `transition` is excluded by [`PivotKind`]: its key is a
+ * `"parent -> child"` pair (`lib/prevalence.ts`), not one entity, so there is
+ * no single node it could legitimately become.
  */
 export function hashPivot(
-  kind: PrevalenceKind,
+  kind: PivotKind,
   key: string,
   sightings: { agentId: string; firstSeen: Date; lastSeen: Date; count: number }[]
 ): Graph {
   const subject: NodeRef =
-    kind === "domain" ? { kind: "network", key: `dns:${key}` } : { kind: "file", key: `${kind}:${key}` };
+    kind === "domain"
+      ? { kind: "network", key: `dns:${key}` }
+      : kind === "image_path"
+        ? { kind: "file", key: `path:${key}` }
+        : { kind: "file", key: `sha256:${key}` };
   const latest = sightings.reduce((max, s) => (s.lastSeen > max ? s.lastSeen : max), sightings[0]?.lastSeen ?? new Date(0));
   const nodes: GraphNode[] = [{ ...subject, label: key, attrs: { kind }, at: latest }];
   const edges: GraphEdge[] = [];

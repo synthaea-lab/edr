@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { caseSubgraph, extractGraphFacts, hashPivot, mergeGraphs, nodeId, sortGraph } from "@/lib/graph";
+import {
+  caseSubgraph,
+  extractGraphFacts,
+  type GraphNode,
+  hashPivot,
+  mergeGraphs,
+  nodeId,
+  sortGraph,
+} from "@/lib/graph";
 
 const SHA = "a".repeat(64);
 const T0 = new Date("2026-10-09T10:00:00Z");
@@ -125,6 +133,23 @@ describe("mergeGraphs", () => {
     expect(merged.edges.filter((e) => e.kind === "ran_on")).toHaveLength(1);
     expect(merged.edges.find((e) => e.kind === "ran_on")?.at).toEqual(T1);
   });
+
+  it("breaks a tie between two facts sharing the same `at` deterministically, not by order", () => {
+    // Same node key (a Windows path differing only by case — one key, per
+    // `normalizePath`), same timestamp, different label: nothing about *when*
+    // these were observed picks a winner, so without a tie-break the result
+    // would depend on which fact `parts` happens to list first.
+    const node = (label: string): GraphNode => ({
+      kind: "file",
+      key: "path:c:\\windows\\system32\\cmd.exe",
+      label,
+      attrs: {},
+      at: T0,
+    });
+    const forward = mergeGraphs([{ nodes: [node("C:\\Windows\\System32\\CMD.EXE")], edges: [] }, { nodes: [node("c:\\windows\\system32\\cmd.exe")], edges: [] }]);
+    const reversed = mergeGraphs([{ nodes: [node("c:\\windows\\system32\\cmd.exe")], edges: [] }, { nodes: [node("C:\\Windows\\System32\\CMD.EXE")], edges: [] }]);
+    expect(forward).toEqual(reversed);
+  });
 });
 
 describe("caseSubgraph and hashPivot are rebuildable", () => {
@@ -167,5 +192,27 @@ describe("caseSubgraph and hashPivot are rebuildable", () => {
   it("hashPivot renders a domain pivot as a network node, not a file node", () => {
     const graph = hashPivot("domain", "example.com", [{ agentId: "host-1", firstSeen: T0, lastSeen: T0, count: 1 }]);
     expect(graph.nodes.find((n) => n.label === "example.com")?.kind).toBe("network");
+  });
+
+  it("keys an image_path pivot's subject exactly as extractGraphFacts keys the same file by path", () => {
+    // SherlockOmss's review of the PR this came from: `hashPivot` used to key
+    // an `image_path` subject as `file:image_path:<path>`, which never
+    // matches the `path:<path>` key a case subgraph gives the same file —
+    // the two could never be the same node in a console that overlays them.
+    const path = "/usr/bin/curl";
+    const pivot = hashPivot("image_path", path, [{ agentId: "host-1", firstSeen: T0, lastSeen: T0, count: 1 }]);
+    const subject = pivot.nodes.find((n) => n.kind === "file");
+    const caseNode = extractGraphFacts("host-1", exec({ sha256: undefined, image_path: path }), T0).nodes.find(
+      (n) => n.kind === "file"
+    );
+    expect(subject?.key).toBe(caseNode?.key);
+  });
+
+  it("hashPivot's type rejects `transition`, which pairs two entities, not one", () => {
+    const sightings = [{ agentId: "host-1", firstSeen: T0, lastSeen: T0, count: 1 }];
+    // @ts-expect-error — `PivotKind` excludes "transition" on purpose; this
+    // line exists to prove the exclusion actually compiles away, not to
+    // exercise runtime behavior.
+    hashPivot("transition", "a -> b", sightings);
   });
 });

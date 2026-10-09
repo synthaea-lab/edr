@@ -26,7 +26,18 @@ already read for another reason:
   `extractGraphFacts`, one event type at a time — `exec`, `file_open`, `connect`,
   `dns_query`, `session` today) into deduplicated nodes and edges.
 - `hashPivot` turns the `PrevalenceSighting` rows for one `(kind, key)` into a
-  subject node and one host node per agent that showed it.
+  subject node and one host node per agent that showed it. Its `kind` is
+  `PivotKind` (`sha256`/`image_path`/`domain`), not the full `PrevalenceKind` —
+  `transition` pairs two entities (`"parent -> child"`), not one, so there is
+  no single node it could become; `GET /api/graph/pivot` rejects it with 400
+  before `hashPivot` is ever reached. A `sha256`/`image_path` subject is keyed
+  exactly as `extractGraphFacts` keys the same file (`sha256:<hash>` /
+  `path:<normalized path>`) so a pivot's node and a case subgraph's node for
+  the same file are the same node, joinable by a console that overlays both.
+  The sightings list itself is capped at `MAX_PIVOT_HOSTS`; the pivot route's
+  response carries `truncated: true` when a key's real host count exceeded it,
+  rather than silently handing back a partial list a console would read as
+  the whole fleet.
 
 **Why no raw-telemetry projection yet:** `server/datalake` (issue #77), the full
 event stream's actual store, does not exist. `POST /api/ingest/events` already

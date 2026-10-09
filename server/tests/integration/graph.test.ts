@@ -104,6 +104,7 @@ describe("GET /api/graph/pivot", () => {
     expect(body.nodes).toHaveLength(3); // 1 file + a1 + a2, never a3 (other tenant)
     const hostKeys = body.nodes.filter((n: { kind: string }) => n.kind === "host").map((n: { key: string }) => n.key);
     expect(hostKeys.sort()).toEqual([a1.id, a2.id].sort());
+    expect(body.truncated).toBe(false);
   });
 
   it("an unseen key returns an empty graph, not a 404", async () => {
@@ -113,7 +114,7 @@ describe("GET /api/graph/pivot", () => {
     });
     const res = await getPivot(req);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ nodes: [], edges: [] });
+    expect(await res.json()).toEqual({ nodes: [], edges: [], truncated: false });
   });
 
   it("rejects an invalid kind", async () => {
@@ -122,5 +123,31 @@ describe("GET /api/graph/pivot", () => {
       headers: createTenantHeaders(tenant.id),
     });
     expect((await getPivot(req)).status).toBe(400);
+  });
+
+  it("rejects `transition`, which pairs two entities rather than naming one", async () => {
+    const tenant = await createTestTenant();
+    const req = new NextRequest(
+      "http://localhost/api/graph/pivot?kind=transition&key=/bin/bash%20->%20/bin/sh",
+      { headers: createTenantHeaders(tenant.id) }
+    );
+    expect((await getPivot(req)).status).toBe(400);
+  });
+
+  it("a pivot on an image path joins the same file node a case subgraph would give it", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const now = new Date();
+    const path = "/usr/bin/curl";
+    await prisma.prevalenceSighting.create({
+      data: { tenantId: tenant.id, agentId: agent.id, kind: "image_path", key: path, firstSeen: now, lastSeen: now, count: 1 },
+    });
+
+    const req = new NextRequest(`http://localhost/api/graph/pivot?kind=image_path&key=${encodeURIComponent(path)}`, {
+      headers: createTenantHeaders(tenant.id),
+    });
+    const body = await (await getPivot(req)).json();
+    const subject = body.nodes.find((n: { kind: string }) => n.kind === "file");
+    expect(subject?.key).toBe(`path:${path}`);
   });
 });
