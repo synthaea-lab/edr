@@ -1,6 +1,10 @@
 # Synthaea Server - Next.js Control Plane
 FROM node:20-alpine AS base
 
+# Prisma's query engine links against OpenSSL, which node:20-alpine does not ship; without
+# it `prisma generate` guesses libssl 1.1 and the engine fails to load (#743).
+RUN apk add --no-cache openssl
+
 # Install dependencies only when needed
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
