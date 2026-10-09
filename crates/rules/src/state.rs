@@ -35,6 +35,7 @@ use crate::{
     },
     has_write_intent,
     session::SessionHijack,
+    signature_gate::SignatureGatedAlert,
     sliding::{FlowPortDedup, SlidingCounter, SlidingDistinct, SlidingSum},
 };
 
@@ -501,7 +502,12 @@ impl RuleState {
     /// (`powershell -File x.ps1`, `sh x.sh`) has the interpreter as its image
     /// path and does not join; T1105's comm-based match has the same shape of
     /// limit on Linux.
-    fn check_quarantined_exec(&mut self, event: &ExecEvent) -> Option<Alert> {
+    ///
+    /// Gated on the image's signature (#441): every installer a user downloads
+    /// and runs matches the join, and almost all of them are signed. The
+    /// signature is only known after enrichment, off the capture thread, so this
+    /// returns a [`SignatureGatedAlert`] (see [`Self::on_exec_signature_gated`]).
+    fn check_quarantined_exec(&mut self, event: &ExecEvent) -> Option<SignatureGatedAlert> {
         let now = event.meta.timestamp_ns;
         let mark = self
             .recent_quarantines
@@ -511,7 +517,7 @@ impl RuleState {
             return None;
         }
         mark.alerted = true;
-        Some(Alert {
+        Some(SignatureGatedAlert::new(Alert {
             technique: "T1204.002",
             severity: Severity::High,
             message: format!(
@@ -523,7 +529,7 @@ impl RuleState {
                 mark.origin_url.as_deref().unwrap_or("unrecorded"),
                 mark.agent.as_deref().unwrap_or("unknown"),
             ),
-        })
+        }))
     }
 
     // ── Windows rules ────────────────────────────────────────────────────────
@@ -865,7 +871,6 @@ impl RuleState {
         let mut alerts = Vec::new();
         alerts.extend(self.check_web_server_spawns_shell(event));
         alerts.extend(self.check_download_then_exec(event));
-        alerts.extend(self.check_quarantined_exec(event));
         alerts.extend(self.check_exec_after_motw_removal(event));
         alerts.extend(self.check_self_spawn(event));
         alerts.extend(self.check_parent_suspect(event));
@@ -886,6 +891,15 @@ impl RuleState {
             PidFact::new(generation, event.image_path.clone()),
         );
         alerts
+    }
+
+    /// The exec findings that wait for the image's signature (#441): today
+    /// T1204.002, a downloaded file run within the mark window. To be called
+    /// for every `ExecEvent`, beside [`Self::on_exec`]. The
+    /// caller resolves each with the enrichment's verdict, or calls
+    /// [`SignatureGatedAlert::unverified`] when it cannot wait for one.
+    pub fn on_exec_signature_gated(&mut self, event: &ExecEvent) -> Option<SignatureGatedAlert> {
+        self.check_quarantined_exec(event)
     }
 
     /// To be called for every `ConnectEvent` in the stream (mainly Windows ETW).
