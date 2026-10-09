@@ -9,7 +9,9 @@
 # systemd), `xargs`, `timeout`, `env`, `setsid`, `nohup`, python and perl scripts that spawn
 # children, a web client and server, and a few user-installed binaries under a user-writable
 # directory acting as parents (a real admin's or developer's tools: benign, and the very
-# thing that makes "parent in /tmp" a feature a model must not read as proof of an attack).
+# thing that makes "parent in /tmp" a feature a model must not read as proof of an attack;
+# NOTE: the Linux sensor reports no parent_image_path today, so on Linux this only adds
+# command-line and context variety, not a parent-path lineage).
 #
 # It does nothing destructive: it reads, lists, archives and deletes only its own files under
 # a private work directory, and talks to a server it starts itself on 127.0.0.1.

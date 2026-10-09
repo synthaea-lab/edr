@@ -11,6 +11,11 @@ vector without the parents, at the same false-positive budget. That can only be 
   (`test_a_lineage_the_benign_capture_never_varied_is_invisible_to_the_model`);
 - it must come from a real kernel with pids, process generations and parents, not WSL2 (every
   event there has `ppid=0`);
+- **the Linux sensor does not report `parent_image_path`** (first real capture, 2026-10-09: none
+  of 22,022 exec events carries it), so `parent_path_is_system` and `parent_path_is_suspicious`
+  are constant 0 on Linux and the user-installed-binary parents of `benign-workload.sh` do not
+  register as a lineage at all. What varies is `parent_comm`: a shell or not, and a web server
+  or an office name. Check the lineage patterns of the capture before reading any gain;
 - the malicious part is the repository's own lab scenarios: benign by construction, mostly
   started from a shell. A lineage gain can only show on a scenario whose parent is odd
   (`lineage.sh`). **Say that when reporting a number.**
@@ -90,5 +95,7 @@ All commands run on the VM as root unless noted; the agent is built from `main`
 - The report goes next to the model; `model_record.json` has no field for it yet, so "recorded
   in `model_record.json`" (box 1 of #617) needs a registry-schema change of its own, or the box
   is reworded to name this file.
+- The timing of a capture this size: the benign half is about 1 million events for 28 minutes
+  (260 MB) and builds in about 15 seconds; `train_behavior` takes about 2 minutes on it.
 - Not covered by one run: other hosts, a longer benign period, attacks that are not these
   scenarios, the packaged unit, and the agent loading the scorer (`sink.rs` loads T2 only).

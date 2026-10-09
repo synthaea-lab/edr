@@ -211,18 +211,30 @@ def _process_edges(path: Path) -> dict[tuple[int, int | None], tuple[int, int | 
     return edges
 
 
+# The runner records its start time once it is running, so its own exec precedes the window:
+# the root may have been first seen this long before `start_ns`.
+ROOT_LEAD_NS = 30 * 1_000_000_000
+
+
 def descendants_of(
-    path: Path, root_pid: int, start_ns: int, end_ns: int
+    path: Path,
+    root_pid: int,
+    start_ns: int,
+    end_ns: int,
+    root_lead_ns: int = ROOT_LEAD_NS,
 ) -> set[tuple[int, int | None]]:
     """The `(pid, generation)` of `root_pid`'s process tree seen inside `[start_ns, end_ns]`.
 
-    The root is the incarnation of `root_pid` first seen inside the window (a pid recycled
-    before or after it is another process); a descendant is a process first seen inside the
-    window whose parent incarnation is already in the set.
+    The root is the incarnation of `root_pid` first seen in `[start_ns - root_lead_ns, end_ns]`
+    (the runner's exec precedes the start time it records; an earlier life of a recycled pid is
+    another process); a descendant is a process first seen inside the window whose parent
+    incarnation is already in the set.
     """
     edges = _process_edges(path)
     members: set[tuple[int, int | None]] = {
-        key for key, (_, _, ts) in edges.items() if key[0] == root_pid and start_ns <= ts <= end_ns
+        key
+        for key, (_, _, ts) in edges.items()
+        if key[0] == root_pid and start_ns - root_lead_ns <= ts <= end_ns
     }
     changed = True
     while changed:

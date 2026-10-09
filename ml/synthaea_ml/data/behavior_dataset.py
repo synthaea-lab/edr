@@ -64,6 +64,14 @@ def records_from_events(
     for event in events:
         incarnations.setdefault((event["pid"], event.get("process_generation")), []).append(event)
 
+    # The correlation features of a process only read that pid's events (`events_for_pid`), so
+    # the window is taken from the pid's own events instead of scanning the whole capture for
+    # every incarnation: a real capture has a million events and thousands of incarnations,
+    # which the full scan made quadratic (hours on a 30-minute capture).
+    by_pid: dict[int, list[dict[str, Any]]] = {}
+    for event in events:
+        by_pid.setdefault(event["pid"], []).append(event)
+
     records: list[dict[str, Any]] = []
     for (pid, generation), own in sorted(
         incarnations.items(), key=lambda kv: (kv[0][0], kv[0][1] is None, kv[0][1] or 0)
@@ -73,7 +81,7 @@ def records_from_events(
             continue
         last_ts = max(e["ts_ns"] for e in own)
         cutoff = last_ts - window_ns
-        window = [e for e in events if e["ts_ns"] >= cutoff]
+        window = [e for e in by_pid[pid] if e["ts_ns"] >= cutoff]
         features = correlation.extract_features(window, pid, generation)
         if features[-1] < min_events:  # event_count is the last correlation feature
             continue

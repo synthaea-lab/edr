@@ -162,14 +162,27 @@ def test_the_scenarios_tree_includes_a_child_that_never_exec_d_but_not_a_bystand
 def test_a_recycled_pid_outside_the_window_is_not_the_runner(tmp_path: Path) -> None:
     events = [
         _event("exec", 100, 1, 1 * S, 1, 0, argv=["old"]),  # the pid's earlier life
-        _event("exec", 100, 1, 30 * S, 9, 0, argv=["runner"]),
-        _event("exec", 150, 100, 31 * S, 10, 9, argv=["child"]),
-        _event("exec", 160, 100, 99 * S, 11, 1, argv=["child-of-the-old-life"]),
+        _event("exec", 100, 1, 130 * S, 9, 0, argv=["runner"]),
+        _event("exec", 150, 100, 131 * S, 10, 9, argv=["child"]),
+        _event("exec", 160, 100, 199 * S, 11, 1, argv=["child-of-the-old-life"]),
     ]
-    members = gain.descendants_of(_capture(tmp_path, events), 100, 25 * S, 40 * S)
+    members = gain.descendants_of(_capture(tmp_path, events), 100, 125 * S, 140 * S)
     assert (100, 1) not in members
     assert (150, 10) in members
     assert (160, 11) not in members
+
+
+def test_the_runners_own_exec_just_before_the_window_still_makes_it_the_root(
+    tmp_path: Path,
+) -> None:
+    """The runner records its start time once it runs: found on the first real capture, where
+    the selection returned nothing because the root had been exec'd 2 seconds earlier."""
+    events = [
+        _event("exec", 100, 1, 8 * S, 1, 0, argv=["runner"]),
+        _event("exec", 150, 100, 11 * S, 2, 1, argv=["child"]),
+    ]
+    members = gain.descendants_of(_capture(tmp_path, events), 100, 10 * S, 20 * S)
+    assert members == {(100, 1), (150, 2)}
 
 
 def test_the_malicious_matrix_leaves_the_runner_itself_out(tmp_path: Path) -> None:

@@ -75,7 +75,9 @@ def _capture(n: int = 40) -> list[dict]:
     return events
 
 
-def _write_dataset(root: Path, events: list[dict], name: str = "linux__dev__abc__2026-10-02") -> Path:
+def _write_dataset(
+    root: Path, events: list[dict], name: str = "linux__dev__abc__2026-10-02"
+) -> Path:
     d = root / name
     d.mkdir(parents=True)
     (d / BEHAVIOR_CAPTURE_FILENAME).write_text(
@@ -129,6 +131,58 @@ def test_a_recycled_pid_yields_two_records_and_the_first_life_does_not_leak(
     assert first["parent_comm"] == "nginx" and second["parent_comm"] == "bash"
     assert first["correlation_features"][1] == 1.0
     assert second["correlation_features"][1] == 0.0, "the old life's connect must not leak"
+
+
+def test_the_per_pid_window_gives_the_same_records_as_scanning_the_whole_capture() -> None:
+    """The builder takes each window from the pid's own events (a million-event capture made
+    the full scan quadratic); this is the full scan, kept here as the reference."""
+    import random
+
+    from synthaea_ml.features import correlation
+
+    def reference(events: list[dict], window_ns: int) -> list[dict]:
+        incarnations: dict[tuple[int, int | None], list[dict]] = {}
+        for e in events:
+            incarnations.setdefault((e["pid"], e.get("process_generation")), []).append(e)
+        out = []
+        for (pid, generation), own in sorted(
+            incarnations.items(), key=lambda kv: (kv[0][0], kv[0][1] is None, kv[0][1] or 0)
+        ):
+            execs = [e for e in own if e["type"] == "exec"]
+            if not execs:
+                continue
+            cutoff = max(e["ts_ns"] for e in own) - window_ns
+            window = [e for e in events if e["ts_ns"] >= cutoff]
+            features = correlation.extract_features(window, pid, generation)
+            if features[-1] < 1:
+                continue
+            exec_event = max(execs, key=lambda e: e["ts_ns"])
+            record = {k: v for k, v in exec_event.items() if k not in ("type", "ts_ns")}
+            record["correlation_features"] = features
+            out.append(record)
+        return out
+
+    rng = random.Random(7)
+    events: list[dict] = []
+    for i in range(300):
+        pid = rng.choice([10, 11, 12, 13, 14])  # few pids: recycling and interleaving
+        generation = rng.choice([None, 1, 2, 3])  # unstamped and stamped incarnations mixed
+        ts = i * 7 * S + rng.randrange(S)
+        kind = rng.choice(["exec", "connect", "fileopen", "exec"])
+        event = {"type": kind, "pid": pid, "ts_ns": ts}
+        if generation is not None:
+            event["process_generation"] = generation
+        if kind == "exec":
+            event.update(argv=[f"/usr/bin/t{i % 9}"], parent_comm="bash")
+        elif kind == "connect":
+            event.update(daddr_v4=["10.0.0.1"], dport=443 + i % 4)
+        else:
+            event.update(flags=1)
+        events.append(event)
+    events.sort(key=lambda e: e["ts_ns"])
+
+    for window_ns in (5 * S, 60 * S, 10_000 * S):
+        assert records_from_events(events, window_ns) == reference(events, window_ns)
 
 
 def test_a_process_with_no_exec_yields_no_record() -> None:
