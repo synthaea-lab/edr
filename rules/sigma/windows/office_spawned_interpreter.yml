@@ -1,0 +1,29 @@
+title: Office document spawned a command interpreter
+description: >
+  Detects Word, Excel, PowerPoint, or Acrobat directly starting a command interpreter.
+  This is a user-execution behavior signal (T1204), not proof of malicious attachment
+  provenance or a macro by itself.
+tags:
+  - attack.execution
+  - attack.t1204
+  - attack.t1059.001
+  - synthaea.coverage.initial_access_user_execution
+level: medium
+falsepositives:
+  - Office add-ins, document automation, and developer test harnesses can launch
+    interpreters, though this is uncommon on ordinary workstations.
+detection:
+  selection:
+    ParentImage|endswith:
+      - '\winword.exe'
+      - '\excel.exe'
+      - '\powerpnt.exe'
+      - '\acrord32.exe'
+      - '\acrobat.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection
