@@ -169,6 +169,31 @@ export async function getPrevalence(
   };
 }
 
+/** Row cap for one `(kind, key)` pivot — a hash that somehow showed up on every
+ * host of a huge fleet still returns a bounded, renderable list. */
+export const MAX_PIVOT_HOSTS = 500;
+
+/**
+ * Every host (agent) that showed `(kind, key)`, for the "everywhere this ran"
+ * pivot (`lib/graph.ts`'s `hashPivot`) — one row per agent, unlike
+ * `getPrevalence`'s fleet-wide aggregate. `null` if the tenant never saw it,
+ * same convention as `getPrevalence`.
+ */
+export async function getSightingsOf(
+  db: Pick<PrismaClient, "prevalenceSighting">,
+  tenantId: string,
+  kind: PrevalenceKind,
+  key: string
+): Promise<{ agentId: string; firstSeen: Date; lastSeen: Date; count: number }[] | null> {
+  const rows = await db.prevalenceSighting.findMany({
+    where: { tenantId, kind, key },
+    select: { agentId: true, firstSeen: true, lastSeen: true, count: true },
+    orderBy: { lastSeen: "desc" },
+    take: MAX_PIVOT_HOSTS,
+  });
+  return rows.length === 0 ? null : rows;
+}
+
 /** Stable map key for one `(kind, key)`. */
 export function prevalenceKey(kind: PrevalenceKind, key: string): string {
   return `${kind}\u0000${key}`;
