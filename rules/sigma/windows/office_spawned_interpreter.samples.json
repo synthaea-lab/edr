@@ -1,0 +1,13 @@
+{
+  "matching": {
+    "parentimage": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -NoProfile"
+  },
+  "non_matching": {
+    "parentimage": "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+    "image": "C:\\Windows\\System32\\splwow64.exe",
+    "cmdline": "splwow64.exe 1234",
+    "note": "Office starting its own print helper, not an interpreter: the child is the condition"
+  }
+}

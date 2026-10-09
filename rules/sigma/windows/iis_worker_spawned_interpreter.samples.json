@@ -1,0 +1,13 @@
+{
+  "matching": {
+    "parentimage": "C:\\Windows\\System32\\inetsrv\\w3wp.exe",
+    "image": "C:\\Windows\\System32\\cmd.exe",
+    "cmdline": "cmd.exe /c whoami"
+  },
+  "non_matching": {
+    "parentimage": "C:\\Windows\\System32\\services.exe",
+    "image": "C:\\Windows\\System32\\cmd.exe",
+    "cmdline": "cmd.exe /c ipconfig",
+    "note": "a service host starting cmd.exe is not a worker process: the parent is the condition"
+  }
+}

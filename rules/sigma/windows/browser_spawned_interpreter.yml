@@ -1,0 +1,28 @@
+title: Browser spawned a command interpreter
+description: >
+  Detects a browser process directly spawning a command interpreter. This is a
+  process-lineage signal for possible drive-by compromise (T1189); it does not prove
+  that a downloaded file was executed because this Sigma subset has no provenance join.
+tags:
+  - attack.initial_access
+  - attack.t1189
+  - attack.execution
+  - attack.t1059.001
+  - synthaea.coverage.initial_access_user_execution
+level: medium
+falsepositives:
+  - Browser automation, native messaging hosts, and developer test harnesses can launch
+    command interpreters from a browser process.
+detection:
+  selection:
+    ParentImage|endswith:
+      - '\chrome.exe'
+      - '\msedge.exe'
+      - '\firefox.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection
