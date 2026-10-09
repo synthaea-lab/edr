@@ -18,9 +18,10 @@ Permit a narrow platform-specific exception in `response::quarantine` for
 filesystem permission enforcement. On Unix, tighten the quarantine directory to
 `0700`, payloads to `0400`, and origin sidecars to `0600`, including directories
 created by an older version. Reject a symlink used as the quarantine directory.
-The restore action leaves the payload non-executable; an analyst must explicitly
-change its mode before running it. Before enabling Windows quarantine, implement
-and test an ACL that limits access to the service identity and administrators.
+New sidecars record the original Unix mode and restore it when an analyst restores the
+payload. The earlier path-only sidecar format remains readable and restores as `0400`.
+Before enabling Windows quarantine, implement and test an ACL that limits access to
+the service identity and administrators.
 
 Amended for #689: the same exception covers opening and moving the quarantine source by
 descriptor, on Unix only. The source is opened once with `O_NOFOLLOW`, checked with `fstat`,
