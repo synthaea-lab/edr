@@ -71,7 +71,7 @@ the semi-frozen `schema`.
      keeps its generation, and if that second `Exec` event is shed or arrives after the file
      event the table still says "allowed". Where the agent can read `/proc/<pid>/exe` it
      checks the table against it and a disagreement denies; where it cannot (no
-     `CAP_SYS_PTRACE` for another user's process, another mount namespace) the table decides
+     `CAP_SYS_PTRACE` for another user's process) the table decides
      alone and this gap is open. "No pid-reuse race" holds for a recycled pid, not for a
      re-exec whose event was lost. A lookup refreshes the entry's recency, so a long-running
      allowed process is not evicted by the execs of others; the eviction count is the map's.
@@ -79,11 +79,16 @@ the semi-frozen `schema`.
      the interpreter, never the script, so the cross-check above accepts a difference when the
      file the table names starts with `#!` and its interpreter is what `/proc` shows. An `env`
      shebang (`#!/usr/bin/env python3`) names `env` while `/proc` shows the program it found,
-     so it cannot be told from the file and `/proc` does not contradict the table: such a
-     script is decided by the table alone, like any process whose `/proc` cannot be read. A
+     so it cannot be told from the file: where `/proc` is readable the program it shows must be
+     in a trusted system location (a `PATH=/tmp/x:$PATH` interpreter is refused), and where
+     it is not the table decides alone, like any process whose `/proc` cannot be read. A
      process that exec'd one script and then another with the same interpreter is not seen as
      stale. The table is filled only when an executable may be allowed (a non-empty
-     `allow_exe`), and the string checks run before any `/proc` read.
+     `allow_exe`), and the string checks run before any `/proc` read. A name the table does
+     not match is not a refusal: that process takes the `/proc` route, which canonicalises
+     links (`/bin/x` under usrmerge). A process positively in another mount namespace (both
+     links readable and different) is denied whatever the table says; only "unreadable" lets
+     the table decide alone.
    - **The container flag is read on the `Exec` event.** The container id comes from the
      event's cgroup id, synchronously (`container_context`); only the image and name arrive
      later, and they are not used here.

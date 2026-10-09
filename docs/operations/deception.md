@@ -81,13 +81,19 @@ is on the list and the process is in the agent's mount namespace. Never the proc
 - The exec table is only as fresh as the events the agent received: a process that execs an
   allowed binary and then something else, with that second event lost, is still recognised as the
   first where the agent cannot read `/proc/<pid>/exe`. Where it can, a disagreement denies.
-- A listed script (`#!`) is checked against `/proc` by its interpreter; an `env` shebang cannot be, so
-  the table alone decides it.
+- A listed script (`#!`) is checked against `/proc` by its interpreter. An `env` shebang
+  (`#!/usr/bin/env python3`) names `env`, so the interpreter cannot be read from the file: where
+  `/proc` is readable the program it shows must sit in a trusted system location, otherwise the
+  table alone decides (like any process whose `/proc` cannot be read).
 - An entry whose own path is outside a trusted location (a link in `/tmp` to `/usr/bin/x`) is
   matched by its resolved path only; the agent warns at start.
-- The exec route cannot see a mount namespace: a local user who can create user and mount
+- The exec event does not carry a mount namespace. Where the agent can read the process's
+  namespace link and it differs from its own, the process is not allowed. Where it cannot (no
+  `CAP_SYS_PTRACE` for another user's process), a local user who can create user and mount
   namespaces can bind-mount their own binary over a listed one and be recognised as it.
-  Where that matters, disable unprivileged user namespaces (`user.max_user_namespaces=0`); it
-  is a limit of the exec route, not of the `/proc` one (ADR-0029).
+  Where that matters, disable unprivileged user namespaces (`user.max_user_namespaces=0`)
+  (ADR-0029).
+- An exec reported under a name the list does not hold (`/bin/updatedb` under usrmerge, a
+  `PATH` lookup) is not refused by the table: `/proc` canonicalises it and decides, as before.
 - A process in a container, a relative exec, a replaced binary (`... (deleted)`, `/proc` route)
   and a process that cannot be resolved are not allowed: the detection is raised.
