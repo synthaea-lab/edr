@@ -169,6 +169,42 @@ export async function getPrevalence(
   };
 }
 
+/** Row cap for one `(kind, key)` pivot — a hash that somehow showed up on every
+ * host of a huge fleet still returns a bounded, renderable list. */
+export const MAX_PIVOT_HOSTS = 500;
+
+/** One pivot's sightings, capped at [`MAX_PIVOT_HOSTS`]; `truncated` says when
+ * there were more, same shape as `damage-manifest.ts`'s `DamageManifest`. */
+export type SightingsPage = {
+  sightings: { agentId: string; firstSeen: Date; lastSeen: Date; count: number }[];
+  truncated: boolean;
+};
+
+/**
+ * Every host (agent) that showed `(kind, key)`, for the "everywhere this ran"
+ * pivot (`lib/graph.ts`'s `hashPivot`) — one row per agent, unlike
+ * `getPrevalence`'s fleet-wide aggregate. `null` if the tenant never saw it,
+ * same convention as `getPrevalence`. `take`s one row past the cap (rather
+ * than exactly the cap) so hitting it is a fact the caller can report, not a
+ * silent cut a console would read as the whole fleet.
+ */
+export async function getSightingsOf(
+  db: Pick<PrismaClient, "prevalenceSighting">,
+  tenantId: string,
+  kind: PrevalenceKind,
+  key: string
+): Promise<SightingsPage | null> {
+  const rows = await db.prevalenceSighting.findMany({
+    where: { tenantId, kind, key },
+    select: { agentId: true, firstSeen: true, lastSeen: true, count: true },
+    orderBy: { lastSeen: "desc" },
+    take: MAX_PIVOT_HOSTS + 1,
+  });
+  if (rows.length === 0) return null;
+  const truncated = rows.length > MAX_PIVOT_HOSTS;
+  return { sightings: truncated ? rows.slice(0, MAX_PIVOT_HOSTS) : rows, truncated };
+}
+
 /** Stable map key for one `(kind, key)`. */
 export function prevalenceKey(kind: PrevalenceKind, key: string): string {
   return `${kind}\u0000${key}`;
