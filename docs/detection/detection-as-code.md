@@ -21,9 +21,11 @@ Most of the pipeline already exists — this documents the contract and names th
   (`crates/yara`, `extract_metadata`).
 - **Per-rule matching and negative samples (#73)**: every shipped rule has exactly one
   crafted event that must fire it and one benign lookalike that must not
-  (`crates/sigma/tests/content.rs`, `crates/yara/tests/content.rs`). The suites assert the
-  sample titles equal the loaded rule titles, so a rule added, renamed or removed without
-  its samples fails CI.
+  (`crates/sigma/tests/content.rs`, `crates/yara/tests/content.rs`). For Sigma the samples
+  are `<rule>.samples.json` beside the rule (ADR-0031) and the suite asserts every rule has
+  its file and every file its rule; the YARA suite still asserts that sample titles equal
+  the loaded rule titles. Either way a rule added, renamed or removed without its samples
+  fails CI.
 
 ## Still to build
 - **Ring deployment**: content ships via canary rings (`updater`/policy), with per-ring
@@ -39,14 +41,15 @@ Derived from what CI enforces today, so the hunt side can be built to it:
 1. **A rule file that loads**: Sigma limited to the supported subset (an unsupported
    construct is a hard load error naming it), the metadata above, in the right platform
    directory. A draft that fails this fails with the file and the missing field named.
-2. **A matching sample and a negative sample for it.** Today these are Rust test data
-   keyed by rule title, *not* files beside the rule, so a rule file alone cannot pass the
-   suites: it fails with "sample titles must exactly match the loaded rule titles". For
-   graduation to emit a complete draft, either it also emits the two sample entries into
-   those test tables, or the samples move into data files next to each rule that the
-   suites read. That is a design decision for #618 before any exporter is written; a
-   hunt's own matches are a natural source of the matching sample, but the negative
-   sample (a benign lookalike) has to come from an analyst or from benign telemetry the
-   hunt also touched.
+2. **A matching sample and a negative sample for it**, in `<rule>.samples.json` beside the
+   rule (ADR-0031; they were Rust test tables keyed by title until then). A rule file with
+   no samples file fails naming both files, so an exporter emits the pair and nothing else
+   has to be edited. A hunt's own matches are a natural source of the matching sample, but
+   the negative sample (a benign lookalike) has to come from an analyst or from benign
+   telemetry the hunt also touched. **Still open for #618:** a hunt today queries the
+   *detection* store (technique, severity, a substring of the stored alert), not
+   normalised events, so it cannot be turned into a Sigma `selection` mechanically; the
+   exporter can fill the metadata and the matching sample and leave the selection to the
+   analyst, or wait for the raw event archive (`server/datalake`, #77).
 3. **A human in the loop**: the draft enters the normal PR and review path; graduation
    never merges or ships content by itself.

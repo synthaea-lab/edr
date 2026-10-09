@@ -91,7 +91,23 @@ before it connects (`agent run` stops at start-up). A CA is a trust anchor, not 
 credential, so it also applies to a server named by hand; the client certificate does
 not (see `--cert`/`--key`).
 
-Not covered yet: `agent run` does not present the client certificate from `agent.toml`
-(`server.mtls_cert`/`mtls_key`) to the control plane, so a control plane that requires
-mTLS on the ingest routes still cannot be used from `run`; that is separate from the
-CA (#658).
+`agent run` uses the same two settings, and it also presents the client certificate: by
+default it uploads to `server.control_plane_url` with `server.mtls_cert` and
+`server.mtls_key`, and trusts only `server.ca_cert` when that is set. `--server` names
+another control plane (it never receives the configured client certificate; pass
+`--cert`/`--key` for one that needs it), and `--standalone` uploads nothing. An unreadable
+client certificate or key, a passphrase-protected key (the transport cannot use an encrypted
+key yet: `server.mtls_passphrase` is not wired) or a missing CA bundle is a failure to set
+the upload up, and what happens next follows `server.offline_fallback`:
+
+- **`true` (the default):** `run` starts and detects locally without uploading. It says so
+  in the journal (`UPLOAD DISABLED: not uploading to <url>: <cause>`) and writes an
+  `UPLOAD-DISABLED` line to the alert log. Nothing is uploaded until the next start with
+  the certificates in place.
+- **`false`:** `run` stops at start-up with the cause.
+
+The default is deliberate. Stopping would leave a host without certificates with no
+detection at all (a first install, or any host the certificates have not reached yet), and
+the watchdog, which only sees that the agent never shows progress, would roll back and ban a
+release that is otherwise healthy (ADR-0015 probation). Set `offline_fallback = false` where
+an agent that cannot report should not run.
