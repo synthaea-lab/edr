@@ -9,9 +9,10 @@ docker-compose -f docker-compose.test.yml up -d
 echo "Waiting for database to be ready..."
 sleep 5
 
-echo "Running Prisma migrations..."
+echo "Creating the schema..."
+# `db push`: prisma/migrations is gitignored, so `migrate deploy` has nothing to apply (#743).
 DATABASE_URL="postgresql://synthaea:synthaea_test@localhost:5433/synthaea_test" \
-  npx prisma migrate deploy
+  npx prisma db push --skip-generate --accept-data-loss
 
 echo ""
 echo "Running unit tests..."
