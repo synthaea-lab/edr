@@ -63,5 +63,9 @@ EXPOSE 3000
 
 ENV PORT 3000
 ENV HOSTNAME "0.0.0.0"
+# Next's own SIGTERM handler exits once the HTTP server has closed, possibly before the decoy
+# alarms still being written (ADR-0030 item 6). With this set, instrumentation-node.ts owns
+# shutdown: it flushes them (at most 5 s) and then exits.
+ENV NEXT_MANUAL_SIG_HANDLE true
 
 CMD ["node", "server.js"]

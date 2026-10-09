@@ -59,6 +59,12 @@ server half (recognise it when presented).
    response is sent may cut it off, and would need Next's `after()` (Next 15) instead.
    `flushDecoyReports()` waits for the pending ones: `instrumentation.ts` calls it on SIGTERM
    and SIGINT (waiting at most 5 s), so an alarm written just before a stop is not lost.
+   Next 14.2.35 registers its own SIGINT/SIGTERM handler (`server.close()` then
+   `process.exit(0)`, in `start-server.js`) unless `NEXT_MANUAL_SIG_HANDLE` is set, and both
+   handlers run, so Next's could exit before the flush wrote. The production image therefore
+   sets `NEXT_MANUAL_SIG_HANDLE=true`, which makes the flush the only handler (it exits itself
+   when done or after 5 s), and the server logs an error at start in production if the flag is
+   missing. Not tested against a real `docker stop` with a blocked lookup.
 7. **The source address is what nginx saw.** `X-Real-IP` (set by nginx from the connection,
    replacing any client value) first; otherwise the **last** `X-Forwarded-For` hop, which is
    the address nginx appended, never the first, which is whatever the client wrote. Behind
@@ -107,16 +113,27 @@ server half (recognise it when presented).
    The next start tries again. Standalone, or with the upload disabled, the tokens are planted
    and nothing recognises them.
 12. **Unauthenticated lookups are bounded in the process too.** At most 16 decoy-shaped
-    bearers are looked up at once; past that they are counted and dropped, the count said in
-    the log at powers of two (a bearer that is not decoy-shaped costs nothing). A flood can
-    therefore shed a real alarm, which is the price of not queueing unbounded queries on the
-    database pool; the proxy limit (item 10) keeps one address from doing it alone.
+    bearers are looked up at once; the overflow waits in a queue of at most 1024, and when
+    that is full the *oldest* waiting one is shed and counted (the count said in the log at
+    powers of two). A bearer that is not decoy-shaped costs nothing. Dropping on full slots
+    would let 16 junk bearers sent alongside a stolen token shed the real alarm; queueing means
+    the real one waits behind at most 1024 older lookups and is shed only after that many newer
+    ones arrive. A flood that sustains more than the database drains can still shed a real
+    alarm: that is the price of bounded memory, and the proxy limit (item 10) keeps one
+    address from doing it alone.
 13. **The server says at start if the table is missing.** `instrumentation.ts` checks that
     `decoy_tokens` exists and logs the fix (`prisma db push`) if not; it never fails the start
     (the database may not be reachable yet).
 
 ## Consequences
 
+- **Accepted, from the review of #732.** A hash is never removed, so an agent whose decoys
+  rotate reaches the 256 cap and gets 409 from then on: removal would disarm a token an
+  attacker may still hold (item 2), and the cap bounds rows; an operator who rotates needs a
+  cleaner that keeps the hashes, which is a separate decision. The alarm lookup has no tenant
+  filter (item 2), so an enrolled agent of another tenant that learns a hash can register it
+  and be alarmed too: the cost is an extra alarm in its own tenant naming itself, and it needs
+  a leaked hash, which the design treats as non-secret. The cooldown is per process (below).
 - **Known gap, not closed here.** The cooldown across several server processes is "about one": the in-flight set is per process, the database check bounds it and does not eliminate it. A process killed with SIGKILL (not SIGTERM) can still lose an alarm written just before.
 - The alarm fires for a decoy used against a cron route. A decoy presented anywhere else
   (a session route, a third-party service) is not seen: widening it needs the server to read

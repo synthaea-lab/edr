@@ -28,3 +28,13 @@ describe("instrumentation.ts", () => {
     expect(entry).not.toMatch(/@\/lib\/(decoy|prisma)|node:crypto/);
   });
 });
+
+describe("the production image", () => {
+  it("leaves SIGTERM to instrumentation-node, not to Next's own handler (NEXT_MANUAL_SIG_HANDLE)", () => {
+    const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
+    const runner = dockerfile.slice(dockerfile.lastIndexOf("CMD"));
+    expect(dockerfile).toMatch(/^ENV NEXT_MANUAL_SIG_HANDLE true$/m);
+    expect(runner).toContain('"server.js"');
+    expect(dockerfile.indexOf("NEXT_MANUAL_SIG_HANDLE")).toBeLessThan(dockerfile.lastIndexOf("CMD"));
+  });
+});

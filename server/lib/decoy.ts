@@ -30,8 +30,15 @@ export const DECOY_ALARM_COOLDOWN_MS = 60_000;
  */
 export const MAX_ALARMS_PER_PRESENTATION = 32;
 
-/** Decoy-shaped bearers looked up at once; the rest are counted and dropped (flood bound). */
+/** Decoy-shaped bearers looked up at once (flood bound). */
 export const MAX_CONCURRENT_LOOKUPS = 16;
+
+/**
+ * Decoy-shaped bearers waiting for a lookup slot. Past this the *oldest* waiting one is shed
+ * and counted, so a burst of junk `syn_dk_` bearers cannot starve a real alarm that arrived
+ * after it: the real one is queued behind at most this many, and sheds only junk that is older.
+ */
+export const MAX_QUEUED_LOOKUPS = 1024;
 
 /** Longest attacker-supplied header value kept in an alarm. */
 const MAX_HEADER_ECHO = 200;
@@ -140,10 +147,19 @@ export function recordedAddress(req: NextRequest): string {
   return clientAddress(req.headers) ?? UNVERIFIED_ADDRESS;
 }
 
-/** A host name as it may appear in a title: bounded, printable. It is self-declared. */
-const titleHost = (value: string) =>
+/** A self-declared host name with control characters removed, cut to `max`. */
+const printable = (value: string, max: number) =>
   // eslint-disable-next-line no-control-regex
-  value.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 80);
+  value.replace(/[\x00-\x1f\x7f]/g, "").slice(0, max);
+
+/** A host name as it may appear in a title: bounded, printable. It is self-declared. */
+const titleHost = (value: string) => printable(value, 80);
+
+/**
+ * The host name kept in `meta.planting_host`. Enrollment bounds it to 253 printable characters
+ * today, but rows enrolled before that cap can hold anything, and the alarm must not copy it.
+ */
+export const metaHost = (value: string) => printable(value, 253);
 
 /**
  * The address the request came from, as far as the proxy saw it. `X-Real-IP` is set by nginx
@@ -225,43 +241,87 @@ export function scheduleDecoyReport(
 ): void {
   // Anything that is not decoy-shaped costs nothing: no promise, no query.
   if (!looksLikeDecoy(bearerToken(authorization))) return;
-  // A flood of decoy-shaped bearers would queue one lookup each on the database pool. Past the
-  // bound they are counted, not queued, and the count is said at powers of two. nginx
-  // limits the rate per address; this bounds what one process holds whatever the rate.
-  if (pending.size >= MAX_CONCURRENT_LOOKUPS) {
+  const job = { prisma, req, authorization };
+  if (pending.size < MAX_CONCURRENT_LOOKUPS) {
+    start(job);
+    return;
+  }
+  // A flood of decoy-shaped bearers must not put one lookup each on the database pool, nor
+  // shed a real alarm just because 16 junk ones are in flight: the overflow waits in a bounded
+  // queue and, when that is full, the oldest waiting one is shed and counted (said at powers
+  // of two). nginx limits the rate per address; this bounds what one process holds.
+  waiting.push(job);
+  if (waiting.length > MAX_QUEUED_LOOKUPS) {
+    waiting.shift();
     dropped += 1;
     if ((dropped & (dropped - 1)) === 0) {
       console.error(`Decoy reports dropped under load: ${dropped} so far`);
     }
-    return;
   }
-  const work = reportDecoyUse(prisma, req, authorization).finally(() => {
+}
+
+interface ReportJob {
+  prisma: PrismaClient;
+  req: NextRequest;
+  authorization: string | null;
+}
+
+/** Lookups waiting for one of the [`MAX_CONCURRENT_LOOKUPS`] slots, oldest first. */
+const waiting: ReportJob[] = [];
+
+function start(job: ReportJob): void {
+  const work = reportDecoyUse(job.prisma, job.req, job.authorization).finally(() => {
     pending.delete(work);
+    const next = waiting.shift();
+    if (next) start(next);
   });
   pending.add(work);
 }
 
 let dropped = 0;
 
-/** Reports not started because [`MAX_CONCURRENT_LOOKUPS`] were already running. */
+/** Reports shed because [`MAX_QUEUED_LOOKUPS`] were already waiting. */
 export function droppedDecoyReports(): number {
   return dropped;
 }
 
-/** Test seam: forget the drop count. */
+/** Test seam: forget the drop count and the waiting queue. */
 export function resetDroppedDecoyReports(): void {
   dropped = 0;
+  waiting.length = 0;
+}
+
+const flushInstalledOn = new WeakSet<object>();
+
+/**
+ * Next installs its own SIGINT/SIGTERM handler (`server.close()` then `process.exit(0)`) unless
+ * `NEXT_MANUAL_SIG_HANDLE` is set (14.2.35, `start-server.js`). Both handlers run, and Next's
+ * exits as soon as the HTTP server has closed, which can be before [`installDecoyShutdownFlush`]
+ * has written the pending alarms. So in production the flag must be set (the Dockerfile does);
+ * this says so at start when it is not. Returns whether the flush can be trusted.
+ */
+export function checkShutdownOwnership(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.NEXT_MANUAL_SIG_HANDLE || env.NODE_ENV !== "production") return true;
+  console.error(
+    "NEXT_MANUAL_SIG_HANDLE is not set: Next's own SIGTERM handler may exit before pending " +
+      "decoy alarms are written. Set NEXT_MANUAL_SIG_HANDLE=true."
+  );
+  return false;
 }
 
 /**
  * Lets the pending alarms finish when the process is asked to stop: a SIGTERM between the
  * response and the write would otherwise lose the alarm. Waits at most `waitMs`, then exits
- * anyway so a stuck database cannot keep the process alive.
+ * anyway so a stuck database cannot keep the process alive. With `NEXT_MANUAL_SIG_HANDLE`
+ * set this is the only handler, so it exits itself: see [`checkShutdownOwnership`].
  */
 export function installDecoyShutdownFlush(
   proc: Pick<NodeJS.Process, "once" | "exit">,
   waitMs = 5_000
 ): void {
+  // `register()` runs again on a dev hot reload; one set of handlers per process is enough.
+  if (flushInstalledOn.has(proc)) return;
+  flushInstalledOn.add(proc);
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     proc.once(signal, () => {
       const limit = new Promise<void>((resolve) => setTimeout(resolve, waitMs).unref?.());
@@ -292,7 +352,7 @@ export async function checkDecoyTable(prisma: PrismaClient): Promise<boolean> {
 
 /** Resolves when every scheduled report has finished. For tests and graceful shutdown. */
 export async function flushDecoyReports(): Promise<void> {
-  while (pending.size > 0) {
+  while (pending.size > 0 || waiting.length > 0) {
     await Promise.all(Array.from(pending));
   }
 }
@@ -344,7 +404,7 @@ async function recordIfNotRecent(
       meta: {
         source: "deception",
         decoy_id: decoy.id,
-        planting_host: host,
+        planting_host: metaHost(host),
         planting_agent_id: decoy.agent.id,
         client_address: address,
         user_agent: echo(req.headers.get("user-agent")),
