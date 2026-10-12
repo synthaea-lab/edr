@@ -23,6 +23,28 @@ running. The halt can also land between the manifest and an artifact download;
 it is reported the same way, and entries already written stay recorded for the
 next run. The release is not marked applied until every artifact has landed.
 
+## Withdrawing a rule that an agent already applied
+
+An agent that has applied release N does not go back to an older release (anti-rollback,
+ADR-0016: `up to date (release 4, server offers 2)`). To take a bad rule off such an agent,
+publish a newer release that no longer lists it. After the new entries have landed, the agent
+deletes every file it had applied that the manifest no longer lists, and says how many
+(`applied release 5 (0 entries fetched, 2 removed)`); `check-content-manifest` lists them as
+`remove <path>`. Only files recorded in the agent's content state are removed, never anything
+outside the content directory, and never through a symlink. If the download of the new release
+fails, nothing is removed and the rules the agent runs today stay.
+
+Three guards worth knowing. A manifest that lists nothing while the agent has applied content is
+refused (`the manifest lists no content but N applied file(s) would be removed`), and the server
+refuses to build one: an empty or mis-globbed release must not be able to wipe a ring. A file
+that cannot be removed (a directory at its path, a symlink on the way, a permission error) is
+reported (`could not be removed ... retries them`) and kept in the state; the rest of the release
+still applies and the next run tries again, so one stuck file does not stop new rules. A path
+that is the same file as a listed one under another case (`Foo.yml` against `foo.yml` on
+Windows or macOS) is not deleted. An offer of the *same* release number is applied again when
+the files on disk do not match it, which is what repairs a ring after the agent was pointed at
+another ring and back; an *older* offer is still ignored (see #665).
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,
