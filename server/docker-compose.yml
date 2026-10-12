@@ -21,6 +21,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # The command below is `npm run dev`: the dev stage, not the production runner.
+      target: dev
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,10 +40,13 @@ services:
     # ports:
     #   - "3000:3000"
     volumes:
-      - .:/app
+      # `:z` relabels the mount so the container may read it under SELinux (Fedora, RHEL).
+      - .:/app:z
       - /app/node_modules
       - /app/.next
-    command: sh -c "npx prisma migrate deploy && npm run dev"
+    # `db push`, not `migrate deploy`: server/.gitignore excludes prisma/migrations, so a
+    # clone has none to apply (CI does the same, .github/workflows/server.yml).
+    command: sh -c "npx prisma db push --skip-generate && npm run dev"
 
   # mTLS terminating proxy (nginx)
   proxy:
@@ -51,11 +56,15 @@ services:
     environment:
       # Shared secret for proxy authentication
       NGINX_PROXY_SECRET: dev_nginx_secret_change_in_production
+      # nginx.conf names ${NGINX_PROXY_SECRET}: the image only substitutes it in a template,
+      # rendered over /etc/nginx/nginx.conf. The filter keeps nginx's own $variables intact.
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      NGINX_ENVSUBST_FILTER: NGINX_
     ports:
       - "8443:8443" # Agent ingest (mTLS)
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro
+      - ./nginx.conf:/etc/nginx/templates/nginx.conf.template:ro,z
+      - ./certs:/etc/nginx/certs:ro,z
 
 volumes:
   postgres_data:

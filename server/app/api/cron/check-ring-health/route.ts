@@ -29,7 +29,7 @@ const MAX_DETECTION_RATE_DROP = 0.20;   // 20% detection rate drop
 export async function GET(req: NextRequest) {
   try {
     // SECURITY: fails closed when CRON_SECRET is unset, constant-time compare.
-    const denied = verifyCronRequest(req);
+    const denied = await verifyCronRequest(req);
     if (denied) {
       return denied;
     }

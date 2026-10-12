@@ -6,7 +6,7 @@ const SILENCE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function GET(req: NextRequest) {
   try {
-    const denied = verifyCronRequest(req);
+    const denied = await verifyCronRequest(req);
     if (denied) {
       return denied;
     }

@@ -277,11 +277,10 @@ export default defineConfig({
 ### Reset test database
 
 ```bash
-# Drop all tables
-npx prisma migrate reset --force
-
-# Re-run migrations
-npx prisma migrate deploy
+# Drop all tables and recreate them from schema.prisma
+# (prisma/migrations is not tracked, so there is no migration history to replay)
+DATABASE_URL="postgresql://synthaea:synthaea_test@localhost:5433/synthaea_test" \
+  npx prisma db push --force-reset --skip-generate
 ```
 
 ### Inspect test data

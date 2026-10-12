@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/usr/bin/find",
+    "cmdline": "find . -exec /bin/sh ;"
+  },
+  "non_matching": {
+    "image": "/usr/bin/find",
+    "cmdline": "find . -exec /bin/ls {} ;",
+    "note": "Near miss: find's -exec flag, the same structural shape the rule keys on, but targeting a non-shell binary; the boundary is '-exec /bin/sh' / '-exec /bin/bash' specifically, not -exec itself."
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -EncodedCommand JABzAD0A"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -NoProfile -Command Get-Process"
+  }
+}

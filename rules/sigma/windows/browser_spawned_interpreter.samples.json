@@ -1,0 +1,13 @@
+{
+  "matching": {
+    "parentimage": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -NoProfile"
+  },
+  "non_matching": {
+    "parentimage": "C:\\Windows\\explorer.exe",
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -File .\\build.ps1",
+    "note": "the same interpreter started by the shell, not by a browser: the parent is the condition"
+  }
+}
