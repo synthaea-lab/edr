@@ -1,9 +1,9 @@
-title: PowerShell adds a member to a local group by SID
+title: PowerShell adds a member to the local Administrators group
 description: >
-  Detects Add-LocalGroupMember targeting the built-in Administrators group by
-  its well-known SID. It records command intent only; it does not confirm the
-  membership change succeeded. Name-based additions are covered by a separate
-  net.exe rule when localized group names are used.
+  Detects Add-LocalGroupMember adding a member to the built-in Administrators
+  group by its well-known SID or a common localized group name. This is the
+  same local-administrator change as `net localgroup`, issued through a
+  different tool. It records command intent, not a confirmed membership change.
 tags:
   - attack.persistence
   - attack.privilege_escalation
@@ -11,13 +11,34 @@ tags:
   - synthaea.coverage.privesc_impact
 level: medium
 falsepositives:
-  - Administrators using PowerShell to add an approved account to the built-in
-    local Administrators group.
+  - Administrators using PowerShell to add approved accounts to the local
+    Administrators group.
 detection:
   selection:
     Image|endswith:
       - '\powershell.exe'
       - '\pwsh.exe'
-    CommandLine|contains: '-SID S-1-5-32-544'
+    CommandLine|contains:
+      - '-SID S-1-5-32-544'
+      - '-Group Administrators'
+      - '-Group "Administrators"'
+      - '-Name Administrators'
+      - '-Name "Administrators"'
+      - '-Group Administrateurs'
+      - '-Group "Administrateurs"'
+      - '-Name Administrateurs'
+      - '-Name "Administrateurs"'
+      - '-Group Administradores'
+      - '-Group "Administradores"'
+      - '-Name Administradores'
+      - '-Name "Administradores"'
+      - '-Group Administratoren'
+      - '-Group "Administratoren"'
+      - '-Name Administratoren'
+      - '-Name "Administratoren"'
+      - '-Group Amministratori'
+      - '-Group "Amministratori"'
+      - '-Name Amministratori'
+      - '-Name "Amministratori"'
     CommandLine: '*Add-LocalGroupMember*'
   condition: selection
