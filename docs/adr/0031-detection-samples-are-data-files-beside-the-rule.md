@@ -15,7 +15,7 @@ in a second place, and a tool that wants to emit a complete draft rule (the hunt
 ## Decision
 
 1. **`<rule>.yml` has a sibling `<rule>.samples.json`** with exactly two events, `matching`
-   and `non_matching` (`image`, `cmdline`, and an optional `note` saying which boundary the
+   and `non_matching` (`image`, `cmdline`, an optional `parentimage` for the rules that key on lineage, and an optional `note` saying which boundary the
    negative sample probes). Unknown fields and a missing half are refused.
 2. **The pairing is checked, not the title.** A rule without its samples file fails naming both
    files (dead content cannot merge); a samples file without a rule fails as stale. One rule

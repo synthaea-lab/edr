@@ -10,5 +10,5 @@ content workflow runs the sigma crate's content test, which loads this whole tre
 asserts every rule both parses AND fires on a crafted matching event
 (`crates/sigma/tests/content.rs`). Adding a rule means adding its samples beside it:
 `<rule>.samples.json` with one `matching` and one `non_matching` event (ADR-0031), e.g.
-`{"matching": {"image": "/bin/bash", "cmdline": "..."}, "non_matching": {"image": "...", "cmdline": "...", "note": "the boundary this probes"}}`.
+`{"matching": {"image": "/bin/bash", "cmdline": "..."}, "non_matching": {"image": "...", "cmdline": "...", "note": "the boundary this probes"}}` A rule on `ParentImage` adds `"parentimage"` to both events.
 A rule nothing can trigger is dead content.
