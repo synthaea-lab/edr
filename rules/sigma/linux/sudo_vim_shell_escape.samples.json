@@ -1,7 +1,7 @@
 {
   "matching": {
     "image": "/usr/bin/sudo",
-    "cmdline": "sudo nvim -c ':set shell=/bin/sh|shell' /etc/hosts"
+    "cmdline": "sudo /usr/bin/nvim -c ':set shell=/bin/sh|shell' /etc/hosts"
   },
   "non_matching": {
     "image": "/usr/bin/sudo",

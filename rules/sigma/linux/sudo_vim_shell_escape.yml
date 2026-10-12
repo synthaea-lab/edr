@@ -27,4 +27,7 @@ detection:
       - '* vim *'
       - '* vi *'
       - '* nvim *'
+      - '*/vim *'
+      - '*/vi *'
+      - '*/nvim *'
   condition: selection
