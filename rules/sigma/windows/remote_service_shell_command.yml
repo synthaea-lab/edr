@@ -1,0 +1,23 @@
+title: Remote service created with a command-shell binary path
+description: >
+  Detects sc.exe addressing a remote host and creating a service whose binary
+  path starts with cmd.exe /c. This distinguishes shell-command staging from
+  installing an ordinary service binary. No service-start event is evaluated.
+tags:
+  - attack.persistence
+  - attack.lateral_movement
+  - attack.t1543.003
+  - synthaea.coverage.discovery_lateral
+level: medium
+falsepositives:
+  - Authorized remote remediation through temporary shell services and
+    controlled red-team exercises; legacy deployment wrappers can also match.
+detection:
+  selection:
+    Image|endswith: '\sc.exe'
+    CommandLine|startswith:
+      - 'sc \\'
+      - 'sc.exe \\'
+    CommandLine|contains: ' create '
+    CommandLine: '* binPath= "cmd.exe /c *'
+  condition: selection
