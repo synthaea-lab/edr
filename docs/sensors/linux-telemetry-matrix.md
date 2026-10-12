@@ -31,6 +31,7 @@ Columns:
 | Netlink: `NETLINK_SOCK_DIAG`/`NETLINK_NETFILTER`(conntrack)/`NETLINK_CONNECTOR` | TCP/IPv6 socket dump, ctnetlink dump, proc-connector fork/exec/exit broadcast (issue #92) | Listening ports, network flows (5-tuple + byte counters when accounting is on), process lifecycle cross-check | port/proto/state, flow tuple + counters | T1071/T1041 (beacon rule on `NetworkFlowEvent`), T1046-adjacent (listen-port drift, planned) | Low (poll cadence, 10s) | `sock_diag` ~3.x; ctnetlink as old as conntrack itself | `sock_diag` confirmed **unprivileged** against a real kernel (empirically verified, no root needed); conntrack untested unprivileged (every capture here was root); proc-connector confirmed **root/`CAP_NET_ADMIN`-only** (kernel returns `EPERM` otherwise) | conntrack is Falco's network-flow fallback path on kernels without eBPF's `bpf_skb`-family hooks |
 | journald tail | `journalctl -f -o json` subprocess (issue #93) | sshd accept/fail, PAM session open/close, sudo/su, systemd unit start/stop/fail | user, source addr, target user, unit name | T1078 (valid accounts), T1543.002/T1053.003-adjacent (service lifecycle, persistence) — **unit lifecycle mapping blocked on a cross-platform schema shape, see #93** | Medium (subprocess + JSON parse per line, allowlist-filtered before normalization) | N/A — userspace, journald itself needs systemd | Root in practice (the agent already needs it for eBPF; unprivileged `journalctl` cannot read auth records at all on some distros — confirmed empirically, journald's own per-unit read ACL) | Wazuh's primary Linux auth-visibility mechanism is this class of log tail (traditionally syslog rather than journald specifically) |
 | `/proc`, `/sys` | Read-only polling | Container attribution (`cgroup`), cmdline/comm/uid enrichment, seeding `PROC_LINEAGE` at startup | cgroup id → container id, argv, comm | Enrichment only, no direct MITRE tag (feeds every technique above) | Low per-read, but never the primary event source — enrichment triggered by an eBPF/netlink event, never a poll loop over all of `/proc` | N/A | Root not required for most of `/proc/<pid>/*` on the agent's own reads | osquery's *entire* model is polling `/proc`/`/sys` on a table-query cadence — the "eBPF says X happened, then we read `/proc`" split this codebase uses is exactly the enrichment-not-primary-source distinction osquery lacks |
+| Netlink: `NETLINK_AUDIT` (SELinux AVC) | Same multicast socket as the exec/connect fallback above, `type=AVC` (1400) records (issue #297) | SELinux policy denials → `Event::PolicyDenial` (`mechanism: "selinux"`) | scontext, tcontext, tclass, permissive, object path (`path=`/`name=`, hex-decoded when the kernel marks it unquoted, #490/#491) | T1562-adjacent (defense-evasion/policy context) — **not yet consumed by any rule or correlator**, pure telemetry today (see `sources.md`'s own "OS security verdicts" row) | Same as the fallback stream above — no extra subscription, one more `classify()` match arm | Any (shares the fallback socket's own minimum) | `CAP_AUDIT_READ` or root (shares the fallback socket's own privilege) | Live-confirmed deliverable on a real SELinux-Enforcing kernel (rocky9, #297's own re-test after an initial negative finding traced to a stale box) — the AVC visibility Falco/Tetragon don't carry natively (they are eBPF/kprobe-first, not audit-netlink consumers) |
 
 ## Evaluated, not implemented
 
@@ -47,7 +48,6 @@ Columns:
 | AF_PACKET / libpcap | Rejected | Full packet capture from the agent is the cost profile Florian's note also flags — TLS visibility is already covered more cheaply (and pre-encryption) by the uprobe path (issue #90) for the traffic that matters most. |
 | XDP / TC eBPF | Not implemented, low priority | Network *defense* (DDoS filtering, inline drop) more than *detection* — out of scope until response/isolation (#25's host-isolation follow-up) needs an inline network-block primitive of its own. |
 | Socket/cgroup BPF (attribution hooks) | Redundant today | The tracepoint `connect()` probe + `/proc` cgroup join already gets process/container attribution on a connection; a dedicated cgroup-BPF hook would matter more under heavy container density (many processes per cgroup racing the join window) — no evidence yet that our current join has a real race in practice. |
-| SELinux AVC (`audit` record type 1400) | **Cheap win, not yet done** | The audit fallback sensor (#247) already subscribes to the *entire* `NETLINK_AUDIT` multicast stream — AVC denials are already arriving at the socket, `classify.rs` just doesn't have a match arm for `AUDIT_AVC` (1400) yet, everything not `EXECVE`/`SOCKADDR` falls into `_ => None` and is dropped. No new sensor, no new privilege, no new subscription — one classifier arm plus a schema field. Directly relevant to closing the SELinux-on-server blind spot (see "server distro gaps" below). |
 | AppArmor (`audit` records via the same netlink stream, or `/var/log/kern.log` `apparmor="DENIED"` lines) | Not implemented | Same netlink stream as SELinux AVC in principle (AppArmor also logs through the audit subsystem on most distros), lower priority than SELinux specifically because none of our current lab boxes run AppArmor enforcing by default the way Rocky/RHEL run SELinux enforcing — no empirical validation target yet. |
 | Seccomp (blocked-syscall events) | Not implemented | High value specifically for containerized workloads (most container runtimes apply a default seccomp profile) — sits closer to the Kubernetes/container-runtime XDR-adjacent scope than today's single-host EDR scope. |
 | Linux capabilities (usage/changes) | **Changes: implemented; usage: not** | *Changes* ship as eBPF tracepoint events: `capset` (`Event::CapSet`, both capability words, #266/#457) and the capability-model options of `prctl(2)`, `PR_SET_SECUREBITS` and `PR_CAPBSET_DROP` (`Event::Prctl`, #457, filtered in-kernel). *Usage* ("this process just exercised `CAP_X`"): no dedicated kernel event stream outside audit rules configured for it (`-a always,exit -F arch=b64 -S capset` style) or BPF-LSM's `capable` hook specifically — candidate for a future BPF-LSM hook addition (cheap, same crate as `file_open`) rather than a new mechanism. |
@@ -57,16 +57,23 @@ Columns:
 
 ## Server-distro gap this matrix surfaced
 
-None of the mechanisms above are unavailable on server distros — the gap is
-**validation coverage**, not missing code. `lab/MATRIX.md`'s two RPM-family rows
-(`fedora-41`, `rocky-9`) are marked **replay-only**: they never actually attempt
-live eBPF probe loading, only replay pre-captured telemetry through the detection
-engines. Rocky's `generic/rocky9` Vagrant box ships **SELinux Enforcing by
-default** (matching real production RHEL/Rocky), and there is documented
-precedent (Red Hat, Carbon Black, Trend Micro) of confined-domain SELinux denying
-`bpf()` operations — so whether our eBPF programs, BPF-LSM hook, and the new
-audit-netlink socket actually load cleanly under SELinux Enforcing has never been
-exercised, only assumed. See the SELinux AVC row above for the specific,
-low-cost first step (classify what we already receive) before the bigger step
-(provision a box with SELinux left in its real default, not disabled for dev
-convenience, and see what — if anything — gets denied).
+Largely closed since this matrix was first written, two different ways:
+
+- **`fedora-41`** (RPM family, SELinux Enforcing by default) is no longer
+  replay-only — live-validated 2026-09-30 and re-run 2026-10-02 (`lab/MATRIX.md`):
+  the eBPF programs, the BPF-LSM hook, and the packaged systemd unit (#558/#559/#581)
+  all load and run cleanly under real Enforcing, with **no AVC denial** of the
+  agent itself.
+- **`rocky-9`** stays `lab/MATRIX.md`-marked **replay-only for eBPF probe
+  loading** specifically — that half of the original concern (does `bpf()` get
+  denied for a confined domain the way Red Hat/Carbon Black/Trend Micro have
+  documented elsewhere) is still open on Rocky, even though Fedora's result is
+  reassuring for the same RPM/SELinux-policy family. What *did* get live-tested
+  on rocky9, separately, is the AVC-classification path above (#297 and its
+  follow-up): real `runcon`/`chcon`-triggered denials, confirmed via `ausearch`,
+  did arrive at the agent's own `NETLINK_AUDIT` socket and classify correctly —
+  so the audit-netlink mechanism itself is proven under Rocky's Enforcing
+  default, independent of whether the eBPF side has been.
+
+Remaining gap: an actual eBPF-probe-loading run on `rocky-9` (not just Fedora),
+to close the one RPM-family cell `lab/MATRIX.md` still marks replay-only.

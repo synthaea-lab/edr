@@ -51,7 +51,7 @@ pending (the coverage packs #376–#381 — see
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
 | **Services & autostart**<br><sub>TA0003 T1543/T1547</sub> | ✅ journald + rules | ✅ WEL 7045 + ETW registry | ✅ ES BTM |
 | **Scheduled execution**<br><sub>TA0002/TA0003 T1053</sub> | ✅ cron/systemd paths | ✅ WEL 4698 · 4702 | ✅ cron/launchd paths |
-| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | 🔍 SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
+| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | ✅ SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
 | **Kernel modules & drivers**<br><sub>TA0003/TA0005 rootkits</sub> | 📋 #264 module+bpf | 🟡* image loads · 📋 #39 | 📋 #357 kexts |
 | **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | 📋 #362 kill-trace | 📋 #39 driver vantage | ✅ ES signals |
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
@@ -64,8 +64,9 @@ pending (the coverage packs #376–#381 — see
 
 See [linux-telemetry-matrix.md](linux-telemetry-matrix.md) for the full
 hook/fields/overhead/kernel/OSS-comparison detail behind each mechanism,
-including the evaluated-but-not-implemented tier (fanotify, fentry, SELinux
-AVC, seccomp, …) and the SELinux-on-server validation gap.
+including the evaluated-but-not-implemented tier (fanotify, fentry, seccomp,
+…) and the (now largely closed, see that doc) SELinux-on-server validation
+gap.
 
 ### Master sources
 
@@ -99,7 +100,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Identity & privilege** | journald | sshd accept/fail, PAM sessions, sudo/su → `Auth` | ✅ used | T1078 | #93 |
 | **Identity & privilege** | eBPF · tracepoints | `setuid`/`setresuid`/`capset`/`setns` | 📋 planned | T1548, container escape | #266 |
 | **Persistence & autostart** | journald + rules | systemd unit first-start (flagged approximation, documented); rc/cron/systemd path writes via the file stream | ✅ used | T1543.002, T1053.003 | #93 |
-| **OS security verdicts** | netlink · audit | SELinux AVC denials — already on the socket, one classifier arm away | 🔍 evaluated | T1562-adjacent | matrix row |
+| **OS security verdicts** | netlink · audit | SELinux AVC denials → `Event::PolicyDenial` (`mechanism: "selinux"`), live-confirmed on a real Enforcing kernel | ✅ used (telemetry only — not yet consumed by a rule/correlator) | T1562-adjacent | #297 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | module loads/unloads, `bpf(2)` loads (eBPF-rootkit visibility) | 📋 planned | T1547.006, T1562 | #264 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | kernel-side kill tracing filtered to agent/security targets — SIGKILL **sender** attribution userspace cannot see → v21 `Signal` | 📋 planned | T1562 | #362 |
 | **Download provenance** | inventory | no OS-level mark on Linux — browser artifacts only | 📋 planned | provenance context | #87 |
