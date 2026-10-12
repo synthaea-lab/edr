@@ -1,6 +1,6 @@
 """The rarity feature: is the executed image on this fleet's common set? (issue #640)
 
-Defined by ADR-0020 (proposed): the server publishes, per tenant, a **common-set snapshot**
+Defined by ADR-0020 (accepted): the server publishes, per tenant, a **common-set snapshot**
 of the image hashes seen on at least K hosts, and the device checks an executed image
 against it locally. The model input is therefore a small ordinal derived from that
 snapshot, never a host count: a count is not something the device can compute.
@@ -14,8 +14,7 @@ Two numbers, because "rare" must be distinguishable from "no basis to say":
 - `image_in_common_set`: 1.0 when known and the hash is in the common set, else 0.0. Only
   meaningful when `rarity_known` is 1.0; 0.0 there means "rare or new on this fleet".
 
-**Python side only for now.** The Rust mirror waits for ADR-0020 to be accepted (nothing
-agent-side is written before then), so a model trained on this feature cannot be loaded by
+**Python side only for now.** The Rust mirror is not written yet (ADR-0020 is accepted), so a model trained on this feature cannot be loaded by
 the agent yet. When it is built it must take the same two inputs (a membership test and
 the "covers enough hosts" flag) and be pinned to this module by a golden fixture, like
 every other feature.
