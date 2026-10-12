@@ -174,7 +174,7 @@ def test_write_manifest_missing_baseline_raises(tmp_path: Path) -> None:
 
 def test_write_manifest_naive_datetime_raises(tmp_path: Path) -> None:
     _write_baseline(tmp_path, ['{"argv": ["ls"]}'])
-    naive = datetime(2026, 9, 11, 10, 0, 0)  # no tzinfo, must be rejected
+    naive = datetime(2026, 9, 11, 10, 0, 0)  # noqa: DTZ001 — no tzinfo, must be rejected
     with pytest.raises(ValueError):
         write_manifest(
             tmp_path,
