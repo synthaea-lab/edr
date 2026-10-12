@@ -1,0 +1,26 @@
+title: Service created with a command-shell binary path
+description: >
+  Detects sc.exe creating a service whose binary path invokes cmd, PowerShell
+  or %COMSPEC%, including a quoted full sc.exe path. The exec-only Sigma engine
+  cannot combine multiple contains checks on CommandLine, so this rule also
+  matches local service creation and cannot require a remote host. Other shell
+  launchers are outside this rule; no service-start event is evaluated.
+tags:
+  - attack.persistence
+  - attack.lateral_movement
+  - attack.t1543.003
+  - synthaea.coverage.discovery_lateral
+level: medium
+falsepositives:
+  - Authorized local or remote remediation through temporary shell services,
+    controlled red-team exercises and legacy deployment wrappers.
+detection:
+  selection:
+    Image|endswith: '\sc.exe'
+    CommandLine|contains:
+      - 'cmd.exe /c'
+      - 'cmd.exe /k'
+      - 'powershell.exe'
+      - '%comspec%'
+    CommandLine: '* create *'
+  condition: selection
