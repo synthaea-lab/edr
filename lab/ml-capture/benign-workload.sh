@@ -27,7 +27,10 @@ set -u
 
 DURATION="${DURATION:-900}"
 SEED="${SEED:-1}"
-WL="$(mktemp -d /tmp/edr-ml-workload.XXXXXX)"
+# Unchecked, a failing mktemp (a full /tmp is enough) leaves WL empty and `set -u` does not
+# fire on an empty value: as root, the mkdir/cp below would then write /bin, /data and /out.
+WL="$(mktemp -d /tmp/edr-ml-workload.XXXXXX)" && [ -n "$WL" ] && [ -d "$WL" ] \
+    || { echo "cannot create the working directory under /tmp" >&2; exit 1; }
 mkdir -p "$WL/bin" "$WL/data" "$WL/out"
 RANDOM="$SEED"
 PORT="${PORT:-18080}"

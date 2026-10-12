@@ -50,6 +50,10 @@ END_NS="$(date +%s%N)"
 
 printf '{\n  "root_pid": %s,\n  "start_ns": %s,\n  "end_ns": %s,\n  "ran": [%s],\n  "failed": [%s]\n}\n' \
     "$$" "$START_NS" "$END_NS" \
-    "$(printf '"%s",' "${RAN[@]}" | sed 's/,$//')" \
+    "$(printf '"%s",' "${RAN[@]:-}" | sed 's/,$//; s/^""$//')" \
     "$(printf '"%s",' "${FAILED[@]:-}" | sed 's/,$//; s/^""$//')" > "$OUT/run.json"
 cat "$OUT/run.json"
+
+# A run in which nothing ran is not a capture of malicious behavior: say so, so a script
+# driving this does not go on to label an empty window.
+[ "${#RAN[@]}" -gt 0 ] || { echo "no scenario ran (see the skips and failures above)" >&2; exit 1; }
