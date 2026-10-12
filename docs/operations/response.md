@@ -100,6 +100,10 @@ agent quarantine --alerts /var/lib/synthaea/alerts.ndjson list
 agent quarantine --alerts /var/lib/synthaea/alerts.ndjson restore <sha256>
 ```
 
+Run them as the user that owns the quarantine directory (the service user under the shipped
+unit), or as root: root can read a directory that is already `0700` and owned by someone
+else, but is refused if its mode would have to change.
+
 Pass the same `--alerts` the running agent was given. `list` prints
 `<sha256>  <original path>`. `restore` puts the file back and audits it. It refuses,
 changing nothing, when:

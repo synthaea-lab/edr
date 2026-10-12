@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Users\\u\\AppData\\Roaming\\evil.exe",
+    "cmdline": "evil.exe"
+  },
+  "non_matching": {
+    "image": "C:\\Program Files\\App\\app.exe",
+    "cmdline": "app.exe --version"
+  }
+}
