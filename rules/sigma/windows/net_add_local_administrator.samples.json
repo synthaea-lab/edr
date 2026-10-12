@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\net.exe",
+    "cmdline": "net.exe localgroup Administrators labuser /add"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\net.exe",
+    "cmdline": "net.exe localgroup Administrators"
+  }
+}

@@ -1,0 +1,24 @@
+title: Net adds an account to the local Administrators group
+description: >
+  Detects net.exe or net1.exe requesting a member addition to the local
+  Administrators group. It does not confirm the account change succeeded;
+  localized group names and other account-management tools are not covered.
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1098
+  - synthaea.coverage.privesc_impact
+level: medium
+falsepositives:
+  - Help-desk staff and endpoint-management systems adding approved local
+    administrators during provisioning or incident response.
+detection:
+  selection:
+    Image|endswith:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains:
+      - ' localgroup administrators '
+      - ' localgroup "administrators" '
+    CommandLine: '* /add*'
+  condition: selection

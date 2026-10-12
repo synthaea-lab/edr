@@ -1,0 +1,25 @@
+title: Sudo launches Vim with an explicit shell escape
+description: >
+  Detects sudo invoking Vim with a one-shot ex command that starts a shell.
+  Interactive escapes, other editors and alternate command spellings are not
+  visible to this narrow rule. The process event records intent, not whether
+  the editor accepted the command or the shell gained elevated access.
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.003
+  - synthaea.coverage.privesc_impact
+level: medium
+falsepositives:
+  - Authorized privilege-escalation training or administrator troubleshooting
+    that deliberately exercises a Vim shell escape.
+detection:
+  selection:
+    Image|endswith: '/sudo'
+    CommandLine|contains:
+      - ' -c !sh'
+      - ' -c :!sh'
+      - ' -c !bash'
+      - ' -c :!bash'
+      - ' -c !zsh'
+      - ' -c :!zsh'
+  condition: selection

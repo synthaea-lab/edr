@@ -41,7 +41,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
-| T1548 | 3 | `sigma:rules/sigma/linux/lolbin_shell_breakout.yml` |
+| T1548 | 3 | `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/setcap_shell_uid.yml` |
 | T1611 | 3 | `rules:crates/rules/src/stateless.rs` |
 
 ## Defense Evasion
@@ -111,11 +111,13 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1059.005 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1087.002 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
 | T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
+| T1548.003 | 3 | `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |

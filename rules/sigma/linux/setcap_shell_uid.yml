@@ -1,0 +1,27 @@
+title: Setcap grants UID capability to a shell
+description: >
+  Detects setcap assigning cap_setuid to a common shell binary. It records the
+  requested capability change only; it does not confirm that the filesystem
+  accepted the change or that the shell was later executed. Other capabilities
+  and shell paths are outside this rule.
+tags:
+  - attack.privilege_escalation
+  - attack.t1548
+  - synthaea.coverage.privesc_impact
+level: medium
+falsepositives:
+  - Security researchers in a lab and administrators building a deliberately
+    privileged test shell; ordinary packaging should not require this setting.
+detection:
+  selection:
+    Image|endswith: '/setcap'
+    CommandLine|contains:
+      - 'cap_setuid+ep /bin/bash'
+      - 'cap_setuid+ep /usr/bin/bash'
+      - 'cap_setuid+ep /bin/sh'
+      - 'cap_setuid+ep /bin/zsh'
+      - 'cap_setuid+eip /bin/bash'
+      - 'cap_setuid+eip /usr/bin/bash'
+      - 'cap_setuid+eip /bin/sh'
+      - 'cap_setuid+eip /bin/zsh'
+  condition: selection
