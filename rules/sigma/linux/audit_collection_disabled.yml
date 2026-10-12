@@ -1,0 +1,18 @@
+title: Linux audit collection explicitly disabled with auditctl
+description: >
+  Detects auditctl receiving the explicit -e 0 request to disable audit
+  collection. Enabling audit and listing rules are outside this rule; the
+  exec event does not prove the kernel accepted the request.
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - synthaea.coverage.defense_evasion
+level: medium
+falsepositives:
+  - Administrators temporarily disabling audit while diagnosing rule overhead
+    or configuring an isolated test system before enabling its final policy.
+detection:
+  selection:
+    Image|endswith: '/auditctl'
+    CommandLine|contains: ' -e 0'
+  condition: selection
