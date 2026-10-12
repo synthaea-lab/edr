@@ -7,11 +7,15 @@
 # parent is odd (ml/synthaea_ml/evaluation/t1_lineage_gain.py). This script runs ordinary, harmless commands from
 # many different kinds of parent: a login-style shell, `sh -c`, `systemd-run` units (parent
 # systemd), `xargs`, `timeout`, `env`, `setsid`, `nohup`, python and perl scripts that spawn
-# children, a web client and server, and a few user-installed binaries under a user-writable
-# directory acting as parents (a real admin's or developer's tools: benign, and the very
-# thing that makes "parent in /tmp" a feature a model must not read as proof of an attack;
-# NOTE: the Linux sensor reports no parent_image_path today, so on Linux this only adds
-# command-line and context variety, not a parent-path lineage).
+# children, a web client and server, web-application processes that run one program (never a
+# shell), and a few user-installed binaries under the user's own directory acting as parents (a
+# real admin's or developer's tools: benign). One job runs a script from /tmp, which is ordinary
+# (installers, test runners) and keeps "parent in /tmp" from being an alarm by itself; the first
+# capture of #617 ran ALL the user tools from /tmp, which made a suspicious parent path 4.9 % of
+# the benign execs against 2.3 % of the malicious ones, an anti-signal that is an artefact of
+# where the workload put its tools, not of how real hosts look. With the Linux sensor filling
+# parent_image_path (#769) the path-based lineage features are live, so the workload's own
+# habits matter.
 #
 # It does nothing destructive: it reads, lists, archives and deletes only its own files under
 # a private work directory, and talks to a server it starts itself on 127.0.0.1.
@@ -32,13 +36,21 @@ SEED="${SEED:-1}"
 WL="$(mktemp -d /tmp/edr-ml-workload.XXXXXX)" && [ -n "$WL" ] && [ -d "$WL" ] \
     || { echo "cannot create the working directory under /tmp" >&2; exit 1; }
 mkdir -p "$WL/bin" "$WL/data" "$WL/out"
+# The user's own tool directory (not /tmp): where a real user's installed tools live.
+# Remember whether the parent directory is ours to remove: a `.local/share` that did not exist
+# before this run is not left behind (as root that would be /root/.local/share).
+[ -d "${HOME:?HOME must be set}/.local/share" ] || MADE_SHARE=1
+mkdir -p "$HOME/.local/share"
+TOOLS="$(mktemp -d "$HOME/.local/share/edr-ml-workload.XXXXXX")" && [ -d "$TOOLS" ] \
+    || { echo "cannot create the tool directory under $HOME" >&2; rm -rf "$WL"; exit 1; }
 RANDOM="$SEED"
 PORT="${PORT:-18080}"
 
 HTTP_PID=""
 cleanup() {
     [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null
-    rm -rf "$WL"
+    rm -rf "$WL" "$TOOLS"
+    if [ "${MADE_SHARE:-0}" = 1 ]; then rmdir "$HOME/.local/share" "$HOME/.local" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
 
@@ -49,10 +61,17 @@ for i in 1 2 3 4 5 6 7 8; do
     seq 1 $((200 * i)) | sed "s/^/line-$i-/" > "$WL/data/file$i.txt"
 done
 
-# User-installed "tools": copies of system binaries in a user-writable directory.
+# User-installed "tools": copies of system binaries in the user's own directory.
 for tool in bash python3; do
-    src="$(command -v "$tool" 2>/dev/null)" && cp "$src" "$WL/bin/user-$tool" 2>/dev/null
+    src="$(command -v "$tool" 2>/dev/null)" && cp "$src" "$TOOLS/user-$tool" 2>/dev/null
 done
+# Web-application processes: python under the names of the usual application servers (the kernel
+# takes `comm` from the file name), so the web-server lineage appears in the benign data the
+# way it does on a host that runs one.
+WEBAPPS=(gunicorn uwsgi php-fpm node httpd nginx)
+if command -v python3 >/dev/null 2>&1; then
+    for name in "${WEBAPPS[@]}"; do ln -s "$(command -v python3)" "$TOOLS/$name"; done
+fi
 
 # A local web server to be a network peer.
 if command -v python3 >/dev/null 2>&1; then
@@ -93,9 +112,17 @@ job_systemd_run() {
         systemd-run --user --quiet --wait --collect sh -c 'uname -a; ls /etc | head -3' >/dev/null 2>&1
     fi
 }
-job_user_bash() { [ -x "$WL/bin/user-bash" ] && "$WL/bin/user-bash" -c 'ls '"$WL"'/data | head -2; id -un' >/dev/null; }
+job_webapp_children() {
+    local name="${WEBAPPS[$((RANDOM % ${#WEBAPPS[@]}))]}"
+    [ -x "$TOOLS/$name" ] || return 0
+    # One program with fixed arguments, never a shell: what an application server really runs.
+    "$TOOLS/$name" -c 'import subprocess
+for argv in (["date"], ["uname", "-r"], ["id", "-u"], ["hostname"]):
+    subprocess.run(argv, capture_output=True)'
+}
+job_user_bash() { [ -x "$TOOLS/user-bash" ] && "$TOOLS/user-bash" -c 'ls '"$WL"'/data | head -2; id -un' >/dev/null; }
 job_user_python() {
-    [ -x "$WL/bin/user-python3" ] && "$WL/bin/user-python3" -c 'import subprocess; subprocess.run(["date"], capture_output=True)'
+    [ -x "$TOOLS/user-python3" ] && "$TOOLS/user-python3" -c 'import subprocess; subprocess.run(["date"], capture_output=True)'
 }
 job_script_from_tmp() {
     printf '#!/bin/sh\nls %s/data | wc -l\nid -u\n' "$WL" > "$WL/bin/job.sh"
@@ -108,6 +135,7 @@ JOBS=(
     job_setsid job_nohup job_python_children job_perl_children job_curl_local
     job_rpm_query job_dpkg_query job_journal job_net_state job_systemd_run
     job_user_bash job_user_python job_script_from_tmp job_make_like
+    job_webapp_children job_webapp_children
 )
 
 START_NS="$(now_ns)"

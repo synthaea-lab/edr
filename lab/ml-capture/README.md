@@ -11,14 +11,30 @@ vector without the parents, at the same false-positive budget. That can only be 
   (`test_a_lineage_the_benign_capture_never_varied_is_invisible_to_the_model`);
 - it must come from a real kernel with pids, process generations and parents, not WSL2 (every
   event there has `ppid=0`);
-- **the Linux sensor does not report `parent_image_path`** (first real capture, 2026-10-09: none
-  of 22,022 exec events carries it), so `parent_path_is_system` and `parent_path_is_suspicious`
-  are constant 0 on Linux and the user-installed-binary parents of `benign-workload.sh` do not
-  register as a lineage at all. What varies is `parent_comm`: a shell or not, and a web server
-  or an office name. Check the lineage patterns of the capture before reading any gain;
-- the malicious part is the repository's own lab scenarios: benign by construction, mostly
-  started from a shell. A lineage gain can only show on a scenario whose parent is odd
-  (`lineage.sh`). **Say that when reporting a number.**
+- **the lineage features must be read from the capture, not assumed.** Since #769 the Linux
+  sensor fills `parent_image_path` (93 % of exec events on the 2026-10-12 capture), so
+  `parent_path_is_system` and `parent_path_is_suspicious` vary. That capture also showed how the
+  workload's own habits decide what they mean: with every user tool run from `/tmp`, a
+  "suspicious" parent path was 4.9 % of the benign execs against 2.3 % of the malicious ones, so
+  the feature pointed the wrong way (paired AUC gain -0.077). `benign-workload.sh` now keeps its
+  user-installed tools in the user's own directory, runs one job from `/tmp`, and has
+  web-application parents (`gunicorn`, `uwsgi`, `php-fpm`, `node`, `httpd`, `nginx`) that run one
+  program and never a shell. Office-named parents do not occur on a Linux host, so
+  `parent_comm_is_office` is constant 0 in any honest benign capture: the model cannot learn it,
+  and its feature-bounds guard is what has to catch a value it never saw. Print the per-feature
+  mean and distinct-value count of the benign and the malicious vectors before reading any gain;
+- the malicious part is the repository's own lab scenarios (benign by construction, mostly
+  started from a shell) **plus `odd-parents/`**: a web application that runs a shell and
+  reconnaissance commands, an Office-named process that runs a shell, and a binary dropped into
+  `/dev/shm` or `/var/tmp` that runs children. A lineage gain can only show on scenarios whose
+  parent is odd. **Say that when reporting a number**, with how many of the malicious vectors
+  have each odd lineage. **Split them by what makes the parent odd**: each `odd-parents/*.sh`
+  declares `# Odd by: comm` or `# Odd by: path`, and `ml/tests/test_odd_parent_scenarios.py`
+  keeps it true (the comm ones run from the user's own directory, the path one uses names the
+  comm features do not know). Run the web-application and Office parents from `/var/tmp` and
+  they are odd by both, so a gain on them cannot be credited to either (the first version did
+  this, review of #787). Report the gain separately for odd-by-comm, odd-by-path, both, and
+  ordinary lineage.
 
 ## Procedure (lab VM, isolated; see the `synthaea-lab-vm` notes: snapshot, NAT NIC detached)
 
