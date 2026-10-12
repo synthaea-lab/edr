@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "Add-LocalGroupMember -SID S-1-5-32-544 -Member labuser"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "Add-LocalGroupMember -Group Administrators -Member labuser"
+  }
+}

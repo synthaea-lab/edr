@@ -1,7 +1,7 @@
 {
   "matching": {
     "image": "/usr/sbin/setcap",
-    "cmdline": "setcap cap_setuid+ep /bin/bash"
+    "cmdline": "setcap cap_setuid=ep /usr/bin/python3.11"
   },
   "non_matching": {
     "image": "/usr/sbin/setcap",

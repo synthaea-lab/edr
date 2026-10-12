@@ -1,9 +1,9 @@
-title: Setcap grants UID capability to a shell
+title: Setcap grants UID capability to a shell or interpreter
 description: >
-  Detects setcap assigning cap_setuid to a common shell binary. It records the
-  requested capability change only; it does not confirm that the filesystem
-  accepted the change or that the shell was later executed. Other capabilities
-  and shell paths are outside this rule.
+  Detects setcap assigning cap_setuid with effective and permitted flags to a
+  shell or common scripting interpreter. It records the requested capability
+  change only; it does not confirm that the filesystem accepted the change or
+  that the target was later executed.
 tags:
   - attack.privilege_escalation
   - attack.t1548
@@ -16,12 +16,17 @@ detection:
   selection:
     Image|endswith: '/setcap'
     CommandLine|contains:
-      - 'cap_setuid+ep /bin/bash'
-      - 'cap_setuid+ep /usr/bin/bash'
-      - 'cap_setuid+ep /bin/sh'
-      - 'cap_setuid+ep /bin/zsh'
-      - 'cap_setuid+eip /bin/bash'
-      - 'cap_setuid+eip /usr/bin/bash'
-      - 'cap_setuid+eip /bin/sh'
-      - 'cap_setuid+eip /bin/zsh'
+      - 'cap_setuid=ep'
+      - 'cap_setuid=eip'
+      - 'cap_setuid+ep'
+      - 'cap_setuid+eip'
+    CommandLine:
+      - '*bash*'
+      - '*zsh*'
+      - '*fish*'
+      - '*python3*'
+      - '*perl*'
+      - '*ruby*'
+      - '*node*'
+      - '*php*'
   condition: selection

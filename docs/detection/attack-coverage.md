@@ -111,7 +111,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1059.005 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1087.002 | 3 | `rules:crates/rules/src/ldap.rs` |
-| T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml` |
+| T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml`, `sigma:rules/sigma/windows/powershell_add_sid_to_local_group.yml` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |

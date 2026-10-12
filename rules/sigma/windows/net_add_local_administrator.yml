@@ -1,8 +1,9 @@
 title: Net adds an account to the local Administrators group
 description: >
   Detects net.exe or net1.exe requesting a member addition to the local
-  Administrators group. It does not confirm the account change succeeded;
-  localized group names and other account-management tools are not covered.
+  built-in local administrators group using common European localized names.
+  It does not confirm the account change succeeded; SID-based PowerShell and
+  other account-management tools are outside this rule.
 tags:
   - attack.persistence
   - attack.privilege_escalation
@@ -20,5 +21,13 @@ detection:
     CommandLine|contains:
       - ' localgroup administrators '
       - ' localgroup "administrators" '
+      - ' localgroup administrateurs '
+      - ' localgroup "administrateurs" '
+      - ' localgroup administradores '
+      - ' localgroup "administradores" '
+      - ' localgroup administratoren '
+      - ' localgroup "administratoren" '
+      - ' localgroup amministratori '
+      - ' localgroup "amministratori" '
     CommandLine: '* /add*'
   condition: selection
