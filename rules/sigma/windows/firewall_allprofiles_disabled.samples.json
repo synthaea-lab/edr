@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\netsh.exe",
+    "cmdline": "netsh.exe advfirewall set allprofiles state off"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\netsh.exe",
+    "cmdline": "netsh.exe advfirewall set allprofiles state on",
+    "note": "The same configuration command enables all profiles rather than disabling them."
+  }
+}
