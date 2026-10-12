@@ -23,6 +23,17 @@ running. The halt can also land between the manifest and an artifact download;
 it is reported the same way, and entries already written stay recorded for the
 next run. The release is not marked applied until every artifact has landed.
 
+## Withdrawing a rule that an agent already applied
+
+An agent that has applied release N does not go back to an older release (anti-rollback,
+ADR-0016: `up to date (release 4, server offers 2)`). To take a bad rule off such an agent,
+publish a newer release that no longer lists it. After the new entries have landed, the agent
+deletes every file it had applied that the manifest no longer lists, and says how many
+(`applied release 5 (0 entries fetched, 2 removed)`); `check-content-manifest` lists them as
+`remove <path>`. Only files recorded in the agent's content state are removed, never anything
+outside the content directory, and never through a symlink. If the download of the new release
+fails, nothing is removed and the rules the agent runs today stay.
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,
