@@ -1,4 +1,4 @@
-title: Curl uploads a file to a cloud storage endpoint
+title: Windows curl uploads a file to a cloud storage endpoint
 description: >
   Detects curl using an upload option with a command line that names a common
   cloud-storage endpoint. It records an attempted command, not transferred
