@@ -13,7 +13,12 @@ canary_dirs = ["/srv/share", "/var/www/uploads"]   # absolute, existing, at most
 Each directory gets one canary per kind (credentials, finance, config, notes). Names and
 contents come from a per-install seed kept in `<state_dir>/deception/seed`, so two hosts
 get different files. Every canary starts with a line saying it is a machine-generated,
-inert decoy. Remove the `[deception]` table and restart to take them all back out.
+inert decoy. Their modification times are seed-derived and distinct within a directory; when
+neighboring files have a wide enough mtime range, the canaries are placed inside it. In an
+empty directory (or one whose files all have the same or too-close timestamps), each canary
+gets a different time one to 365 days in the past. Owner and mode are not matched yet: they
+remain the agent's defaults, and the agent logs both unmatched fields. Remove the
+`[deception]` table and restart to take them all back out.
 
 A canary that gets deleted is planted again, with the content it had, at the next start and
 within the hour while the agent runs (the deletion itself already raised a detection). A file
