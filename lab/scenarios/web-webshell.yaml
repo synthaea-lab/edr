@@ -28,4 +28,6 @@ notes: >
   not redacted then. It is now replaced by REDACTED when the matched parameter is named like
   a secret (unit tests and a `poll_source` test); this scenario's parameters are not, and it
   has not been re-run on a live nginx since.
-  Not covered: Apache, php-fpm as the parent, a custom LogFormat.
+  Re-run 2026-10-07 on Debian 13 (6.12.107) against Apache 2.4 with `FAKE_COMM=apache2`: T1505.003
+  and T1059 fire, four `http_request` events. php-fpm as the parent is web-webshell-php; a custom
+  LogFormat is web-custom-logformat.

@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/tmp/payload",
+    "cmdline": "/tmp/payload"
+  },
+  "non_matching": {
+    "image": "/bin/cat",
+    "cmdline": "cat /tmp/x",
+    "note": "Near miss: the rule keys on Image (the executable's own path), not CommandLine; a normal system binary whose argument merely mentions /tmp must not match, or the implementation is checking the wrong field."
+  }
+}

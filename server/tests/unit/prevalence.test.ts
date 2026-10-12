@@ -4,12 +4,18 @@ import { NextRequest } from "next/server";
 const db = vi.hoisted(() => ({
   agent: { findUnique: vi.fn(), update: vi.fn() },
   detection: { create: vi.fn() },
-  prevalenceSighting: { aggregate: vi.fn() },
+  prevalenceSighting: { aggregate: vi.fn(), findMany: vi.fn() },
   $executeRaw: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
-import { extractObservations, getPrevalence, recordObservations } from "@/lib/prevalence";
+import {
+  extractObservations,
+  getPrevalence,
+  getSightingsOf,
+  MAX_PIVOT_HOSTS,
+  recordObservations,
+} from "@/lib/prevalence";
 import { GET as getPrevalenceRoute } from "@/app/api/prevalence/route";
 import { POST as ingestDetection } from "@/app/api/ingest/detection/route";
 
@@ -116,6 +122,46 @@ describe("getPrevalence", () => {
       _max: { lastSeen: null },
     });
     expect(await getPrevalence(db as never, "t1", "domain", "never.example")).toBeNull();
+  });
+});
+
+describe("getSightingsOf", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const row = (agentId: string) => ({
+    agentId,
+    firstSeen: new Date("2026-09-01"),
+    lastSeen: new Date("2026-09-29"),
+    count: 1,
+  });
+
+  it("returns null for a key this tenant has never seen", async () => {
+    db.prevalenceSighting.findMany.mockResolvedValue([]);
+    expect(await getSightingsOf(db as never, "t1", "sha256", SHA)).toBeNull();
+  });
+
+  it("reports the rows unflagged when under the cap", async () => {
+    db.prevalenceSighting.findMany.mockResolvedValue([row("a1"), row("a2")]);
+    const page = await getSightingsOf(db as never, "t1", "sha256", SHA);
+    expect(page?.sightings).toHaveLength(2);
+    expect(page?.truncated).toBe(false);
+  });
+
+  it("caps at MAX_PIVOT_HOSTS and reports the truncation, not a silent cut", async () => {
+    // One row past the cap is exactly what the one-extra `take` is for: it is
+    // what tells `getSightingsOf` there was more to cut, not just that the
+    // fleet happened to have precisely `MAX_PIVOT_HOSTS` hosts.
+    const rows = Array.from({ length: MAX_PIVOT_HOSTS + 1 }, (_, i) => row(`a${i}`));
+    db.prevalenceSighting.findMany.mockResolvedValue(rows);
+    const page = await getSightingsOf(db as never, "t1", "sha256", SHA);
+    expect(page?.sightings).toHaveLength(MAX_PIVOT_HOSTS);
+    expect(page?.truncated).toBe(true);
+  });
+
+  it("queries MAX_PIVOT_HOSTS + 1 rows so truncation is detectable", async () => {
+    db.prevalenceSighting.findMany.mockResolvedValue([row("a1")]);
+    await getSightingsOf(db as never, "t1", "image_path", "/usr/bin/curl");
+    expect(db.prevalenceSighting.findMany.mock.calls[0][0].take).toBe(MAX_PIVOT_HOSTS + 1);
   });
 });
 

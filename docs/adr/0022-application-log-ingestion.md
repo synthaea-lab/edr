@@ -1,6 +1,6 @@
 # ADR-0022: Application log ingestion — what the agent reads, how, and what leaves the host
 
-- **Status**: proposed
+- **Status**: accepted (2026-10-07)
 - **Date**: 2026-10-01
 
 ## Context
@@ -199,5 +199,12 @@ log paths; Level 3.
 4. **Silence of a log source.** No alert in v1. A quiet site is normal, and the ADR
    does not fake a canary.
 
-What still stands between this ADR and `accepted` is the lab validation listed under
-Consequences (real Apache, nginx and MariaDB logs), and a review.
+Validation, completed 2026-10-07: nginx 1.24 with the real agent (`web-webshell.sh`, earlier),
+then Debian 13 (kernel 6.12.107) with Apache 2.4, PHP-FPM 8.4 and MariaDB, the agent run as
+root: a webshell request followed by a shell spawned by an `apache2` parent
+(`web-webshell.sh`, `FAKE_COMM=apache2`) and by a real php-fpm worker
+(`web-webshell-php.sh`), both paired as T1505.003 and T1059; the evidence value of a
+parameter named `password` leaves as `REDACTED`; six failed logins raise T1110 from the
+MariaDB error log; a custom `LogFormat` raises `LOG-SOURCE` (`web-custom-logformat.sh`);
+one `http_summary` per source. Not validated: MySQL 8 against the full agent, and a client
+logged with a resolved IP.
