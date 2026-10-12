@@ -36,6 +36,13 @@ ignore = [
     # yara-x 1.21.0, the latest, still requires wasmtime ^45.0.3 and the fixes are
     # 48.0.4/49.0.2: bump the moment yara-x's requirement allows one.
     "RUSTSEC-2026-0327",
+    # unsafe-libyaml is unmaintained (archived 2024-03-25), pulled in only via
+    # serde_yaml (itself deprecated), which `sigma` uses to parse Sigma rule YAML —
+    # signed detection content we distribute ourselves, not arbitrary network input.
+    # No vulnerability, just no more upstream fixes. Revisit when sigma moves off
+    # serde_yaml (the advisory suggests saphyr/serde-saphyr as a maintained
+    # replacement).
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
