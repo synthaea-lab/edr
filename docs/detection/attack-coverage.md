@@ -113,4 +113,5 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1562 | 3 | `rules:crates/rules/src/state.rs` |
 
