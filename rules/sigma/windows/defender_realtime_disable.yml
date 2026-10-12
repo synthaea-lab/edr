@@ -1,0 +1,23 @@
+title: Defender real-time monitoring disabled by PowerShell command
+description: >
+  Detects PowerShell ending its command with an explicit request to disable
+  Defender real-time monitoring. A request with $false re-enables monitoring
+  and is excluded. The exec event does not prove the preference change succeeded.
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - synthaea.coverage.defense_evasion
+level: medium
+falsepositives:
+  - Administrators temporarily disabling monitoring for an approved compatibility
+    investigation, performance experiment or controlled security-product lab.
+detection:
+  selection:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|endswith:
+      - 'Set-MpPreference -DisableRealtimeMonitoring $true'
+      - 'Set-MpPreference -DisableRealtimeMonitoring $true"'
+      - "Set-MpPreference -DisableRealtimeMonitoring $true'"
+  condition: selection

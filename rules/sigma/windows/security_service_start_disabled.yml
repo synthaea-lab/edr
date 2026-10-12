@@ -1,0 +1,22 @@
+title: Security service configured with disabled startup
+description: >
+  Detects sc.exe requesting disabled startup for Defender, Defender for Endpoint
+  or Sysmon. The exact service and startup value distinguish this from routine
+  service queries or unrelated service configuration; success is not observed.
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - synthaea.coverage.defense_evasion
+level: medium
+falsepositives:
+  - Security administrators removing or replacing an agent, rebuilding an image
+    or changing a lab's instrumentation under an approved maintenance plan.
+detection:
+  selection:
+    Image|endswith: '\sc.exe'
+    CommandLine|endswith:
+      - ' config WinDefend start= disabled'
+      - ' config Sense start= disabled'
+      - ' config Sysmon start= disabled'
+      - ' config Sysmon64 start= disabled'
+  condition: selection

@@ -1,0 +1,22 @@
+title: Linux audit daemon masked and stopped immediately
+description: >
+  Detects systemctl combining mask with --now for auditd, a request both to
+  stop the daemon and prevent subsequent service starts. Generic service
+  maintenance and masking another service are excluded; success is not observed.
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - synthaea.coverage.defense_evasion
+level: medium
+falsepositives:
+  - Security administrators migrating audit collection, removing auditd from
+    an intentionally minimal image or configuring a controlled kernel-audit lab.
+detection:
+  selection:
+    Image|endswith: '/systemctl'
+    CommandLine|endswith:
+      - ' mask --now auditd'
+      - ' mask --now auditd.service'
+      - ' --now mask auditd'
+      - ' --now mask auditd.service'
+  condition: selection
