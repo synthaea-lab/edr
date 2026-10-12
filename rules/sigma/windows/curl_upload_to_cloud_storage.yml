@@ -18,6 +18,7 @@ detection:
     CommandLine|contains:
       - '--upload-file'
       - ' -T '
+      - '-T'
     CommandLine:
       - '*drive.google.com*'
       - '*storage.googleapis.com*'
