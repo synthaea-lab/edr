@@ -18,8 +18,8 @@ detection:
       - '\procdump64.exe'
       - '\procdump64a.exe'
     CommandLine|contains:
-      - ' -ma lsass.exe '
-      - ' -ma lsass '
-      - ' -ma "lsass.exe" '
-      - ' -ma "lsass" '
+      - ' -ma lsass.exe'
+      - ' -ma lsass'
+      - ' -ma "lsass.exe"'
+      - ' -ma "lsass"'
   condition: selection
