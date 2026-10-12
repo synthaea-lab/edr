@@ -35,7 +35,21 @@ carries the earlier content.
 3. **The corrective release is built and signed offline**, like every release: `release-tool
    roll-forward` rebuilds an earlier content manifest under a new number, `release-tool sign
    --kind content` signs it, and it is published through `POST /api/content/release`. The control
-   plane does not hold the key and does not mint releases.
+   plane does not hold the key and does not mint releases. `roll-forward` **verifies the earlier
+   manifest's signature first** (against the key the tool embeds) and refuses an empty one: the
+   offline step is the trust boundary, and a manifest taken from a store the control plane holds
+   must not come out of it validly signed with edited entries.
+3a. **The artifact store keeps one file per path, shared by every release.** A corrective release
+   can therefore withdraw content a later release *added* (its files are simply no longer listed),
+   but for content a later release *modified* the earlier bytes must be put back in
+   `storage/artifacts` first: the manifest lists the earlier hash, the store holds the later bytes,
+   and every agent would get a 502 on that fetch. `release-tool roll-forward --current <manifest
+   being withdrawn>` lists those paths, and **`POST /api/content/release` now refuses (422) a
+   release whose manifest is not the one named, lists nothing, is for another ring, carries a
+   number other than the one it will assign, or lists an artifact that is missing from the store
+   or does not hash to its value**, instead of failing for the whole ring when it is served.
+   Storing artifacts by hash would remove the restoring step and is the larger change this does
+   not make.
 4. **The rollback endpoint keeps its job, and says what it does not do.** It still reactivates
    the earlier release for agents that have not applied the rolled-back one. Its response and its
    audit entry now name the corrective release that is needed (the number to use, the release to
@@ -47,6 +61,12 @@ carries the earlier content.
 
 ## Consequences
 
+- A corrective release over a modified path is a two-step operation (restore the bytes, then
+  publish); the tool says which paths and the server refuses a publish that skips it.
+- Known and not changed here: the release and rollback routes check a session and a tenant but
+  not an administrator role although their docstrings say so (it predates this ADR and matters
+  more now); and after an agent was pointed at another ring the "stays on release N" message can
+  be wrong, because the agent's applied-entries state is one map for all rings (#666).
 - No new trust primitive, no change to what an attacker who can replay old manifests can do, and
   no new thing to verify, rotate or revoke.
 - Withdrawing content takes a signing step. With the custody of the production keys still open
