@@ -692,3 +692,114 @@ fn a_linux_leaf_match_stays_case_sensitive() {
     ));
     assert!(alerts.iter().all(|a| a.technique != "T1105"), "{alerts:?}");
 }
+
+// ── POLICY-DENIAL-DRIFT via AppLocker / WDAC (#796, PolicyDenialEvent) ──
+
+fn applocker_denial(class: &str, path: &str, enforced: bool) -> PolicyDenialEvent {
+    PolicyDenialEvent {
+        action: Some("execute".to_string()),
+        object_path: Some(path.to_string()),
+        ..policy_denial_event_full("applocker", None, None, Some(class), enforced)
+    }
+}
+
+fn wdac_denial(process: &str, file: &str, enforced: bool) -> PolicyDenialEvent {
+    PolicyDenialEvent {
+        action: Some("load".to_string()),
+        object_path: Some(file.to_string()),
+        ..policy_denial_event_full("wdac", Some(process), None, Some("user-mode"), enforced)
+    }
+}
+
+#[test]
+fn applocker_alerts_once_per_blocked_file_not_once_per_rule_collection() {
+    // The #781 key collapsed every AppLocker denial to its rule collection: the
+    // second blocked .exe of the run never alerted.
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let second = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\b.exe", true));
+    let repeat = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert!(repeat.is_empty(), "{repeat:?}");
+    assert!(
+        first[0].message.contains(r"C:\Users\x\a.exe"),
+        "{}",
+        first[0].message
+    );
+}
+
+#[test]
+fn applocker_paths_match_case_insensitively() {
+    // FullFilePath keeps the original case; an expanded FilePath is upper-case.
+    let mut state = RuleState::new();
+    let full = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\Evil.exe", true));
+    let expanded = state.on_policy_denial(&applocker_denial("EXE", r"C:\USERS\X\EVIL.EXE", true));
+    assert_eq!(full.len(), 1);
+    assert!(expanded.is_empty(), "{expanded:?}");
+}
+
+#[test]
+fn applocker_same_file_in_another_rule_collection_is_a_new_shape() {
+    let mut state = RuleState::new();
+    let exe = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\run.ps1", true));
+    let script = state.on_policy_denial(&applocker_denial("SCRIPT", r"C:\Users\x\run.ps1", true));
+    assert_eq!(exe.len(), 1);
+    assert_eq!(script.len(), 1);
+}
+
+#[test]
+fn an_enforced_windows_denial_is_medium_and_an_audit_one_low() {
+    let mut state = RuleState::new();
+    let blocked = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let audited = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\b.exe", false));
+    assert_eq!(blocked[0].severity, schema::detection::Severity::Medium);
+    assert_eq!(audited[0].severity, schema::detection::Severity::Low);
+    assert!(
+        audited[0].message.contains("audit mode"),
+        "{}",
+        audited[0].message
+    );
+    assert!(
+        blocked
+            .iter()
+            .chain(&audited)
+            .all(|a| a.technique == "T1562")
+    );
+}
+
+#[test]
+fn wdac_is_keyed_by_the_loading_process_and_the_file() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let regsvr = r"\Device\HarddiskVolume3\Windows\System32\regsvr32.exe";
+    let dll = r"\Device\HarddiskVolume3\Users\Public\x.dll";
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&wdac_denial(rundll, dll, true));
+    let other_process = state.on_policy_denial(&wdac_denial(regsvr, dll, true));
+    let repeat = state.on_policy_denial(&wdac_denial(
+        &rundll.to_uppercase(),
+        &dll.to_uppercase(),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(other_process.len(), 1);
+    assert!(repeat.is_empty(), "{repeat:?}");
+    assert!(
+        first[0].message.contains("rundll32.exe"),
+        "{}",
+        first[0].message
+    );
+}
+
+#[test]
+fn a_windows_denial_does_not_share_a_shape_with_selinux() {
+    // Same class string, different mechanism: two separate keys.
+    let mut state = RuleState::new();
+    let applocker = state.on_policy_denial(&applocker_denial("file", "/etc/shadow", true));
+    let selinux = state.on_policy_denial(&PolicyDenialEvent {
+        object_path: Some("/etc/shadow".to_string()),
+        ..policy_denial_event_full("selinux", None, None, Some("file"), true)
+    });
+    assert_eq!(applocker.len(), 1);
+    assert_eq!(selinux.len(), 1);
+}

@@ -10,8 +10,9 @@ use std::{
 use schema::{
     AuthEvent, AuthOutcome, ConnectEvent, Event, ExecEvent, FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN,
     FileDeleteEvent, FileOpenEvent, FileQuarantineEvent, FileRenameEvent, FileWriteEvent,
-    ListenPortEvent, MemfdCreateEvent, NetworkFlowEvent, O_CREAT, POLICY_MECHANISM_SELINUX,
-    PolicyDenialEvent, SessionEvent, SessionState, User, detection::Severity,
+    ListenPortEvent, MemfdCreateEvent, NetworkFlowEvent, O_CREAT, POLICY_MECHANISM_APPLOCKER,
+    POLICY_MECHANISM_SELINUX, POLICY_MECHANISM_WDAC, PolicyDenialEvent, SessionEvent, SessionState,
+    User, detection::Severity,
 };
 use store::BoundedMap;
 
@@ -108,10 +109,16 @@ impl PidFact {
     }
 }
 
-/// `known_policy_denials`' key: (mechanism, subject context, object context, object
-/// class). Named so clippy's `type_complexity` lint doesn't flag the field
-/// declaration.
-type PolicyDenialKey = (String, Option<String>, Option<String>, Option<String>);
+/// `known_policy_denials`' key: (mechanism, subject context, object context,
+/// object class, object path). Named so clippy's `type_complexity` lint doesn't
+/// flag the field declaration.
+type PolicyDenialKey = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Sliding history needed by the correlation rules:
 /// - T1105 (Ingress Tool Transfer): a path recently written by `curl`/`wget` is
@@ -176,16 +183,12 @@ pub struct RuleState {
     /// first run is cold by design. LRU-bounded like every other stateful
     /// rule.
     ///
-    /// `SELinux` only (`check_policy_denial_drift` gates on
-    /// [`POLICY_MECHANISM_SELINUX`]): `scontext`/`tcontext` give each denial a
-    /// rich, domain-specific triple. AppLocker/WDAC `PolicyDenialEvent`s carry
-    /// no subject/object context at all (`None`/`None`), so their "shape"
-    /// would collapse to `object_class` alone — 5 values for `AppLocker`
-    /// (`EXE`/`DLL`/`MSI`/`SCRIPT`/`APPX`), 2 for WDAC — meaning the *first*
-    /// blocked `.exe` ever seen would alert and every distinct one after it,
-    /// forever, would not. Needs a richer per-mechanism key (likely
-    /// `object_path`) before it's worth extending; tracked as a follow-up,
-    /// not done here.
+    /// The key is per mechanism ([`policy_denial_key`]). `SELinux`'s
+    /// `scontext`/`tcontext` give each denial a rich, domain-specific triple.
+    /// AppLocker/WDAC denials carry no such contexts, so a key without the file
+    /// would collapse to `object_class` alone (5 values for `AppLocker`, 2 for
+    /// WDAC): the first blocked `.exe` would alert and every other one after it,
+    /// for the whole run, would not. Their key is the file instead (#796).
     known_policy_denials: BoundedMap<PolicyDenialKey, ()>,
     /// New-shape alerts `check_policy_denial_drift` has raised, against
     /// [`POLICY_DENIAL_ALERT_CAP`] (#812): `known_policy_denials` bounds what the rule
@@ -1000,15 +1003,15 @@ impl RuleState {
     }
 
     /// POLICY-DENIAL-DRIFT (issue #774, T1562-adjacent) — see
-    /// `known_policy_denials`'s doc for why this alerts on a new
-    /// (subject, object, class) triple rather than on every denial. Fires for
-    /// `PolicyDenialEvent::enforced` either way (`SELinux` permissive logs the
-    /// same fact a managed Enforcing host would act on) — the point is a new
-    /// *shape* of denial, not whether this particular one was blocked.
+    /// `known_policy_denials`'s doc for why this alerts on a new denial shape
+    /// rather than on every denial, and [`policy_denial_key`] for what a shape is
+    /// per mechanism.
     ///
-    /// `SELinux` only for now — see `known_policy_denials`'s doc for why an
-    /// AppLocker/WDAC `PolicyDenialEvent` would collapse to a far coarser
-    /// shape with this same key.
+    /// `SELinux` only fires at Medium for [`PolicyDenialEvent::enforced`] either way
+    /// (permissive logs the same fact a managed Enforcing host would act on).
+    /// AppLocker/WDAC split it (#796): Medium when the policy blocked the action,
+    /// Low in audit mode, where a fresh rollout logs every unlisted binary once
+    /// as routine. Any other mechanism has no key yet and never alerts.
     ///
     /// Inert while the eBPF sensor is selected (#780): `SELinux` AVC denials
     /// only reach the agent through the audit sensor, so silence here does not
@@ -1024,15 +1027,7 @@ impl RuleState {
     /// alerted. `known_policy_denials` keeps deduplicating regardless — the cap bounds
     /// alert volume, not the rule's memory of what it has already seen.
     fn check_policy_denial_drift(&mut self, event: &PolicyDenialEvent) -> Option<Alert> {
-        if event.mechanism != POLICY_MECHANISM_SELINUX {
-            return None;
-        }
-        let key: PolicyDenialKey = (
-            event.mechanism.clone(),
-            Self::selinux_type_triple(event.subject_context.as_deref()),
-            Self::selinux_type_triple(event.object_context.as_deref()),
-            event.object_class.clone(),
-        );
+        let key = policy_denial_key(event)?;
         let seen_before = self.known_policy_denials.get(&key).is_some();
         if !seen_before {
             self.known_policy_denials.insert(key, ());
@@ -1052,18 +1047,42 @@ impl RuleState {
             return None;
         }
         self.policy_denial_alerts += 1;
+        if event.mechanism == POLICY_MECHANISM_SELINUX {
+            return Some(Alert {
+                technique: "T1562",
+                severity: Severity::Medium,
+                message: format!(
+                    "comm={} mechanism={} subject={} object={} class={} path={} enforced={} — new denial shape, not seen this run",
+                    event.meta.comm,
+                    event.mechanism,
+                    event.subject_context.as_deref().unwrap_or("-"),
+                    event.object_context.as_deref().unwrap_or("-"),
+                    event.object_class.as_deref().unwrap_or("-"),
+                    event.object_path.as_deref().unwrap_or("-"),
+                    event.enforced,
+                ),
+            });
+        }
         Some(Alert {
             technique: "T1562",
-            severity: Severity::Medium,
+            severity: if event.enforced {
+                Severity::Medium
+            } else {
+                Severity::Low
+            },
             message: format!(
-                "comm={} mechanism={} subject={} object={} class={} path={} enforced={} — new denial shape, not seen this run",
-                event.meta.comm,
+                "pid={} mechanism={} action={} path={} class={} process={} — {}, first time this run",
+                event.meta.pid,
                 event.mechanism,
-                event.subject_context.as_deref().unwrap_or("-"),
-                event.object_context.as_deref().unwrap_or("-"),
-                event.object_class.as_deref().unwrap_or("-"),
+                event.action.as_deref().unwrap_or("-"),
                 event.object_path.as_deref().unwrap_or("-"),
-                event.enforced,
+                event.object_class.as_deref().unwrap_or("-"),
+                event.subject_context.as_deref().unwrap_or("-"),
+                if event.enforced {
+                    "blocked by policy"
+                } else {
+                    "would be blocked (audit mode)"
+                },
             ),
         })
     }
@@ -1942,6 +1961,45 @@ fn is_rotation_suffix(suffix: &str) -> bool {
 
 fn is_all_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// What makes two denials "the same shape" for POLICY-DENIAL-DRIFT, per
+/// mechanism; `None` for a mechanism without one (no alert).
+///
+/// - `SELinux`: (scontext, tcontext, tclass), as #774 defined it.
+/// - `AppLocker`: (rule collection, file). The file is the only thing that tells
+///   two denials apart: the event has no subject or object context.
+/// - WDAC: (loading process, file, signing scenario).
+///
+/// Windows paths are lowercased: they are case-insensitive, and `AppLocker`
+/// reports the same file as `C:\Users\x\EVIL.EXE` from `FullFilePath` and
+/// `C:\USERS\X\EVIL.EXE` from an expanded `FilePath` (#796).
+fn policy_denial_key(event: &PolicyDenialEvent) -> Option<PolicyDenialKey> {
+    let lower = |text: &Option<String>| text.as_deref().map(str::to_lowercase);
+    match event.mechanism.as_str() {
+        POLICY_MECHANISM_SELINUX => Some((
+            event.mechanism.clone(),
+            RuleState::selinux_type_triple(event.subject_context.as_deref()),
+            RuleState::selinux_type_triple(event.object_context.as_deref()),
+            event.object_class.clone(),
+            None,
+        )),
+        POLICY_MECHANISM_APPLOCKER => Some((
+            event.mechanism.clone(),
+            None,
+            None,
+            event.object_class.clone(),
+            lower(&event.object_path),
+        )),
+        POLICY_MECHANISM_WDAC => Some((
+            event.mechanism.clone(),
+            lower(&event.subject_context),
+            None,
+            event.object_class.clone(),
+            lower(&event.object_path),
+        )),
+        _ => None,
+    }
 }
 
 /// Matches `/dev/fd/<n>` — `execveat(fd, "", AT_EMPTY_PATH)`'s `bprm->filename`
