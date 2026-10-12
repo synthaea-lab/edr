@@ -1,7 +1,8 @@
 title: Remote scheduled task created to run as SYSTEM
 description: >
   Detects schtasks requesting creation on an explicit remote host with SYSTEM
-  as the final run-as argument. The rule observes privileged remote task
+  as its run-as account, including commands with later /rp, /f or /rl options.
+  The rule observes privileged remote task
   creation arguments, not whether the task was accepted or ran.
 tags:
   - attack.persistence
@@ -17,7 +18,9 @@ detection:
   selection:
     Image|endswith: '\schtasks.exe'
     CommandLine|contains: ' /create /s '
-    CommandLine|endswith:
-      - ' /ru SYSTEM'
-      - ' /ru "SYSTEM"'
+    CommandLine:
+      - '* /ru SYSTEM'
+      - '* /ru SYSTEM *'
+      - '* /ru "SYSTEM"'
+      - '* /ru "SYSTEM" *'
   condition: selection
