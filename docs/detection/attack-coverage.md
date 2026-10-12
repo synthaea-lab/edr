@@ -94,7 +94,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
-| T1041 | 3 | `rules:crates/rules/src/state.rs` |
+| T1041 | 3 | `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/linux/tar_streamed_to_curl_upload.yml`, `sigma:rules/sigma/windows/bitsadmin_upload_job.yml` |
 | T1048.003 | 6 | `correlator:crates/correlator/src/rules.rs` |
 
 ## Impact
@@ -119,4 +119,6 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/linux/tar_streamed_to_curl_upload.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |
+| T1567.002 | 3 | `sigma:rules/sigma/linux/curl_upload_to_cloud_storage.yml`, `sigma:rules/sigma/windows/curl_upload_to_cloud_storage.yml` |
 

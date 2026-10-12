@@ -1,0 +1,27 @@
+title: Curl uploads a file to a cloud storage endpoint
+description: >
+  Detects curl using an upload option with a command line that names a common
+  cloud-storage endpoint. It records an attempted command, not transferred
+  bytes or a successful upload; other storage providers and aliases are not
+  covered.
+tags:
+  - attack.exfiltration
+  - attack.t1567.002
+  - synthaea.coverage.collection_exfiltration
+level: medium
+falsepositives:
+  - Developers publishing build artifacts and administrators uploading
+    approved backups to organizational cloud storage.
+detection:
+  selection:
+    Image|endswith: '/curl'
+    CommandLine|contains:
+      - '--upload-file'
+      - ' -T '
+    CommandLine:
+      - '*drive.google.com*'
+      - '*storage.googleapis.com*'
+      - '*dropboxapi.com*'
+      - '*blob.core.windows.net*'
+      - '*sharepoint.com*'
+  condition: selection
