@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "/bin/bash",
+    "cmdline": "bash -c echo ssh-rsa AAAA... >> ~/.ssh/authorized_keys"
+  },
+  "non_matching": {
+    "image": "/usr/bin/crontab",
+    "cmdline": "crontab -l"
+  }
+}

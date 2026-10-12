@@ -26,6 +26,13 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    files touched before the history began (a process pushed out by 64 busier ones loses its
    manifest, not its detection).
 
+   **Reflex (built, #82).** `agent/src/ransomware_join.rs` joins the two signals per process
+   incarnation `(pid, process_generation)` in a sliding 60 s window of event time, in either
+   order, bounded to 256 processes with counted shedding. A corroborated process goes to the
+   policy-gated kill (`RESPONSE-KILL ... on a corroborated ransomware signal`); the Bayes gate
+   and severity are untouched. Observe-only unless `--enable-kill`. Not built: killing the
+   tree, quarantining the binary, and the lab acceptance run below.
+
 Acceptance is scenario-driven: a lab encryptor (benign, marker-based) must be killed
 before it processes more than N canary-adjacent files.
 

@@ -24,7 +24,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install tooling
-        run: pip install ruff pytest
+        # ruff pinned: unpinned, an unrelated ruff release can start flagging
+        # something that was always fine (RUF100 on the two now-removed
+        # DTZ001 noqa comments, found live when 0.17.0 landed mid-review and
+        # failed every PR touching ml/, main included — not a ml/ content bug).
+        run: pip install "ruff==0.17.0" pytest
       - name: ruff
         run: ruff check ml
       - name: pytest
