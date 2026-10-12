@@ -14,9 +14,11 @@ falsepositives:
 detection:
   selection:
     Image|endswith: '/systemctl'
-    CommandLine|endswith:
+    CommandLine|contains:
       - ' mask --now auditd'
       - ' mask --now auditd.service'
       - ' --now mask auditd'
       - ' --now mask auditd.service'
+      - ' mask auditd --now'
+      - ' mask auditd.service --now'
   condition: selection

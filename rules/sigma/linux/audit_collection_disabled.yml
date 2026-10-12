@@ -14,5 +14,5 @@ falsepositives:
 detection:
   selection:
     Image|endswith: '/auditctl'
-    CommandLine|endswith: ' -e 0'
+    CommandLine|contains: ' -e 0'
   condition: selection

@@ -14,5 +14,5 @@ falsepositives:
 detection:
   selection:
     Image|endswith: '\netsh.exe'
-    CommandLine|endswith: ' advfirewall set allprofiles state off'
+    CommandLine|contains: ' advfirewall set allprofiles state off'
   condition: selection
