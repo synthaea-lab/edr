@@ -5,6 +5,6 @@
   },
   "non_matching": {
     "image": "C:\\Windows\\System32\\curl.exe",
-    "cmdline": "curl.exe --upload-file C:\\Build\\artifact.zip https://packages.corp.example/upload"
+    "cmdline": "curl.exe -H \"Content-Type: application/json\" --max-time 30 https://storage.googleapis.com/acme/archive.zip"
   }
 }

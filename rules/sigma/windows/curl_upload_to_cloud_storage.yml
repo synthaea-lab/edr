@@ -17,8 +17,7 @@ detection:
     Image|endswith: '\curl.exe'
     CommandLine|contains:
       - '--upload-file'
-      - ' -T '
-      - '-T'
+      - ' -T'
     CommandLine:
       - '*drive.google.com*'
       - '*storage.googleapis.com*'

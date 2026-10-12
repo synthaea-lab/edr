@@ -5,6 +5,6 @@
   },
   "non_matching": {
     "image": "/usr/bin/curl",
-    "cmdline": "curl -T /srv/build/archive.tar.gz https://packages.corp.example/upload"
+    "cmdline": "curl -H \"Content-Type: application/json\" --max-time 30 https://dropboxapi.com/2/files/archive.tar.gz"
   }
 }
