@@ -152,6 +152,7 @@ pub fn evaluate_exec(event: &ExecEvent) -> Vec<Alert> {
         .chain(check_masquerading(event))
         .chain(check_recovery_inhibit(event))
         .chain(check_log_clear_exec(event))
+        .chain(check_event_logging_disable_exec(event))
         .collect()
 }
 
@@ -746,6 +747,80 @@ pub(crate) fn check_log_clear_exec(event: &ExecEvent) -> Option<Alert> {
         severity: Severity::High,
         message: format!(
             "pid={} comm={}: log-clearing command: {}",
+            event.meta.pid, event.meta.comm, event.cmdline,
+        ),
+    })
+}
+
+/// T1562.002 — Impair Defenses: Disable Windows Event Logging. The exec-side
+/// counterpart of [`check_log_clear_exec`]: instead of wiping what was logged,
+/// stop anything new from being logged. Each pattern is a list of groups that
+/// must all appear in the lowercased command line, a group matching on any of its
+/// alternatives.
+///
+/// Only the disabling forms match: the agent itself runs
+/// `auditpol /set /subcategory:{guid} /success:enable /failure:enable` and
+/// `wevtutil qe` (`sensor-windows-eventlog`), and neither may alert. A channel
+/// disabled through the API rather than a command is not seen here; the sensor's
+/// start-up channel check (#786) covers that case once, at start-up.
+#[must_use]
+pub(crate) fn check_event_logging_disable_exec(event: &ExecEvent) -> Option<Alert> {
+    const PATTERNS: &[(&str, &[&[&str]])] = &[
+        (
+            "event log channel disabled",
+            &[
+                &["wevtutil"],
+                &[" sl ", "set-log"],
+                &["/e:false", "/enabled:false"],
+            ],
+        ),
+        ("audit policy cleared", &[&["auditpol"], &["/clear"]]),
+        ("audit policy removed", &[&["auditpol"], &["/remove"]]),
+        (
+            "audit subcategory disabled",
+            &[
+                &["auditpol"],
+                &["/set"],
+                &["/success:disable", "/failure:disable"],
+            ],
+        ),
+        (
+            "EventLog service disabled",
+            &[&["sc"], &[" config "], &[" eventlog "], &["disabled"]],
+        ),
+        (
+            "EventLog service stopped",
+            &[&["sc", "net"], &[" stop "], &[" eventlog"]],
+        ),
+        (
+            "EventLog service stopped",
+            &[&["stop-service"], &["eventlog"]],
+        ),
+        (
+            "EventLog service disabled",
+            &[&["set-service"], &["eventlog"], &["disabled"]],
+        ),
+        (
+            "EventLog service disabled",
+            &[
+                &["reg"],
+                &[" add "],
+                &[r"\services\eventlog"],
+                &["/v start"],
+            ],
+        ),
+    ];
+    let cmdline = event.cmdline.to_ascii_lowercase();
+    let &(what, _) = PATTERNS.iter().find(|(_, groups)| {
+        groups
+            .iter()
+            .all(|alternatives| alternatives.iter().any(|token| cmdline.contains(token)))
+    })?;
+    Some(Alert {
+        technique: "T1562.002",
+        severity: Severity::High,
+        message: format!(
+            "pid={} comm={}: {what}: {}",
             event.meta.pid, event.meta.comm, event.cmdline,
         ),
     })
