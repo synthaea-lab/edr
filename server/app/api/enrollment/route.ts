@@ -5,7 +5,13 @@ import { z } from "zod";
 
 const EnrollmentSchema = z.object({
   enrollmentId: z.string(),
-  hostname: z.string().optional(),
+  // Self-declared and later shown in alarms: bounded and printable.
+  hostname: z
+    .string()
+    .max(253)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00-\x1f\x7f]*$/)
+    .optional(),
   version: z.string().optional(),
 });
 

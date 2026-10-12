@@ -1,7 +1,7 @@
 # ADR-0020: Getting fleet prevalence to the agent, and out of the tenant
 
-- **Status**: proposed
-- **Date**: 2026-09-30
+- **Status**: accepted for decisions 1 and 2; decision 3 is not decided (see below)
+- **Date**: 2026-09-30 (accepted 2026-10-09)
 
 ## Context
 
@@ -23,7 +23,7 @@ the capture thread must not wait on the network; the agent works offline
 (`offline_fallback`); content already reaches agents through signed, ring-scoped
 manifests (ADR-0016); per-tenant data stays per-tenant (`server/prevalence/README.md`).
 
-## Decision (proposed)
+## Decision
 
 ### 1. Push a snapshot; do not query per event
 
@@ -48,15 +48,23 @@ is its one advantage, and the per-hash cost is what rules it out at fleet scale.
 ### 2. The ML feature is computed from the same snapshot
 
 Whatever the model consumes must be derivable on the device, so the rarity feature is
-defined over the snapshot: a small ordinal (in the common set / not), not a host
-count. A tiered pair of filters (K1, K2) would give three levels if two prove too
-coarse. Training data must use **point-in-time** values (the snapshot as of the
-event, not today's counters), or the model learns from the future; that needs
-snapshot history, which the telemetry lake does not yet provide. The feature is
-therefore blocked on the lake and on item 1, and comes with a shared fixture on both
-sides of the parity seam like every other feature.
+defined over the snapshot, as two numbers: `rarity_known` (a snapshot exists, covers
+enough hosts, and the event carries a hash) and `image_in_common_set`, an ordinal rather
+than a host count. A tiered pair of filters (K1, K2) would give three levels if two prove
+too coarse. Training data must use **point-in-time** values (the snapshot as of the event,
+not today's counters), or the model learns from the future. A site corpus that carries
+agent id, time and image hash can supply them by itself (`synthaea_ml/data/common_set.py`,
+#640), so the feature does not wait for the telemetry lake; the lake (`server/datalake`,
+#77) is only needed to train on fleet history. The Rust mirror takes the same two inputs
+and comes with a shared fixture on both sides of the parity seam like every other feature.
 
-### 3. Global statistics: hashes only, k across tenants, opt-in, not built
+**Left to calibration, not fixed here:** K (how many hosts make a hash "common"), the
+minimum number of hosts a snapshot must cover before the evidence counts, the snapshot
+cadence (24 h in the Python replay) and the filter's false-positive rate. They are set on
+lab data and recorded where they are used (the manifest entry, the model record), not in
+this ADR.
+
+### 3. Global statistics: hashes only, k across tenants, opt-in, not built, not decided
 
 If built: only `sha256` (a public property of a file, unlike a path or domain, which
 identify an organisation), only keys seen in at least k distinct tenants, only as
@@ -72,7 +80,8 @@ legal decisions, not engineering ones, and this ADR does not pick them.
   its weight in the belief must be calibrated, not assumed.
 - Snapshot size grows with the fleet's distinct common hashes; a cap and a K that keeps
   it small are part of the design of the entry.
-- Item 2 waits on the lake and on item 1. Item 3 waits on a decision that is not ours
-  to make.
+- Item 2 waits on item 1 for the agent side only; the Python side and the recalibration
+  run need neither the lake nor the agent. Item 3 waits on a decision that is not ours
+  to make: this ADR does not accept it.
 - The server counters stay the source of truth; the snapshot is derived from them and
   can be rebuilt.
