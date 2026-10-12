@@ -1,0 +1,32 @@
+title: Setcap grants UID capability to a shell or interpreter
+description: >
+  Detects setcap assigning cap_setuid with effective and permitted flags to a
+  shell or common scripting interpreter. It records the requested capability
+  change only; it does not confirm that the filesystem accepted the change or
+  that the target was later executed.
+tags:
+  - attack.privilege_escalation
+  - attack.t1548
+  - synthaea.coverage.privesc_impact
+level: medium
+falsepositives:
+  - Security researchers in a lab and administrators building a deliberately
+    privileged test shell; ordinary packaging should not require this setting.
+detection:
+  selection:
+    Image|endswith: '/setcap'
+    CommandLine|contains:
+      - 'cap_setuid=ep'
+      - 'cap_setuid=eip'
+      - 'cap_setuid+ep'
+      - 'cap_setuid+eip'
+    CommandLine:
+      - '*bash*'
+      - '*zsh*'
+      - '*fish*'
+      - '*python3*'
+      - '*perl*'
+      - '*ruby*'
+      - '*node*'
+      - '*php*'
+  condition: selection
