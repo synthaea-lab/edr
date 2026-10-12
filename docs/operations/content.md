@@ -34,6 +34,17 @@ deletes every file it had applied that the manifest no longer lists, and says ho
 outside the content directory, and never through a symlink. If the download of the new release
 fails, nothing is removed and the rules the agent runs today stay.
 
+Three guards worth knowing. A manifest that lists nothing while the agent has applied content is
+refused (`the manifest lists no content but N applied file(s) would be removed`), and the server
+refuses to build one: an empty or mis-globbed release must not be able to wipe a ring. A file
+that cannot be removed (a directory at its path, a symlink on the way, a permission error) is
+reported (`could not be removed ... retries them`) and kept in the state; the rest of the release
+still applies and the next run tries again, so one stuck file does not stop new rules. A path
+that is the same file as a listed one under another case (`Foo.yml` against `foo.yml` on
+Windows or macOS) is not deleted. An offer of the *same* release number is applied again when
+the files on disk do not match it, which is what repairs a ring after the agent was pointed at
+another ring and back; an *older* offer is still ignored (see #665).
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,
