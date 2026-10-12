@@ -28,7 +28,13 @@ vector without the parents, at the same false-positive budget. That can only be 
   reconnaissance commands, an Office-named process that runs a shell, and a binary dropped into
   `/dev/shm` or `/var/tmp` that runs children. A lineage gain can only show on scenarios whose
   parent is odd. **Say that when reporting a number**, with how many of the malicious vectors
-  have each odd lineage.
+  have each odd lineage. **Split them by what makes the parent odd**: each `odd-parents/*.sh`
+  declares `# Odd by: comm` or `# Odd by: path`, and `ml/tests/test_odd_parent_scenarios.py`
+  keeps it true (the comm ones run from the user's own directory, the path one uses names the
+  comm features do not know). Run the web-application and Office parents from `/var/tmp` and
+  they are odd by both, so a gain on them cannot be credited to either (the first version did
+  this, review of #787). Report the gain separately for odd-by-comm, odd-by-path, both, and
+  ordinary lineage.
 
 ## Procedure (lab VM, isolated; see the `synthaea-lab-vm` notes: snapshot, NAT NIC detached)
 

@@ -2,6 +2,12 @@
 # Odd parent #1 for the T1 capture (#617): a web-application process that runs a shell and
 # reconnaissance commands (the webshell shape: `id; uname -a; cat /etc/passwd`).
 #
+# Odd by: comm
+# (The parent runs from the user's own directory, like the benign workload's tools, so the
+# only thing odd about it is its name; `ml/tests/test_odd_parent_scenarios.py` keeps it so.
+# From `/var/tmp` it would also trip `parent_path_is_suspicious` and a gain measured on it
+# could not be credited to either feature: the review of #787.)
+#
 # A process "named like a web server" is a link or copy of a real interpreter under a web-server
 # name (the kernel takes `comm` from the file name that was executed). Four names from
 # `lineage.py::WEBSERVER_COMMS`, each spawning `sh -c` with commands a web application has no
@@ -14,8 +20,10 @@
 set -euo pipefail
 
 PY="$(command -v python3)" || { echo "python3 is needed" >&2; exit 1; }
-D="$(mktemp -d /var/tmp/edr-odd-webapp.XXXXXX)" && [ -d "$D" ] || { echo "no work directory" >&2; exit 1; }
-trap 'rm -rf "$D"' EXIT
+D=""
+trap '[ -n "$D" ] && rm -rf "$D"' EXIT
+mkdir -p "${HOME:?HOME must be set}/.local/share"
+D="$(mktemp -d "$HOME/.local/share/edr-odd-webapp.XXXXXX")" && [ -d "$D" ] || { D=""; echo "no work directory" >&2; exit 1; }
 
 for name in gunicorn php-fpm uwsgi httpd; do
     ln -s "$PY" "$D/$name"

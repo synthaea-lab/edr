@@ -3,6 +3,11 @@
 # directory (`/dev/shm`, `/var/tmp`) that then runs children (the dropper shape: a payload that
 # was just written starts a shell and enumerates the host).
 #
+# Odd by: path
+# (The names are not web-server or Office names, so the comm features stay quiet and the only
+# odd thing is the directory.) `/dev/shm` can be mounted `noexec`: the exec then fails and the
+# scenario is reported as failed; fine on the lab VM, where it is not.
+#
 # The binaries are copies of `bash` and `python3` under innocuous names. Their path is one of
 # `lineage.py::SUSPICIOUS_PATHS`, which is the only thing that distinguishes them from the
 # benign workload's user-installed tools (those run from the user's own directory, not from
@@ -13,10 +18,14 @@
 
 set -euo pipefail
 
+D1=""
+D2=""
+# Installed before either directory exists: a failure of the second `mktemp` must not leave
+# the first behind.
+trap '[ -n "$D1" ] && rm -rf "$D1"; [ -n "$D2" ] && rm -rf "$D2"' EXIT
 D1="$(mktemp -d /dev/shm/edr-odd-drop.XXXXXX 2>/dev/null)" || D1="$(mktemp -d /var/tmp/edr-odd-drop.XXXXXX)"
 D2="$(mktemp -d /var/tmp/edr-odd-drop.XXXXXX)"
 [ -d "$D1" ] && [ -d "$D2" ] || { echo "no work directory" >&2; exit 1; }
-trap 'rm -rf "$D1" "$D2"' EXIT
 
 cp "$(command -v bash)" "$D1/kworker-update"
 cp "$(command -v python3)" "$D2/syslogd-helper"

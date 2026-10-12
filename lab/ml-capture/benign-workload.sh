@@ -37,7 +37,10 @@ WL="$(mktemp -d /tmp/edr-ml-workload.XXXXXX)" && [ -n "$WL" ] && [ -d "$WL" ] \
     || { echo "cannot create the working directory under /tmp" >&2; exit 1; }
 mkdir -p "$WL/bin" "$WL/data" "$WL/out"
 # The user's own tool directory (not /tmp): where a real user's installed tools live.
-mkdir -p "${HOME:?HOME must be set}/.local/share"
+# Remember whether the parent directory is ours to remove: a `.local/share` that did not exist
+# before this run is not left behind (as root that would be /root/.local/share).
+[ -d "${HOME:?HOME must be set}/.local/share" ] || MADE_SHARE=1
+mkdir -p "$HOME/.local/share"
 TOOLS="$(mktemp -d "$HOME/.local/share/edr-ml-workload.XXXXXX")" && [ -d "$TOOLS" ] \
     || { echo "cannot create the tool directory under $HOME" >&2; rm -rf "$WL"; exit 1; }
 RANDOM="$SEED"
@@ -47,6 +50,7 @@ HTTP_PID=""
 cleanup() {
     [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null
     rm -rf "$WL" "$TOOLS"
+    if [ "${MADE_SHARE:-0}" = 1 ]; then rmdir "$HOME/.local/share" "$HOME/.local" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
 
