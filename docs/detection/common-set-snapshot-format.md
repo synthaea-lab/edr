@@ -1,0 +1,63 @@
+# Common-set snapshot: wire format v1
+
+The artifact ADR-0020 decision 1 ships to the agent: the image hashes seen on at least K
+hosts of one tenant, as a Bloom filter. This page is the byte layout and the sizing rules;
+the plan that puts it to use is `fleet-prevalence-snapshot-plan.md` (slices 1 and 2).
+
+The layout is shared by a TypeScript writer (`server/lib/common-set-snapshot.ts`) and a Rust
+reader (`crates/ml`). `ml/tests/fixtures/common_set_snapshot_golden.json`, generated from a
+third, stdlib-only implementation (`gen_common_set_snapshot_golden.py`), fixes the exact bytes
+and both sides test against it. Changing anything below is a `format_version` bump, not an
+edit.
+
+## Layout
+
+All integers are little-endian. The header is 32 bytes, then the filter body.
+
+| Offset | Size | Field | Meaning |
+| --- | --- | --- | --- |
+| 0 | 4 | magic | ASCII `SYCS` |
+| 4 | 2 | `format_version` | `1` |
+| 6 | 2 | `hash_count` | bit positions per hash, 1 to 16 |
+| 8 | 4 | `min_hosts` | K: hosts a hash was seen on to be a member |
+| 12 | 4 | `hosts_covered` | distinct agents that had reported when the snapshot was built |
+| 16 | 4 | `entry_count` | distinct hashes inserted |
+| 20 | 4 | `bit_count` | filter size in bits: a multiple of 8, at least 64 |
+| 24 | 8 | `built_at` | Unix seconds when the snapshot was built |
+| 32 | `bit_count / 8` | body | the filter |
+
+A reader rejects a snapshot whose magic or version it does not know, whose `hash_count` or
+`bit_count` is out of range, or whose length is not exactly `32 + bit_count / 8`. It never
+guesses.
+
+## Membership
+
+The input is a normalized SHA-256: 64 lowercase hex characters (the server's counter key, and
+`normalize_sha256` on both sides of the rarity seam). The digest is already uniform, so the
+filter uses it directly:
+
+```
+h1 = first 8 bytes of the digest as a little-endian u64
+h2 = next 8 bytes as a little-endian u64, OR 1 (odd)
+position_i = ((h1 + i * h2) mod 2^64) mod bit_count      for i in 0 .. hash_count
+```
+
+Bit `p` is bit `p mod 8` (least significant first) of body byte `p / 8`. A hash is a member
+when all of its bits are set. As with any Bloom filter, a non-member may read as a member; a
+member never reads as a non-member.
+
+## Sizing (writer)
+
+For `n` distinct hashes and a target false-positive rate `p`:
+
+```
+n = 0:   bit_count = 64, hash_count = 1
+n > 0:   bits = ceil(n * ln(1/p) / ln(2)^2), rounded up to a multiple of 8, at least 64
+         hash_count = clamp(floor(bits / n * ln(2) + 0.5), 1, 16)
+```
+
+Hashes are inserted in sorted order after deduplication, so the same set always gives the same
+bytes. The writer takes a byte cap and refuses to build past it (an explicit error, never a
+silent truncation: a filter missing members would read as "rare" for common binaries); the
+caller raises K or lowers the target rate. The reader does not need the target rate, it is
+recorded in the manifest entry's metadata (ADR-0020).
