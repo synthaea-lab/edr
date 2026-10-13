@@ -51,7 +51,7 @@ pending (the coverage packs #376–#381 — see
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
 | **Services & autostart**<br><sub>TA0003 T1543/T1547</sub> | ✅ journald + rules | ✅ WEL 7045 + ETW registry | ✅ ES BTM |
 | **Scheduled execution**<br><sub>TA0002/TA0003 T1053</sub> | ✅ cron/systemd paths | ✅ WEL 4698 · 4702 | ✅ cron/launchd paths |
-| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | 🔍 SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
+| **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | ✅ SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
 | **Kernel modules & drivers**<br><sub>TA0003/TA0005 rootkits</sub> | 📋 #264 module+bpf | 🟡* image loads · 📋 #39 | 📋 #357 kexts |
 | **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | 📋 #362 kill-trace | 📋 #39 driver vantage | ✅ ES signals |
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
@@ -64,8 +64,9 @@ pending (the coverage packs #376–#381 — see
 
 See [linux-telemetry-matrix.md](linux-telemetry-matrix.md) for the full
 hook/fields/overhead/kernel/OSS-comparison detail behind each mechanism,
-including the evaluated-but-not-implemented tier (fanotify, fentry, SELinux
-AVC, seccomp, …) and the SELinux-on-server validation gap.
+including the evaluated-but-not-implemented tier (fanotify, fentry, seccomp,
+…) and the (now largely closed, see that doc) SELinux-on-server validation
+gap.
 
 ### Master sources
 
@@ -99,7 +100,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Identity & privilege** | journald | sshd accept/fail, PAM sessions, sudo/su → `Auth` | ✅ used | T1078 | #93 |
 | **Identity & privilege** | eBPF · tracepoints | `setuid`/`setresuid`/`capset`/`setns` | 📋 planned | T1548, container escape | #266 |
 | **Persistence & autostart** | journald + rules | systemd unit first-start (flagged approximation, documented); rc/cron/systemd path writes via the file stream | ✅ used | T1543.002, T1053.003 | #93 |
-| **OS security verdicts** | netlink · audit | SELinux AVC denials — already on the socket, one classifier arm away | 🔍 evaluated | T1562-adjacent | matrix row |
+| **OS security verdicts** | netlink · audit | SELinux AVC denials → `Event::PolicyDenial` (`mechanism: "selinux"`), live-confirmed on a real Enforcing kernel | ✅ used (telemetry only — not yet consumed by a rule/correlator) | T1562-adjacent | #297 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | module loads/unloads, `bpf(2)` loads (eBPF-rootkit visibility) | 📋 planned | T1547.006, T1562 | #264 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | kernel-side kill tracing filtered to agent/security targets — SIGKILL **sender** attribution userspace cannot see → v21 `Signal` | 📋 planned | T1562 | #362 |
 | **Download provenance** | inventory | no OS-level mark on Linux — browser artifacts only | 📋 planned | provenance context | #87 |
@@ -159,11 +160,11 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **OS security verdicts** | WEL · AppLocker (EXE and DLL, MSI and Script, Packaged app-Execution/Deployment) | 8004/8007/8022/8025 (enforced) and 8003/8006/8021/8024 (audit) → `PolicyDenial` (`mechanism: applocker`); file path where present, package identity for packaged apps; deployment action `install` | ✅ used | policy context, T1204 | #427, #283 |
 | **OS security verdicts** | WEL · CodeIntegrity/Operational | WDAC 3077 (enforced) / 3076 (audit mode) → `PolicyDenial` (`mechanism: wdac`, `object_path` as the event's NT device path, `object_class` kernel/user-mode). **3033 is not subscribed**: 584 in a day on one lab host, all Chrome loading its own DLLs | ✅ used | policy context | #283 |
 | **OS security verdicts** | WEL · Defender/Operational | verdicts 1116 (detected) / 1117 (action taken) and tamper traces 5001/5010/5012 (protection turned off) and 5007 (setting changed) → `DefenderEvent`. The channel is **localized**, so only numeric ids and `Threat Name` are read. 5007 is 42 % of the channel (start-up progress): only exclusions, the `Disable*` protection switches and Tamper Protection are forwarded. Alerts: protection turned off, an exclusion added (High for `C:\Users\Public`, `Temp`, `Downloads`, `AppData`, a drive root, code extensions, interpreters; else Medium), a protection switch turned on, Tamper Protection turned off. The events name no process; verdicts raise no alert yet (they need a host-wide correlator signal) | ✅ used | T1562.001 | #283 |
-| **OS security verdicts** | WEL · TaskScheduler/Operational | task registered 106 (already covered, #422); 140/141 update/delete remain unnormalized pending a versioned schema event | ✅ used | T1053.005 | #283 |
+| **OS security verdicts** | WEL · TaskScheduler/Operational | task registered 106 (already covered, #422); 140/141 update/delete remain unnormalized pending a versioned schema event (#748). **The channel is Task Scheduler history, off by default** (Windows 11 25H2 client): the target only sees events where an operator enabled it, and the agent logs a disabled channel at start-up | ✅ used (where enabled) | T1053.005 | #283, #786 |
 | **Lateral-movement services** | ETW · WMI-Activity | WQL queries (EID 23) + method invocations (EID 24, `Win32_Process.Create`) | ✅ used | T1047 | #21 |
 | **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
-| **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join. A mark deleted through the API (`Unblock-File`, `Remove-Item -Stream`) → `FileDelete` of the stream (Kernel-File 26), T1553.005 when the file then runs (#442); any other strip/tamper needs the minifilter (#136). Coverage map: `docs/detection/download-provenance.md` | ✅ used | T1204.002, T1553.005 | #365, #442 |
+| **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join (10 min), which stays silent when the image's Authenticode signature verifies (#441: resolved on the enrichment worker after the exec; an unverifiable image still alerts). A mark deleted through the API (`Unblock-File`, `Remove-Item -Stream`) → `FileDelete` of the stream (Kernel-File 26), T1553.005 when the file then runs (#442); any other strip/tamper needs the minifilter (#136). Coverage map: `docs/detection/download-provenance.md` | ✅ used | T1204.002, T1553.005 | #365, #442 |
 | **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
 | **Devices** | device-control | Windows collectors land with the cross-platform crate | 📋 planned | T1091 | #84 |
 | **Host state** | Win32 · WMI/CIM | point-in-time inventory; Sysmon-channel opt-in is an ADR-first decision | ✅ / 📋 | pre-existing persistence | collectors; #286 |
