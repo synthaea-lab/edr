@@ -86,8 +86,15 @@ Each slice lands its tests first (CLAUDE.md), and each is useful or inert on its
    snapshot covers enough hosts. Then set K, minimum hosts covered, cadence, false-positive
    rate and the LLR weight on lab data, and record them.
 
-Order: 1 and 2 in parallel, then 3, 4, 5, 6. #640's Rust feature mirror needs slice 2
-only; it can start when the reader merges.
+Order: 1 and 2 first, then 3, 4, 5, 6. #640's Rust feature mirror needs slice 2 only; it
+can start when the reader merges.
+
+**Status.** Slices 1 and 2 are written and are one PR, #808, not two: the golden fixture is
+the contract both sides test against, so splitting them would have shipped a fixture with one
+reader. The format is specified in `common-set-snapshot-format.md`. That PR also settles two
+details this plan left open: the filter is read by `crates/ml` (`ml::features::common_set`),
+and the builder refuses to exceed its byte cap instead of truncating. Slices 3 to 6 have not
+started; they wait on the four questions above.
 
 ## Not in this plan
 
