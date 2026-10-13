@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\ntdsutil.exe",
+    "cmdline": "ntdsutil.exe \"activate instance ntds\" \"ifm\" \"create full C:\\ProgramData\\DirectoryBackup\" quit quit"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\ntdsutil.exe",
+    "cmdline": "ntdsutil.exe \"activate instance ntds\" \"files\" \"info\" quit quit",
+    "note": "Directory database information is not an IFM export."
+  }
+}

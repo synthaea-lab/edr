@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/usr/sbin/auditctl",
+    "cmdline": "auditctl -e 0"
+  },
+  "non_matching": {
+    "image": "/usr/sbin/auditctl",
+    "cmdline": "auditctl -e 1",
+    "note": "The same control enables auditing; tool identity alone must not fire."
+  }
+}

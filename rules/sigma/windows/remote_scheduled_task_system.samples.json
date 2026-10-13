@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\schtasks.exe",
+    "cmdline": "schtasks.exe /create /s lab-server /tn AuditTask /tr \"cmd.exe /c whoami\" /sc once /st 12:00 /ru SYSTEM"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\schtasks.exe",
+    "cmdline": "schtasks.exe /create /tn AuditTask /tr \"cmd.exe /c whoami\" /sc once /st 12:00 /ru SYSTEM",
+    "note": "A local SYSTEM task lacks the explicit remote-host argument."
+  }
+}

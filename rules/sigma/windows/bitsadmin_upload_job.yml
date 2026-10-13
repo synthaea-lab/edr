@@ -1,0 +1,19 @@
+title: BITSAdmin submits an HTTP upload job
+description: >
+  Detects bitsadmin requesting an upload to an HTTP or HTTPS endpoint. The
+  command is evidence of attempted transfer only, not completed egress or its
+  volume; benign legacy deployment and monitoring jobs can use BITS uploads.
+tags:
+  - attack.exfiltration
+  - attack.t1041
+  - synthaea.coverage.collection_exfiltration
+level: medium
+falsepositives:
+  - Legacy enterprise agents or administrators using BITS to upload approved
+    diagnostics, inventory or support bundles.
+detection:
+  selection:
+    Image|endswith: '\bitsadmin.exe'
+    CommandLine|contains: ' /upload '
+    CommandLine: '*http*'
+  condition: selection

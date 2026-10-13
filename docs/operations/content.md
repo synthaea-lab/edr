@@ -45,6 +45,35 @@ Windows or macOS) is not deleted. An offer of the *same* release number is appli
 the files on disk do not match it, which is what repairs a ring after the agent was pointed at
 another ring and back; an *older* offer is still ignored (see #665).
 
+## A rollback does not reach an agent that already applied the release
+
+Rolling a ring back (`POST /api/content/rollback`) makes the control plane offer the earlier
+release again. An agent that has **not** applied the rolled-back release takes it. An agent that
+**has** stays where it is: it never applies a lower release number (anti-rollback), and says so:
+
+    ring canary_0: the server offers release 2, OLDER than release 4, which this agent has applied. An older offer is never applied (anti-rollback), so this agent stays on release 4. ...
+
+To bring those agents back, publish a **corrective release** that carries the earlier content
+(ADR-0032). Its number is exactly the next one the control plane assigns, one above the highest
+release of the ring (rolled-back ones included); the rollback response names it. Built and signed
+offline, from the earlier release's **archived, signed manifest** (the tool verifies its signature
+and refuses one that does not verify or lists nothing):
+
+    release-tool roll-forward --from release-2.json --current release-4.json \
+        --release-version 5 --released-at 2026-10-12T09:30:00Z --out release-5.json
+    release-tool sign --kind content --key-file release.key release-5.json --out release-5-signed.json
+
+`--current` (the manifest being withdrawn) is optional but worth giving: it lists what agents will
+remove, and the paths whose bytes differ between the two releases. **The artifact store keeps one
+file per path** (`storage/artifacts/<path>`), so for those paths the earlier bytes must be put
+back in the store before publishing. Content the later release only *added* needs nothing.
+
+Then publish with `POST /api/content/release`. The control plane refuses (422) a release whose
+manifest is not the one named, lists nothing, is for another ring, carries another number than the
+one it will assign, or lists an artifact that is missing from the store or does not hash to its
+value, so none of this shows up later as a failure for every agent of the ring. Agents fetch what
+differs and remove what it no longer lists (see above).
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,
