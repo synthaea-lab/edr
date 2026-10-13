@@ -18,6 +18,7 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 vi.mock("@/components/GenerateNarrativeButton", () => ({ GenerateNarrativeButton: () => null }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers({ cookie: "a=b" }) }));
 vi.mock("next/navigation", () => ({
   redirect: (to: string) => {
     throw new Error(`redirect ${to}`);
