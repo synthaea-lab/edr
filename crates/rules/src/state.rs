@@ -109,9 +109,15 @@ impl PidFact {
 }
 
 /// `known_policy_denials`' key: (mechanism, subject context, object context, object
-/// class). Named so clippy's `type_complexity` lint doesn't flag the field
+/// class, action). Named so clippy's `type_complexity` lint doesn't flag the field
 /// declaration.
-type PolicyDenialKey = (String, Option<String>, Option<String>, Option<String>);
+type PolicyDenialKey = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Sliding history needed by the correlation rules:
 /// - T1105 (Ingress Tool Transfer): a path recently written by `curl`/`wget` is
@@ -175,6 +181,11 @@ pub struct RuleState {
     /// "current state" of past denials to snapshot at agent start) — the
     /// first run is cold by design. LRU-bounded like every other stateful
     /// rule.
+    ///
+    /// Includes the requested permission (`action`, #813, recovered by
+    /// `sensor-linux-audit`'s AVC parser): without it, a routine `getattr` denial on a
+    /// subject/object/class triple would silence a later, more interesting
+    /// `read`/`write`/`open` denial on that exact same triple.
     ///
     /// `SELinux` only (`check_policy_denial_drift` gates on
     /// [`POLICY_MECHANISM_SELINUX`]): `scontext`/`tcontext` give each denial a
@@ -1013,10 +1024,11 @@ impl RuleState {
     /// only reach the agent through the audit sensor, so silence here does not
     /// mean no denials happened.
     ///
-    /// The requested permission is not part of the key (#813): the audit
-    /// sensor does not parse it yet, so a routine `getattr` denial silences a
-    /// later, more interesting `read`/`write`/`open` on the same subject,
-    /// object and class.
+    /// The requested permission is part of the key (#813, recovered by
+    /// `sensor-linux-audit`'s AVC parser): a routine `getattr` denial no longer
+    /// silences a later, more interesting `read`/`write`/`open` on the same subject,
+    /// object and class. `None` (an AppLocker/WDAC denial, or an AVC variant the
+    /// parser doesn't recognize) is its own value, same as every other field here.
     ///
     /// Capped at [`POLICY_DENIAL_ALERT_CAP`] distinct-shape alerts (#812): a flood of
     /// shapes past the cap is counted (`policy_denial_alerts_shed`) rather than
@@ -1031,6 +1043,7 @@ impl RuleState {
             Self::selinux_type_triple(event.subject_context.as_deref()),
             Self::selinux_type_triple(event.object_context.as_deref()),
             event.object_class.clone(),
+            event.action.clone(),
         );
         let seen_before = self.known_policy_denials.get(&key).is_some();
         if !seen_before {
@@ -1055,12 +1068,13 @@ impl RuleState {
             technique: "T1562",
             severity: Severity::Medium,
             message: format!(
-                "comm={} mechanism={} subject={} object={} class={} path={} enforced={} — new denial shape, not seen this run",
+                "comm={} mechanism={} subject={} object={} class={} action={} path={} enforced={} — new denial shape, not seen this run",
                 event.meta.comm,
                 event.mechanism,
                 event.subject_context.as_deref().unwrap_or("-"),
                 event.object_context.as_deref().unwrap_or("-"),
                 event.object_class.as_deref().unwrap_or("-"),
+                event.action.as_deref().unwrap_or("-"),
                 event.object_path.as_deref().unwrap_or("-"),
                 event.enforced,
             ),

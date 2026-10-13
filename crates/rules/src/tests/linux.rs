@@ -1143,6 +1143,53 @@ fn a_different_object_class_on_the_same_subject_object_pair_is_a_new_shape() {
 }
 
 #[test]
+fn a_different_requested_permission_on_the_same_triple_is_a_new_shape() {
+    // #813: before the audit sensor recovered `action`, a routine `getattr` denial
+    // and a later `read`/`write`/`open` denial on the exact same subject/object/class
+    // collapsed to one shape — the more interesting second denial was silenced.
+    let mut state = RuleState::new();
+    let getattr = state.on_policy_denial(&policy_denial_event_with_action(
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        Some("getattr"),
+    ));
+    let read = state.on_policy_denial(&policy_denial_event_with_action(
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        Some("read"),
+    ));
+    assert_eq!(getattr.len(), 1);
+    assert_eq!(
+        read.len(),
+        1,
+        "a different requested permission is a new shape, not silenced by the getattr"
+    );
+}
+
+#[test]
+fn a_repeated_denial_with_the_same_permission_is_still_the_same_shape() {
+    // The dedup itself must still work once `action` joins the key: the exact same
+    // denial seen twice is one alert, not two.
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&policy_denial_event_with_action(
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        Some("read"),
+    ));
+    let second = state.on_policy_denial(&policy_denial_event_with_action(
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        Some("read"),
+    ));
+    assert_eq!(first.len(), 1);
+    assert!(second.is_empty());
+}
+
+#[test]
 fn permissive_mode_still_alerts_on_a_new_shape() {
     // A permissive-mode SELinux log still names a real new denial shape — the
     // rule fires on the shape appearing, not on whether it was actually

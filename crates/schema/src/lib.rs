@@ -1834,8 +1834,11 @@ pub struct PolicyDenialEvent {
     /// `process`, `tcp_socket`, `capability`, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_class: Option<String>,
-    /// The permission that was requested (`SELinux` `{ read }` etc.). `None`
-    /// until the AVC parser recovers it — see this type's doc.
+    /// The permission or action that was requested. Mechanism-specific:
+    /// `SELinux` `{ read }`, or `{ read write }` space-joined for more than one
+    /// (recovered from the AVC record by `sensor-linux-audit`, #813); `AppLocker`/
+    /// `WDAC` a verb like `execute`/`load`. `None` for an AVC variant the parser
+    /// doesn't recognize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
     /// `true` when the mechanism actually blocked the action (`SELinux`
