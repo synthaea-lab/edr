@@ -264,7 +264,7 @@ fn persistence_file_open(pid: u32, comm: String, path: String, flags: u32) -> Ev
             user: User::Unknown,
             timestamp_ns: now_ns(),
             comm,
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },
@@ -509,7 +509,7 @@ fn to_auth_event(logon: &LogonEvent) -> Option<Event> {
             user,
             timestamp_ns: logon.time_created_ns.unwrap_or_else(now_ns),
             comm: LSASS_COMM.to_string(),
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },
@@ -649,7 +649,7 @@ fn normalize_applocker_block(block: &str) -> ParsedBlock {
             user,
             timestamp_ns: now_ns(),
             comm: String::new(),
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },
@@ -869,7 +869,7 @@ fn defender_base(kind: DefenderEventKind) -> DefenderEvent {
             user: User::Unknown,
             timestamp_ns: now_ns(),
             comm: String::new(),
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },
@@ -1019,7 +1019,7 @@ fn normalize_wdac_block(block: &str) -> ParsedBlock {
             user: User::Unknown,
             timestamp_ns: now_ns(),
             comm: String::new(),
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },
@@ -1081,7 +1081,7 @@ fn session_event(ev: xml::TerminalSessionEvent, state: SessionState) -> Event {
             user: User::Unknown,
             timestamp_ns: ev.time_created_ns.unwrap_or_else(now_ns),
             comm: String::new(),
-            container: None, // Windows: no container support
+            container: None, // attributed by the ETW sensor only (#371)
             process_generation: None,
             parent_process_generation: None,
         },

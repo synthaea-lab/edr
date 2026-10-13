@@ -57,7 +57,7 @@ pending (the coverage packs #376–#381 — see
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
 | **Download provenance**<br><sub>TA0001 Initial Access</sub> | 📋 #87 (no OS mark) | ✅ ETW MotW | ✅ ES |
 | **Devices**<br><sub>TA0001 Initial Access · TA0010 Exfil</sub> | 📋 #84 | 📋 #84 | 📋 device-control |
-| **Containers**<br><sub>TA0004 Escape context</sub> | ✅ /proc | 📋 #371 silos | 📋 #372 host-side |
+| **Containers**<br><sub>TA0004 Escape context</sub> | ✅ /proc | 🔨 #371 silos | 📋 #372 host-side |
 | **Host state & inventory**<br><sub>TA0003 pre-existing persistence</sub> | 📋 #87 | ✅ WMI · 📋 #286 | 📋 #359 |
 
 ## Linux
@@ -164,7 +164,7 @@ AVC, seccomp, …) and the SELinux-on-server validation gap.
 | **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
 | **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join. A mark deleted through the API (`Unblock-File`, `Remove-Item -Stream`) → `FileDelete` of the stream (Kernel-File 26), T1553.005 when the file then runs (#442); any other strip/tamper needs the minifilter (#136). Coverage map: `docs/detection/download-provenance.md` | ✅ used | T1204.002, T1553.005 | #365, #442 |
-| **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
+| **Containers** | NT · `ProcessMembershipInformation` + Host Compute Service | server-silo attribution on process-isolated Windows containers → `EventMeta::container` on ETW events: the silo read at `ProcessStart` (a child already gone takes its parent's), named by the HCS container id on a background thread, `silo:<n>` until then. Windows 11 22H2 / Server 2025 and later; older builds stay `None`. Hyper-V/WSL2 = agent inside, see `docs/sensors/windows.md` | 🔨 lab pending | container context for rules | #371 |
 | **Devices** | device-control | Windows collectors land with the cross-platform crate | 📋 planned | T1091 | #84 |
 | **Host state** | Win32 · WMI/CIM | point-in-time inventory; Sysmon-channel opt-in is an ADR-first decision | ✅ / 📋 | pre-existing persistence | collectors; #286 |
 

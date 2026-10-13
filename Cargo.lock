@@ -2633,6 +2633,7 @@ dependencies = [
  "ferrisetw",
  "proptest",
  "schema",
+ "serde_json",
  "tracing",
  "windows-sys 0.61.2",
 ]
