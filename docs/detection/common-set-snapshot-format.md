@@ -61,3 +61,20 @@ bytes. The writer takes a byte cap and refuses to build past it (an explicit err
 silent truncation: a filter missing members would read as "rare" for common binaries); the
 caller raises K or lowers the target rate. The reader does not need the target rate, it is
 recorded in the manifest entry's metadata (ADR-0020).
+
+## Where the agent reads it
+
+`<content_root>/snapshots/common-set.bin` (the content directory `agent run` loads rules from;
+`<state_dir>/content` by default), loaded at start and on every `ReloadContent`:
+
+- **Absent** is "no snapshot yet": none is held and the "not in the common set" evidence is
+  withheld. A snapshot removed by a later content release unloads the held one.
+- **Present but unusable** (unreadable, over 64 MiB, or refused by the reader's strict checks)
+  keeps the snapshot already in force and logs the reason (never the bytes), the posture the
+  rule and YARA directories already have: a bad file must not leave a live agent without it.
+- The file is read whole, capped at 64 MiB (the manifest allows 100 MiB per artifact; the
+  server caps the snapshot it builds well below that), and swapped as one value.
+
+The path is fixed on the agent. The artifact store on the server is keyed by path and shared
+across tenants (slice 5 of `fleet-prevalence-snapshot-plan.md`), so slice 5 has to deliver a
+per-tenant artifact at this agent-side path, not a per-tenant path.

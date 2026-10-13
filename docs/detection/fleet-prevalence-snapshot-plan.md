@@ -93,8 +93,13 @@ can start when the reader merges.
 the contract both sides test against, so splitting them would have shipped a fixture with one
 reader. The format is specified in `common-set-snapshot-format.md`. That PR also settles two
 details this plan left open: the filter is read by `crates/ml` (`ml::features::common_set`),
-and the builder refuses to exceed its byte cap instead of truncating. Slices 3 to 6 have not
-started; they wait on the four questions above.
+and the builder refuses to exceed its byte cap instead of truncating. Slice 3 (the agent loader and hot
+reload) is its own PR: the snapshot is read from `snapshots/common-set.bin` under the content
+directory, with the rule directories' posture. It deliberately leaves the IPC `ReloadContent`
+response alone: that struct is `deny_unknown_fields`, so a new field would make an older client
+refuse a newer agent's answer, and "serde defaults" (this plan's first wording) only protect the
+other direction; the load is reported in the agent log. Slices 4 to 6 have not started; 4
+assumes the delivery answer above, 5 and 6 wait on the signing and ring questions.
 
 ## Not in this plan
 
