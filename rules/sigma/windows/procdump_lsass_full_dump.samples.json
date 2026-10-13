@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Tools\\Sysinternals\\procdump64.exe",
+    "cmdline": "procdump64.exe -accepteula -ma lsass.exe C:\\ProgramData\\lsass.dmp"
+  },
+  "non_matching": {
+    "image": "C:\\Tools\\Sysinternals\\procdump64.exe",
+    "cmdline": "procdump64.exe -accepteula -ma notepad.exe C:\\ProgramData\\notepad.dmp",
+    "note": "The same full-dump operation against an ordinary application does not identify credential access."
+  }
+}

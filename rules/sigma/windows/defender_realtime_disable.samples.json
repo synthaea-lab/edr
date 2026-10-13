@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -NoProfile -Command \"Set-MpPreference -DisableRealtimeMonitoring $true\""
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "cmdline": "powershell.exe -NoProfile -Command \"Set-MpPreference -DisableRealtimeMonitoring $false\"",
+    "note": "Setting the disable preference to false restores the protection."
+  }
+}
