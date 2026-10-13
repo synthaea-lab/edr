@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { loadFleet, type FleetAgent } from "@/lib/fleet";
 import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
 import type { FleetStatus } from "@/lib/fleet-health";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
 };
 
 export default async function FleetHealthPage() {
-  const session = await auth.api.getSession();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/login");
 
   const tenantId = session.session.activeOrganizationId;
