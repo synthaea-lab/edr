@@ -25,6 +25,10 @@ export type FleetAgent = {
     lossObservedAt: string | null;
     /** Within the window that makes the host `degraded` for telemetry loss. */
     recentLoss: boolean;
+    /** Rarity evidence applied, withheld and lost since the agent started (ADR-0020). */
+    rarityApplied: number;
+    rarityWithheld: number;
+    rarityUnapplied: number;
     sensors: SensorState[];
   } | null;
 };
@@ -67,6 +71,9 @@ export async function loadFleet(
           enrichDropped: Number(a.health.enrichDropped),
           lossObservedAt: a.health.lossObservedAt?.toISOString() ?? null,
           recentLoss: lostRecently(a.health.lossObservedAt, now),
+          rarityApplied: Number(a.health.rarityApplied),
+          rarityWithheld: Number(a.health.rarityWithheld),
+          rarityUnapplied: Number(a.health.rarityUnapplied),
           sensors,
         },
       };
