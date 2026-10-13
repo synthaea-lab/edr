@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/usr/bin/systemctl",
+    "cmdline": "systemctl mask --now auditd.service"
+  },
+  "non_matching": {
+    "image": "/usr/bin/systemctl",
+    "cmdline": "systemctl mask --now example-test.service",
+    "note": "The same mask-and-stop request for an ordinary test service is outside the security-target boundary."
+  }
+}

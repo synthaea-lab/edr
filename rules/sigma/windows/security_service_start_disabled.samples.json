@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe config Sysmon64 start= disabled"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe config Sysmon64 start= auto",
+    "note": "Automatic startup enables the same security service instead of disabling it."
+  }
+}

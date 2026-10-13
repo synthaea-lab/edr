@@ -94,6 +94,18 @@ describe("canonicalJSON", () => {
   });
 });
 
+describe("ContentManifest schema", () => {
+  it("refuses a manifest that lists nothing, which would make every agent delete its content", () => {
+    // Agents remove what a release no longer lists: an empty list from a mis-globbed build
+    // would wipe the ring. The release manifest refuses an empty list the same way.
+    const unsigned = baseManifest();
+    expect(ContentManifest.safeParse({ ...unsigned, signature: "00" }).success).toBe(true);
+    expect(
+      ContentManifest.safeParse({ ...unsigned, entries: [], signature: "00" }).success,
+    ).toBe(false);
+  });
+});
+
 describe("verifySignature", () => {
   it("verifies a freshly signed manifest", async () => {
     const unsigned = baseManifest();
