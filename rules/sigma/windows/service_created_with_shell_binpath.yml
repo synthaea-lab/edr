@@ -1,0 +1,28 @@
+title: Service created with a command-shell binary path
+description: >
+  Detects sc.exe creating a service, local or remote, whose binary path invokes cmd,
+  PowerShell or %COMSPEC%: a service that runs a shell command at start is a common
+  persistence and privilege-escalation form. The remote variant also raises
+  `remote_service_shell_command` (lateral movement). The rule observes submitted
+  commands, not whether the service starts. Other shell launchers are outside it.
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1543.003
+  - synthaea.coverage.discovery_lateral
+level: medium
+falsepositives:
+  - Installers and remediation scripts that register a temporary service wrapping a
+    command, legacy deployment wrappers, and red-team exercises.
+detection:
+  selection:
+    Image|endswith: '\sc.exe'
+    CommandLine|contains|all:
+      - ' create '
+      - 'binPath='
+    CommandLine|contains:
+      - 'cmd.exe /c'
+      - 'cmd.exe /k'
+      - 'powershell.exe'
+      - '%comspec%'
+  condition: selection

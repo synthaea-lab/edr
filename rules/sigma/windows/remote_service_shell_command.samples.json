@@ -5,7 +5,7 @@
   },
   "non_matching": {
     "image": "C:\\Windows\\System32\\sc.exe",
-    "cmdline": "sc.exe create LocalCommand binPath= \"cmd.exe /c C:\\ProgramData\\local-remediation.cmd\"",
-    "note": "Local service creation is outside this remote-service rule."
+    "cmdline": "sc.exe \\lab-server create AcmeService binPath= \"C:\\Program Files\\Acme\\service.exe\" start= auto",
+    "note": "A remote create of a real service executable, not a shell command; the local shell form is the other rule's case (service_created_with_shell_binpath)."
   }
 }

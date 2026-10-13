@@ -1,9 +1,12 @@
 title: Remote service created with a command-shell binary path
 description: >
-  Detects sc.exe creating a remote service whose binary path invokes cmd,
-  PowerShell or %COMSPEC%, including a quoted full sc.exe path. The rule
-  observes submitted commands, not whether the service starts or execution
-  succeeds. Other shell launchers are outside this rule.
+  Detects sc.exe creating a service on another host (a `\` argument, normally the
+  `\host` target) whose binary path invokes cmd, PowerShell or %COMSPEC%, including
+  a quoted full sc.exe path. The `\` test is positional-free, so a local create whose
+  binary path itself contains a UNC path also matches. The local form of the same
+  persistence is covered by `service_created_with_shell_binpath`, so a remote create
+  raises both. The rule observes submitted commands, not whether the service starts
+  or execution succeeds. Other shell launchers are outside this rule.
 tags:
   - attack.persistence
   - attack.lateral_movement
