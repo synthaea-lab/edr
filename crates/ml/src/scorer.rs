@@ -11,7 +11,7 @@
 //!
 //! - [`CmdlineScorer`] (T0) scores one command line the instant an `Exec` arrives;
 //! - [`behavior::BehaviorScorer`] (T1) scores one process incarnation's 23-feature
-//!   vector (cmdline, correlation, lineage), issue #617;
+//!   vector (cmdline, correlation; the lineage is judged by rules, ADR-0034), issue #617;
 //! - [`correlation::CorrelationScorer`] (T2) scores a pid's behaviour over the
 //!   correlator window once it is populated, and feeds the correlator's belief state
 //!   rather than alerting on its own.

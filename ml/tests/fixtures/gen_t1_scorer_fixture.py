@@ -1,9 +1,9 @@
 """Regenerates the T1 behavior-scorer parity fixture (issue #617):
 
-    crates/ml/tests/fixtures/t1_scorer.onnx           (a small 23-feature IsolationForest)
+    crates/ml/tests/fixtures/t1_scorer.onnx           (a small 17-feature IsolationForest)
     crates/ml/tests/fixtures/t1_scorer_golden.jsonl   ({pid, process_generation, score})
 
-The inference-path counterpart of `gen_t1_parity.py`: that pins the 23-feature *vector*,
+The inference-path counterpart of `gen_t1_parity.py`: that pins the 17-feature *vector*,
 this pins the *score* `ml::BehaviorScorer` (Rust vector from an `EventBus`, then `ort`)
 computes against the one onnxruntime computes from the Python vector of the same
 incarnations. It reuses `t1_events.jsonl` / `t1_golden.jsonl`, so run `gen_t1_parity.py`
