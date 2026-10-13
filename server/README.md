@@ -26,3 +26,22 @@ migration; agent identity stays the mTLS enrollment PKI — the two never mix.
 
 All three are facets of the single Next.js app until scale forces a split (the ADR
 records the escape hatch). Postgres schema and migrations live here once scaffolded.
+
+## Console authentication (#810)
+
+better-auth reads and writes its tables (`auth_user`, `auth_session`, `auth_account`,
+`auth_verification`, `auth_organization`, `auth_member`, `auth_invitation`) through the Prisma
+client (`prismaAdapter` in `lib/auth.ts`), so `prisma db push` creates them with the rest of the
+schema. Two constraints follow, both found by running a real login:
+
+- **`middleware.ts` must not import `@/lib/auth`.** It runs in Next's Edge runtime, where Prisma
+  cannot run; it asks the Node route `/api/auth/get-session` over the loopback
+  (`lib/session-lookup.ts`, which fails closed). Server components and route handlers run on Node
+  and call `auth.api.getSession({ headers: await headers() })`; better-auth refuses a call without
+  the headers.
+- **A session's `activeOrganizationId` is the tenant id**, so an organization's id must equal its
+  tenant's. Nothing creates the pair yet (admin-only tenant creation is configured, not built):
+  until it is, set the session's `active_organization_id` by hand to sign in against a tenant.
+
+A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
+if a required one is missing from `prisma/schema.prisma`.

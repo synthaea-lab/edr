@@ -23,6 +23,11 @@ export async function cleanDatabase() {
   await prisma.decoyToken.deleteMany();
   await prisma.agent.deleteMany();
   await prisma.tenant.deleteMany();
+  // Console authentication (#810): users cascade to sessions, accounts and memberships.
+  await prisma.verification.deleteMany();
+  await prisma.invitation.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.organization.deleteMany();
 }
 
 /**
