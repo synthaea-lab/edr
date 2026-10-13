@@ -98,8 +98,15 @@ reload) is its own PR: the snapshot is read from `snapshots/common-set.bin` unde
 directory, with the rule directories' posture. It deliberately leaves the IPC `ReloadContent`
 response alone: that struct is `deny_unknown_fields`, so a new field would make an older client
 refuse a newer agent's answer, and "serde defaults" (this plan's first wording) only protect the
-other direction; the load is reported in the agent log. Slices 4 to 6 have not started; 4
-assumes the delivery answer above, 5 and 6 wait on the signing and ring questions.
+other direction; the load is reported in the agent log. Slice 4 (the correlator evidence)
+is a stacked PR on that one. It takes the "worker feeds the correlator afterwards" answer to
+question 4: the enrichment worker, which learns the hash after the capture thread correlated the
+exec, looks the hash up and adds a weak, **capped** log-odds term to the process's belief
+(`CorrelationEngine::apply_rarity_evidence`). The cap is the safety property: the contribution is
+at most 1.0 log-odds at a time (decaying with the belief), so with the prior it stays ~7 under
+the alert threshold and rarity alone can never be a verdict, even on a build host running
+thousands of freshly compiled binaries. The weight (0.35) and the minimum coverage (10 hosts)
+are provisional until slice 6. Slices 5 and 6 wait on the signing and ring questions.
 
 ## Not in this plan
 
