@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanDatabase, createTestTenant, prisma } from "../helpers/db";
+import { cleanDatabase, createTestAgent, createTestTenant, prisma } from "../helpers/db";
 
 // Every console page reads its tenant from the session. Like the real one, `getSession` refuses a
 // call without the request's headers; the pages called it bare, so once a user could sign in
@@ -54,6 +54,32 @@ describe("console pages read the session with the request's headers (real databa
     expect(await render("cases/page")).toContain("T1059 activity");
     expect(await render("ops/page")).toContain("No agents enrolled yet.");
     expect(await render("cases/[id]/page", { params: { id: case_.id } })).toContain("T1059 activity");
+  });
+
+  it("shows a host that lost telemetry recently as degraded, with the reason, on the ops page (#83)", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id, "agent-ops-loss", { hostname: "lossy-host", lastSeen: new Date() });
+    await prisma.agentHealth.create({
+      data: {
+        agentId: agent.id,
+        tenantId: tenant.id,
+        beaconAt: new Date(),
+        receivedAt: new Date(),
+        agentVersion: "0.1.0",
+        spoolBytes: BigInt(0),
+        spoolDropped: BigInt(4096),
+        enrichDropped: BigInt(7560),
+        lossObservedAt: new Date(Date.now() - 60_000),
+        sensors: [{ name: "linux-ebpf", pulse_count: 3, silent: false }],
+      },
+    });
+    activeOrganizationId = tenant.id;
+
+    const html = await render("ops/page");
+
+    expect(html).toContain("lossy-host");
+    expect(html).toContain("Degraded");
+    expect(html).toMatch(/lost telemetry in the last 10 min/i);
   });
 
   it("tells a session without an organization to contact the administrator, on every page", async () => {

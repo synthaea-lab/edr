@@ -62,6 +62,7 @@ export default async function FleetHealthPage() {
                 <th className="px-4 py-2">Ring</th>
                 <th className="px-4 py-2">Last heartbeat</th>
                 <th className="px-4 py-2">Silent sensors</th>
+                <th className="px-4 py-2">Telemetry loss</th>
                 <th className="px-4 py-2 text-right">Spool dropped</th>
                 <th className="px-4 py-2 text-right">Enrich dropped</th>
                 <th className="px-4 py-2 text-right">Spool backlog</th>
@@ -93,6 +94,13 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
       <td className="px-4 py-2 text-gray-700">{new Date(agent.lastSeen).toLocaleString()}</td>
       <td className="px-4 py-2 text-gray-700">
         {agent.status === "silent" || !agent.health ? "—" : silentSensors.join(", ") || "none"}
+      </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.status === "silent" || !agent.health
+          ? "—"
+          : agent.health.recentLoss
+            ? "Lost telemetry in the last 10 min"
+            : "none recent"}
       </td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.spoolDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.enrichDropped ?? "—"}</td>
