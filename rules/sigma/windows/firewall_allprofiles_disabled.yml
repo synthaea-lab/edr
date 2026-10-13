@@ -1,0 +1,18 @@
+title: Windows firewall disabled for all profiles
+description: >
+  Detects netsh requesting that every advanced-firewall profile be switched off.
+  Routine status checks and enabling all profiles are excluded. The command
+  cannot establish whether policy or permissions allowed the change.
+tags:
+  - attack.defense_evasion
+  - attack.t1562.004
+  - synthaea.coverage.defense_evasion
+level: medium
+falsepositives:
+  - Administrators isolating firewall compatibility issues on a test host,
+    developers testing networking, or a planned firewall-product migration.
+detection:
+  selection:
+    Image|endswith: '\netsh.exe'
+    CommandLine|contains: ' advfirewall set allprofiles state off'
+  condition: selection
