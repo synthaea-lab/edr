@@ -12,11 +12,20 @@ import { extractObservations, recordObservations } from "@/lib/prevalence";
 (globalThis as { React?: typeof React }).React = React;
 
 let activeOrganizationId: string | null = null;
+// Like the real one, `getSession` refuses a call without the request's headers (#810): the
+// pages pass `await headers()`, which needs a request scope this test does not have, so
+// `next/headers` is replaced too. Without that, this test failed once #811 landed.
 vi.mock("@/lib/auth", () => ({
   auth: {
-    api: { getSession: async () => ({ session: { activeOrganizationId }, user: { id: "u" } }) },
+    api: {
+      getSession: async (opts?: { headers?: Headers }) => {
+        if (!opts?.headers) throw new Error("APIError: Headers is required");
+        return { session: { activeOrganizationId }, user: { id: "u" } };
+      },
+    },
   },
 }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers({ cookie: "a=b" }) }));
 vi.mock("@/components/GenerateNarrativeButton", () => ({ GenerateNarrativeButton: () => null }));
 vi.mock("next/navigation", () => ({
   redirect: (to: string) => {
