@@ -63,8 +63,10 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `rarity_unapplied` | cumulative rare images whose evidence found no belief to land on (evicted or never created): the loss, counted. Zero if the agent predates the field. |
 
 The three `rarity_*` fields are additive: the server stores a beacon without them (an older
-agent) as zeros, and an older server ignores them. `transport`'s
-`heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it is a change to this contract.
+agent) as zeros, and an older server ignores them. The ops fleet table shows them in one
+"Rarity evidence" column ("N applied, N withheld, N lost"). `transport`'s
+`heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it
+is a change to this contract.
 
 ### Fleet status and telemetry loss
 

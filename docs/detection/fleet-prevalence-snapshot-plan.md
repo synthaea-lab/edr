@@ -109,8 +109,11 @@ exec, looks the hash up and adds a weak, **capped** log-odds term to the process
 at most 1.0 log-odds at a time (decaying with the belief), so with the prior it stays ~7 under
 the alert threshold and rarity alone can never be a verdict, even on a build host running
 thousands of freshly compiled binaries. The weight (0.35) and the minimum coverage (10 hosts)
-are provisional until slice 6. Counting the evidence in the health beacon is a separate PR
-(#817, open).
+are provisional until slice 6. The judgements are counted, not only logged (ADR-0020, CLAUDE.md's
+"counted shedding"): `rarity_applied`, `rarity_withheld` (no basis to judge) and `rarity_unapplied`
+(rare, but no belief to land on) ride the health beacon and show in the ops fleet table, so a thin
+snapshot or an evicted belief is visible on the fleet rather than silent
+(`docs/architecture/control-plane.md`).
 
 Slices 5 and 6 have not started: they wait on the signing and ring questions above (a proposal
 that frames them for a decision is open as #819).
