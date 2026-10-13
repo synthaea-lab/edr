@@ -40,8 +40,14 @@ schema. Two constraints follow, both found by running a real login:
   and call `auth.api.getSession({ headers: await headers() })`; better-auth refuses a call without
   the headers.
 - **A session's `activeOrganizationId` is the tenant id**, so an organization's id must equal its
-  tenant's. Nothing creates the pair yet (admin-only tenant creation is configured, not built):
-  until it is, set the session's `active_organization_id` by hand to sign in against a tenant.
+  tenant's. `lib/tenant-provisioning.ts`'s `provisionTenant` creates the pair (#821), called from
+  `POST /api/admin/tenants` (admin-only, same session check as the other admin routes — #803
+  tracks making that a real role check) with `{ name }`; the signed-in caller becomes the tenant's
+  owning member. To sign in against it afterward, call better-auth's own
+  `POST /api/auth/organization/set-active` with `{ organizationId: <the returned tenant id> }`.
+
+A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
+if a required one is missing from `prisma/schema.prisma`.
 
 A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
 if a required one is missing from `prisma/schema.prisma`.

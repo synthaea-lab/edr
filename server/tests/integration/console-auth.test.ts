@@ -53,6 +53,25 @@ describe("console authentication (real database)", () => {
     expect(session?.session.activeOrganizationId).toBe(tenant.id);
   });
 
+  it("a provisioned tenant's owner can make it their session's active organization through better-auth's own API", async () => {
+    // #821: unlike the test above (a raw `prisma.session.update`, which never checks
+    // `Organization`/`Member` at all), `setActiveOrganization` does — it is better-auth's own
+    // real code path, the one a signed-in user's own console session actually calls. It
+    // refused every id before a tenant's provisioning also made the paired `Organization` and
+    // `Member` rows a real sign-in needs.
+    const { cookie } = await signUp("owner@example.com");
+    const signedUp = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    const tenant = await createTestTenant(undefined, { userId: signedUp!.user.id });
+
+    await auth.api.setActiveOrganization({
+      headers: new Headers({ cookie }),
+      body: { organizationId: tenant.id },
+    });
+
+    const session = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    expect(session?.session.activeOrganizationId).toBe(tenant.id);
+  });
+
   it("signs in with the right password and refuses the wrong one", async () => {
     await signUp("sign-in@example.com");
 
