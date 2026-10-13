@@ -27,6 +27,10 @@ use crate::{
 /// deadline can be tight: three missed polls is a genuine stall, not bad luck.
 const NO_CANARY_SILENCE_DEADLINE_NS: u64 = 120_000_000_000; // 120s
 const NETLINK_SILENCE_DEADLINE_NS: u64 = 3 * NETLINK_POLL_INTERVAL.as_secs() * 1_000_000_000;
+/// Same shape as `NETLINK_SILENCE_DEADLINE_NS`: [`spawn_avc_reader`]'s `drain` call
+/// returning at all, whether or not anything was queued, is its canary — three
+/// missed cycles of [`AVC_POLL_TIMEOUT_MS`] is a genuine stall.
+const AVC_SILENCE_DEADLINE_NS: u64 = 3 * AVC_POLL_TIMEOUT_MS as u64 * 1_000_000;
 
 /// The actual OS-level kill call for issue #25's automated response —
 /// `response::kill_process` takes this as an injected closure rather than calling
@@ -282,6 +286,11 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     // never runs (the off-by-default case) must never accrue silence, or a
     // deliberately-disabled capture would eventually alert as a stalled sensor.
     let uprobes_heartbeat = SensorHeartbeat::new("linux-uprobes");
+    // Same "only if it actually runs" rule (#780): started only when eBPF is
+    // primary (see the spawn call below), since `AuditSensor` as primary already
+    // covers AVC denials through its own heartbeat.
+    let ebpf_primary = sensor_name == "linux-ebpf";
+    let avc_heartbeat = SensorHeartbeat::new("linux-avc");
     let silence_monitor = Arc::new(Mutex::new(SilenceMonitor::new()));
     {
         let now_ns = schema::time::now_ns();
@@ -307,6 +316,9 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
                 NO_CANARY_SILENCE_DEADLINE_NS,
                 now_ns,
             );
+        }
+        if ebpf_primary {
+            mon.register(avc_heartbeat.clone(), AVC_SILENCE_DEADLINE_NS, now_ns);
         }
     }
     crate::silence::spawn_monitor(silence_monitor.clone(), sink.clone());
@@ -336,6 +348,9 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
 
     spawn_netlink_poller(sink.clone(), netlink_heartbeat, &mut shutdown);
     spawn_journal_tail(sink.clone(), journal_heartbeat, alerts);
+    if ebpf_primary {
+        spawn_avc_reader(sink.clone(), avc_heartbeat, &mut shutdown);
+    }
     crate::log_sources::spawn(sink.clone(), log_sources, alerts, &mut shutdown);
     if enable_tls_capture || enable_readline_capture || enable_dns_capture {
         spawn_uprobes_sensor(
@@ -470,6 +485,83 @@ fn forward_netlink_events(
             }
         }
     }
+}
+
+/// How long `sensor_linux_audit::AvcReader::drain` blocks waiting for the socket
+/// before returning control to [`spawn_avc_reader`] for its own stop check and
+/// heartbeat pulse. Tighter than [`NETLINK_POLL_INTERVAL`]: AVC denials are a
+/// real-time stream, not a snapshot to poll on a cadence, so there is no reason
+/// to hold one back once it has arrived.
+const AVC_POLL_TIMEOUT_MS: i32 = 2000;
+
+/// Spawns the background thread that keeps `SELinux` AVC denials reachable when
+/// eBPF is the chosen primary sensor (#780): `select_sensor` picks eBPF or
+/// `AuditSensor` for exec/connect, never both, so on a host where eBPF loads —
+/// the normal case on a hardened, up-to-date `SELinux`-Enforcing box — the audit
+/// sensor (the only place that classifies AVC records, see
+/// `sensor_linux_audit::AvcReader`'s doc) never runs, and POLICY-DENIAL-DRIFT
+/// (#774) goes silent on exactly the hosts it was built for.
+///
+/// Caller's responsibility, not enforced here: only call this when eBPF is
+/// actually primary. When `AuditSensor` itself is primary, it already classifies
+/// every AVC record on the same stream through its own `Sensor::run` loop —
+/// starting this reader too would double up `PolicyDenial` events, not add
+/// coverage (`AvcReader`'s doc: a second socket does not steal records from the
+/// first, so nothing crashes, but nothing is gained either).
+///
+/// Best-effort, same posture as [`spawn_journal_tail`]: a missing
+/// `CAP_AUDIT_READ` (unprivileged agent) logs once and the thread exits — not a
+/// reason to fail `cmd_run` over a source `AuditSensor`-as-primary already
+/// proves can be absent without the agent falling over.
+fn spawn_avc_reader(
+    sink: Arc<DetectionSink>,
+    heartbeat: SensorHeartbeat,
+    shutdown: &mut ShutdownPlan,
+) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = Arc::clone(&stop);
+    let handle = std::thread::Builder::new()
+        .name("avc-reader".into())
+        .spawn(move || {
+            let mut reader = match sensor_linux_audit::AvcReader::open() {
+                Ok(reader) => reader,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "avc-reader: could not open NETLINK_AUDIT — SELinux AVC denials will not be captured on this host"
+                    );
+                    return;
+                }
+            };
+            let mut overruns: u64 = 0;
+            while !worker_stop.load(Ordering::SeqCst) {
+                match reader.drain(sink.as_ref(), AVC_POLL_TIMEOUT_MS) {
+                    Ok((_, overran)) => {
+                        heartbeat.pulse();
+                        if overran {
+                            overruns += 1;
+                            // Powers of two only: a sustained flood must not flood the log too.
+                            if overruns.is_power_of_two() {
+                                tracing::warn!(
+                                    overruns_total = overruns,
+                                    "avc-reader: kernel dropped records (socket buffer overrun)"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "avc-reader: socket error, stopping");
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("spawning the avc-reader thread");
+    shutdown.register(
+        "avc-reader",
+        move || stop.store(true, Ordering::SeqCst),
+        handle,
+    );
 }
 
 /// Spawns the background thread that tails journald for auth/session events
