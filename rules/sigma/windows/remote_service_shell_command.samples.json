@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe \\\\lab-server create LabCommand binPath= \"cmd.exe /c C:\\ProgramData\\lab-remediation.cmd\""
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe \\\\lab-server create AcmeService binPath= \"C:\\Program Files\\Acme\\service.exe\" start= auto",
+    "note": "The same remote create operation installs a real service executable, not a shell command."
+  }
+}

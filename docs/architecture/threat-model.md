@@ -26,7 +26,7 @@ can always try — but **"cannot be tampered with silently."**
 | --- | --- | --- | --- |
 | Agent ↔ watchdog | mutual | — | two processes, each restores the other's role via the service manager; neither is a single point of failure |
 | Runtime ↔ installed artifacts | signed `updater` manifest | live filesystem | `tamper` hash-verifies binaries + config against the manifest; only `updater` may change them |
-| Agent ↔ its own resources | agent | every other process | protected-resource monitoring: any non-`updater` writer to the agent's files/service/keys is a high-severity detection |
+| Agent ↔ its own resources | agent | every other process | protected-resource monitoring: any foreign writer to the agent's own files (binary, config, alerts/events/heartbeat) is a high-severity detection — `updater` never needs an exception, see PR #770 |
 | Agent ↔ server | server PKI | transport | mTLS (ADR-0001); spool survives a severed link; the server flags a silent agent |
 
 ## The self-protection surface
@@ -72,7 +72,7 @@ self-protection property, and the heartbeat is its enforcement.**
 | Attack on the EDR | How the EDR defends / detects | Gap |
 | --- | --- | --- |
 | Replace the agent/watchdog binary with a neutered build | `tamper` self-integrity: binaries + config hash-verified against the signed `updater` manifest; only `updater` may change them; a mismatch is high-severity, not a log. #103 hardens install artifacts. | The verify runs in user mode; a kernel adversary forges it. The manifest chain (updater #30) is the root of trust. |
-| Modify config/policy to disable rules or lower thresholds | Policy is versioned and **signed** (`policy`, ADR-0003 trust domain); the agent rejects unsigned/tampered policy; protected-resource monitoring flags any non-`updater` writer to the config path. | Same user-mode caveat; the signature is the defense. |
+| Modify config/policy to disable rules or lower thresholds | Policy is versioned and **signed** (`policy`, ADR-0003 trust domain); the agent rejects unsigned/tampered policy; protected-resource monitoring flags any foreign writer to the config path (`agent.toml`, watched since PR #770; the resolved path, so a relative `--config` is covered too). | Same user-mode caveat; the signature is the defense. |
 | Delete the spool / alert log to erase evidence | The spool is append-only, `fsync`'d, and **drained to the server** — evidence that already left the host cannot be deleted from it; the two-phase ack (#108) makes at-least-once delivery the contract; protected-resource monitoring flags writers/deleters of the spool directory. | The spool-write→server-drain window; #108 minimizes it, transport (#24) closes it. Local-only deployments keep this risk. |
 | Disable the service / uninstall (`sc delete`, `systemctl disable`) | Touches protected resources (service defs, unit files) → protected-resource detection; the resulting telemetry gap is server-visible. | A legitimate admin uninstall is byte-identical to a malicious one — disambiguated by *who/how/when* (recorded actor) + change-management context, not the act alone. |
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantId, getUserId } from "@/lib/tenant";
 import { z } from "zod";
+import { validatePublishable } from "@/lib/content-publish";
 
 const CreateReleaseSchema = z.object({
   ring: z.enum(["canary_0", "canary_1", "canary_2", "prod"]),
@@ -17,6 +18,11 @@ const CreateReleaseSchema = z.object({
  * Authentication: better-auth session (admin only)
  * Request body: { ring, manifestUrl, manifestSha256, releasedAt? }
  * Response: { release: ContentRelease }
+ *
+ * The release is numbered one above the ring's highest (rolled-back releases included) and
+ * is refused (422) unless its manifest is the one named by `manifestUrl`/`manifestSha256`,
+ * lists at least one entry, is for this ring and carries that number, and every artifact it
+ * lists is in `storage/artifacts` and hashes to the manifest's value.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -44,18 +50,43 @@ export async function POST(req: NextRequest) {
 
     const nextVersion = (latestRelease?.releaseVersion || 0) + 1;
 
-    // Create new release
-    const release = await prisma.contentRelease.create({
-      data: {
-        tenantId,
-        ring,
-        releaseVersion: nextVersion,
-        manifestUrl,
-        manifestSha256,
-        status: "active",
-        releasedAt: releasedAt ? new Date(releasedAt) : new Date(),
-      },
+    // Nothing is published that an agent could not apply: the manifest must be the one it is
+    // published as and every artifact it lists must be in the store (see validatePublishable).
+    const publishable = await validatePublishable({
+      ring,
+      releaseVersion: nextVersion,
+      manifestUrl,
+      manifestSha256,
     });
+    if (!publishable.ok) {
+      return NextResponse.json({ error: publishable.error }, { status: 422 });
+    }
+
+    // Create new release
+    let release;
+    try {
+      release = await prisma.contentRelease.create({
+        data: {
+          tenantId,
+          ring,
+          releaseVersion: nextVersion,
+          manifestUrl,
+          manifestSha256,
+          status: "active",
+          releasedAt: releasedAt ? new Date(releasedAt) : new Date(),
+        },
+      });
+    } catch (error) {
+      // Another publish read the same highest release and took the number first (the
+      // (tenant, ring, version) row is unique): the manifest signed for it is now stale.
+      if ((error as { code?: string }).code === "P2002") {
+        return NextResponse.json(
+          { error: "Another release took this number first; rebuild the manifest for the next one" },
+          { status: 409 }
+        );
+      }
+      throw error;
+    }
 
     // Audit log
     await prisma.auditLog.create({
@@ -68,6 +99,7 @@ export async function POST(req: NextRequest) {
           ring,
           releaseVersion: nextVersion,
           manifestUrl,
+          entries: publishable.manifest.entries.length,
         },
       },
     });
