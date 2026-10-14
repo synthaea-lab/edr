@@ -28,8 +28,12 @@ use crate::{
 const NO_CANARY_SILENCE_DEADLINE_NS: u64 = 120_000_000_000; // 120s
 const NETLINK_SILENCE_DEADLINE_NS: u64 = 3 * NETLINK_POLL_INTERVAL.as_secs() * 1_000_000_000;
 /// Same shape as `NETLINK_SILENCE_DEADLINE_NS`: [`spawn_avc_reader`]'s `drain` call
-/// returning at all, whether or not anything was queued, is its canary — three
-/// missed cycles of [`AVC_POLL_TIMEOUT_MS`] is a genuine stall.
+/// returning at all, whether or not anything was queued, is its canary — three missed
+/// cycles of [`AVC_POLL_TIMEOUT_MS`] (6s) is a genuine stall. In practice the
+/// `SilenceMonitor` only checks on `silence::POLL_INTERVAL` (10s), so the deadline that
+/// actually fires is "no pulse between two monitor polls", roughly 10-20s, not a literal
+/// 6s — a healthy reader pulses every ≤ [`AVC_POLL_TIMEOUT_MS`] regardless, so this
+/// causes no false positives.
 const AVC_SILENCE_DEADLINE_NS: u64 = 3 * AVC_POLL_TIMEOUT_MS as u64 * 1_000_000;
 
 /// The actual OS-level kill call for issue #25's automated response —
@@ -288,8 +292,24 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     let uprobes_heartbeat = SensorHeartbeat::new("linux-uprobes");
     // Same "only if it actually runs" rule (#780): started only when eBPF is
     // primary (see the spawn call below), since `AuditSensor` as primary already
-    // covers AVC denials through its own heartbeat.
-    let ebpf_primary = sensor_name == "linux-ebpf";
+    // covers AVC denials through its own heartbeat. Opened here, synchronously,
+    // rather than inside the spawned thread: the heartbeat below must only be
+    // registered once we actually know the reader runs (#780 review) — a
+    // packaged install without `CAP_AUDIT_READ` must not accrue silence for a
+    // sensor that never started, or every start raises a false T1562 alert.
+    let ebpf_primary = starts_avc_reader(sensor_name);
+    let avc_reader = ebpf_primary
+        .then(sensor_linux_audit::AvcReader::open)
+        .and_then(|result| match result {
+            Ok(reader) => Some(reader),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "avc-reader: could not open NETLINK_AUDIT — SELinux AVC denials will not be captured on this host"
+                );
+                None
+            }
+        });
     let avc_heartbeat = SensorHeartbeat::new("linux-avc");
     let silence_monitor = Arc::new(Mutex::new(SilenceMonitor::new()));
     {
@@ -317,7 +337,7 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
                 now_ns,
             );
         }
-        if ebpf_primary {
+        if avc_reader.is_some() {
             mon.register(avc_heartbeat.clone(), AVC_SILENCE_DEADLINE_NS, now_ns);
         }
     }
@@ -348,8 +368,8 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
 
     spawn_netlink_poller(sink.clone(), netlink_heartbeat, &mut shutdown);
     spawn_journal_tail(sink.clone(), journal_heartbeat, alerts);
-    if ebpf_primary {
-        spawn_avc_reader(sink.clone(), avc_heartbeat, &mut shutdown);
+    if let Some(avc_reader) = avc_reader {
+        spawn_avc_reader(sink.clone(), avc_heartbeat, avc_reader, &mut shutdown);
     }
     crate::log_sources::spawn(sink.clone(), log_sources, alerts, &mut shutdown);
     if enable_tls_capture || enable_readline_capture || enable_dns_capture {
@@ -494,6 +514,17 @@ fn forward_netlink_events(
 /// to hold one back once it has arrived.
 const AVC_POLL_TIMEOUT_MS: i32 = 2000;
 
+/// Whether the `AvcReader` should run next to the chosen primary sensor (#780):
+/// only when eBPF is primary. When `AuditSensor` is primary instead, it already
+/// classifies every AVC record on the same stream through its own `Sensor::run`
+/// loop — starting a second reader would double up `PolicyDenial` events, not
+/// add coverage (`AvcReader`'s doc: a second socket does not steal records from
+/// the first). Pulled out as its own pure function (#780 review) so the gate is
+/// unit-testable without exercising `cmd_run`'s real sockets and threads.
+fn starts_avc_reader(sensor_name: &str) -> bool {
+    sensor_name == "linux-ebpf"
+}
+
 /// Spawns the background thread that keeps `SELinux` AVC denials reachable when
 /// eBPF is the chosen primary sensor (#780): `select_sensor` picks eBPF or
 /// `AuditSensor` for exec/connect, never both, so on a host where eBPF loads —
@@ -510,12 +541,15 @@ const AVC_POLL_TIMEOUT_MS: i32 = 2000;
 /// first, so nothing crashes, but nothing is gained either).
 ///
 /// Best-effort, same posture as [`spawn_journal_tail`]: a missing
-/// `CAP_AUDIT_READ` (unprivileged agent) logs once and the thread exits — not a
-/// reason to fail `cmd_run` over a source `AuditSensor`-as-primary already
-/// proves can be absent without the agent falling over.
+/// `CAP_AUDIT_READ` (unprivileged agent) is handled by the caller, which only
+/// calls this once `sensor_linux_audit::AvcReader::open` has already
+/// succeeded (#780 review) — not a reason to fail `cmd_run` over a source
+/// `AuditSensor`-as-primary already proves can be absent without the agent
+/// falling over.
 fn spawn_avc_reader(
     sink: Arc<DetectionSink>,
     heartbeat: SensorHeartbeat,
+    mut reader: sensor_linux_audit::AvcReader,
     shutdown: &mut ShutdownPlan,
 ) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -523,16 +557,6 @@ fn spawn_avc_reader(
     let handle = std::thread::Builder::new()
         .name("avc-reader".into())
         .spawn(move || {
-            let mut reader = match sensor_linux_audit::AvcReader::open() {
-                Ok(reader) => reader,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "avc-reader: could not open NETLINK_AUDIT — SELinux AVC denials will not be captured on this host"
-                    );
-                    return;
-                }
-            };
             let mut overruns: u64 = 0;
             while !worker_stop.load(Ordering::SeqCst) {
                 match reader.drain(sink.as_ref(), AVC_POLL_TIMEOUT_MS) {
@@ -753,4 +777,22 @@ pub(crate) fn cmd_capture_events(output: &std::path::Path) -> anyhow::Result<()>
     sensor
         .run(Box::new(sink))
         .map_err(|e| anyhow::anyhow!("sensor failed: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::starts_avc_reader;
+
+    #[test]
+    fn starts_avc_reader_when_ebpf_is_primary() {
+        assert!(starts_avc_reader("linux-ebpf"));
+    }
+
+    #[test]
+    fn does_not_start_avc_reader_when_audit_is_primary() {
+        // AuditSensor-as-primary already classifies AVC records on its own
+        // Sensor::run loop — a second reader here would double up PolicyDenial
+        // events, not add coverage.
+        assert!(!starts_avc_reader("linux-audit"));
+    }
 }
