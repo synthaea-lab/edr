@@ -41,8 +41,11 @@ static SYSCALL_DISPATCH: Array<u32> = Array::with_max_entries(MAX_SYSCALL_ID, 0)
 /// blocked forever in `accept`, `accept4`, `memfd_create` or `recvfrom` keeps its
 /// entry; an LRU evicts the stalest one when full so that blocked thread cannot
 /// blind the other three syscalls host-wide (#672, the idea of #668's
-/// `ACCEPT_ARGS`). Insert overwrites by key, so a later `sys_enter_*` on the same
-/// `pid_tgid` always replaces a stale tag before `sys_exit` can misroute into it.
+/// `ACCEPT_ARGS`). `raw_sys_enter` removes any entry for the current `pid_tgid` at
+/// the start of every syscall, tracked or not, before deciding whether to stash a
+/// fresh one (#694) — a stale entry is otherwise read by a `pid_tgid` that never
+/// made the call that set it, e.g. after a thread-group leader blocked here dies to
+/// another thread's `execve()`, which inherits the leader's tid.
 #[map]
 static PENDING_SYSCALL_EXIT: LruHashMap<u64, u32> = LruHashMap::with_max_entries(4096, 0);
 
@@ -203,6 +206,20 @@ pub fn raw_sys_enter(ctx: RawTracePointContext) -> u32 {
     if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 {
         return 0;
     }
+    // Any syscall entering for this pid_tgid drops a stale PENDING_SYSCALL_EXIT tag
+    // (#694): the four tracked syscalls (accept/accept4/memfd_create/recvfrom/socket)
+    // re-stash their own fresh one a few lines below, via stash_pending_syscall_exit,
+    // so this only ever discards an entry nothing is about to replace. Needed for more
+    // than the case `PENDING_SYSCALL_EXIT`'s own doc already covers (a later sys_enter
+    // of one of the four tracked syscalls overwrites by key): a thread-group leader
+    // blocked in accept() whose thread group then execve()s from another thread dies
+    // without its own sys_exit ever running, and the exec'ing thread takes over the
+    // leader's tid — so its pid_tgid matches the stale entry exactly, and the new
+    // image's first syscall, whatever it is, would otherwise have its genuine sys_exit
+    // misrouted into sys_exit_accept with a return value that was never an fd.
+    let pid_tgid = aya_ebpf::helpers::bpf_get_current_pid_tgid();
+    let _ = PENDING_SYSCALL_EXIT.remove(&pid_tgid);
+
     let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else {
         return 0;
     };
@@ -214,7 +231,6 @@ pub fn raw_sys_enter(ctx: RawTracePointContext) -> u32 {
     let Some(args) = read_syscall_args(regs) else {
         return 0;
     };
-    let pid_tgid = aya_ebpf::helpers::bpf_get_current_pid_tgid();
 
     let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else {
         return 0;
