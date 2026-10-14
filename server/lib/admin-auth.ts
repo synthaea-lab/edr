@@ -30,7 +30,12 @@ export async function requireTenantAdmin(
     select: { role: true },
   });
 
-  if (!member || !ADMIN_ROLES.has(member.role)) {
+  // better-auth stores several roles as one comma-separated string (`updateMemberRole`
+  // accepts an array; its own checks split on ",") — a member given two roles through
+  // better-auth's own API must not be locked out of both just because the whole string
+  // never equals "admin" or "owner".
+  const roles = member?.role.split(",").map((r) => r.trim()) ?? [];
+  if (!roles.some((r) => ADMIN_ROLES.has(r))) {
     return {
       response: NextResponse.json({ error: "Admin role required" }, { status: 403 }),
     };

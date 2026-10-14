@@ -14,6 +14,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST as publish } from "@/app/api/content/release/route";
 import { POST as rollback } from "@/app/api/content/rollback/route";
+import { POST as halt } from "@/app/api/content/halt/route";
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
 
@@ -242,7 +243,7 @@ describe("POST /api/content/rollback: it says what it does not do (#665)", () =>
   });
 });
 
-describe("content/release and content/rollback require the admin role (#803)", () => {
+describe("content/release, content/rollback and content/halt require the admin role (#803)", () => {
   function rollbackReq() {
     return new NextRequest("http://localhost/api/content/rollback", {
       method: "POST",
@@ -251,7 +252,15 @@ describe("content/release and content/rollback require the admin role (#803)", (
     });
   }
 
-  it("refuses a plain member on both routes, before either reads its body", async () => {
+  function haltReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
+    return new NextRequest("http://localhost/api/content/halt", {
+      method: "POST",
+      headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("refuses a plain member on all three routes, before any of them reads its body", async () => {
     db.member.findFirst.mockResolvedValue({ role: "member" });
     const manifest = manifestFor();
     store(manifest, GOOD_ARTIFACTS);
@@ -262,6 +271,10 @@ describe("content/release and content/rollback require the admin role (#803)", (
 
     const rollbackRes = await rollback(rollbackReq());
     expect(rollbackRes.status).toBe(403);
+    expect(db.contentRelease.update).not.toHaveBeenCalled();
+
+    const haltRes = await halt(haltReq());
+    expect(haltRes.status).toBe(403);
     expect(db.contentRelease.update).not.toHaveBeenCalled();
   });
 
@@ -279,6 +292,16 @@ describe("content/release and content/rollback require the admin role (#803)", (
     expect((await publish(post(publishBody(manifest)))).status).toBe(200);
   });
 
+  it("accepts a member whose role is a comma-separated list including admin or owner", async () => {
+    // better-auth stores several roles as one comma-separated string (`updateMemberRole`
+    // takes an array); a caller given two roles must not be refused because the whole
+    // string never equals "admin" or "owner".
+    db.member.findFirst.mockResolvedValue({ role: "admin,member" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+  });
+
   it("looks the membership up by the caller's own tenant and user id", async () => {
     const manifest = manifestFor();
     store(manifest, GOOD_ARTIFACTS);
@@ -287,6 +310,26 @@ describe("content/release and content/rollback require the admin role (#803)", (
       where: { organizationId: "t1", userId: "u1" },
       select: { role: true },
     });
+  });
+
+  it("refuses a member with an invalid body with 403, not the schema's 400 (review of #831)", async () => {
+    // Pins the gate running before the body is parsed: if a route were reordered to
+    // validate the body first, a member sending garbage would get 400 instead of 403.
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await publish(post({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("halts the ring for an admin and audits it", async () => {
+    db.contentRelease.findFirst.mockResolvedValue({ id: "r4", releaseVersion: 4, status: "active" });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    const res = await halt(haltReq());
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.update).toHaveBeenCalledWith({
+      where: { id: "r4" },
+      data: { status: "halted" },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
   });
 });
 
