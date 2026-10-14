@@ -41,10 +41,12 @@ runnable against any platform's agent from the VM matrix (`../vagrant`).
 
 ## Raw syscall-exit stale-entry regression (#694)
 
-`pending-syscall-exit-exec.c` exercises a thread-group leader blocked in
+`pending-syscall-exit-exec.c` is a negative check for a thread-group leader blocked in
 `accept(2)` while a worker thread waits for that exact syscall to appear in
 `/proc`, then calls `execve("/bin/true")`. The process should finish as `/bin/true`
-without a fabricated `SocketAccept` event attributed to its PID.
+without a fabricated `SocketAccept` event attributed to its PID. Kernel source
+review indicates this sequence consumes the leader's pending accept exit normally,
+so it is not expected to increment `PENDING_EXIT_MISMATCH_DROPPED`.
 
 On a Linux VM with the agent running and event capture enabled:
 
@@ -65,13 +67,14 @@ jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and
 jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and (tostring | contains("/bin/true")))' events.jsonl
 ```
 
-The new per-CPU map is named `PENDING_EXIT_MISMATCH_DROPPED`; the kernel
-truncates displayed map names to 15 characters (`PENDING_EXIT_MI`). Find its ID
-with `sudo bpftool map show | grep PENDING_EXIT_MI`, then compare
-`sudo bpftool map dump id <ID>` before and after the run. At least one counter
-value should increase.
+The per-CPU map is named `PENDING_EXIT_MISMATCH_DROPPED`; the kernel truncates
+displayed map names to 15 characters (`PENDING_EXIT_MI`). For this scenario,
+compare `sudo bpftool map dump id <ID>` before and after only as a diagnostic;
+the counter is not expected to increase. This program checks that the described
+exec sequence does not fabricate a `SocketAccept`, rather than reproducing the
+stale-entry bug. The host-side syscall-number tests cover the mismatch decision.
 
-This is a live lab reproduction. It complements the deterministic host-side test
+This is a live lab check. It complements the deterministic host-side test
 of the syscall-number match logic; it does not rely on timing sleeps to validate
 the core dispatch decision.
 

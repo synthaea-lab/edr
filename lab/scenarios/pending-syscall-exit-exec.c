@@ -1,5 +1,5 @@
-// Reproduces stale raw sys_exit state (#694): the leader blocks in accept while
-// a worker waits until that syscall is visible, then execs a fresh process image.
+// Exercises the non-leader exec scenario from #694: the leader blocks in accept
+// while a worker waits until that syscall is visible, then execs a fresh image.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
