@@ -59,6 +59,31 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 `transport`'s `heartbeat_body_is_the_documented_wire_shape` test pins this exact
 shape. A change that breaks it is a change to this contract.
 
+### Fleet status and telemetry loss
+
+The ops dashboard derives one status per agent, worst first: `silent` (no heartbeat for 5
+minutes), `no_beacon` (alive but never sent a beacon), `degraded`, else `healthy`. `degraded`
+has two causes: a sensor in the beacon reports `silent`, or the host **lost telemetry recently**.
+
+The loss counters (`spool_dropped`, `enrich_dropped`) are cumulative since the agent started and
+start at zero again when it restarts, and the server keeps only the latest beacon per agent, so
+recent loss is told from one beacon to the next:
+
+- if either counter **rose** compared with the stored beacon, the server stamps
+  `agent_health.loss_observed_at` with its own receive time (not the agent's clock);
+- the host is `degraded` for 10 minutes after that stamp (`LOSS_WINDOW_MS`), and the ops table
+  says "Lost telemetry in the last 10 min";
+- the **first** beacon of an agent never counts as loss, and a counter that **fell** is an agent
+  restart: it neither sets nor clears the stamp;
+- a beacon older than the stored one is ignored, so its lower counters cannot make the next beacon
+  look like a rise;
+- only these two counters count. The rarity evidence counters are information about a feature, not
+  lost telemetry, and loss does not feed the content rings' auto-halt (ADR-0016's criteria are the
+  silent-agent rate, the false-positive rate and the detection rate).
+
+What this does not see: loss the beacon does not carry, such as the kernel ring buffer
+overflowing (`ring buffer full, dropping open event` is logged but not counted).
+
 ### Response
 
 | Status | When | Body |

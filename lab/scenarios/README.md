@@ -31,6 +31,7 @@ To migrate from `old/lab` after review:
 | `ransomware-rename-burst.sh` | Same-pid burst of file renames, each appending a suffix onto its own old name | T1486 — asserts `check_mass_rename_pattern`'s extension-agnostic mass-rename detection (issue #262) |
 | `ransomware-reflex.sh` | A benign encryptor reads the planted canaries, then renames throwaway files one by one; run with kill on or off (`EXPECT=enforce\|observe`, `CANARY_DIR`) | T1083 canary detection + T1486 + `RESPONSE-KILL` (issue #82) — asserts the encryptor is killed before more than `MAX_ENCRYPTED` (default 60) files are renamed; needs `[deception] canary_dirs` outside `/tmp`. Not yet run on a VM |
 | `pid-reuse.sh` | A real `sed` runs, its pid is forced to be recycled (`ns_last_pid`) by a forked child that sets `comm=sed` and renames files with a `.bak` suffix; run as root, `recycled` (default) or `real` (control) | T1486 — asserts the in-place-edit exclusion does not follow a recycled pid (#519); `real` expects no alert |
+| `prevalence-lineage.sh` | The `lineage.sh` chain from a directory named by `TAG` (`TAG=shared` on two hosts, `TAG=only-a` on one); needs an uploading agent | T1059 + the fleet triage line on the case: "seen on 2 hosts" for the shared transition, "seen on 1 host" for the one-host one (issue #76, box 1) |
 
 The four `.ps1` scenarios above are the Windows demo surface — see `../../demo/`
 for the runbook that chains them in the reviewer-facing order.
