@@ -39,6 +39,42 @@ for the runbook that chains them in the reviewer-facing order.
 New scenarios follow the same shape: one script, one documented expectation list,
 runnable against any platform's agent from the VM matrix (`../vagrant`).
 
+## Raw syscall-exit stale-entry regression (#694)
+
+`pending-syscall-exit-exec.c` exercises a thread-group leader blocked in
+`accept(2)` while a worker thread waits for that exact syscall to appear in
+`/proc`, then calls `execve("/bin/true")`. The process should finish as `/bin/true`
+without a fabricated `SocketAccept` event attributed to its PID.
+
+On a Linux VM with the agent running and event capture enabled:
+
+```sh
+gcc -O2 -Wall -Wextra -pthread lab/scenarios/pending-syscall-exit-exec.c -o /tmp/pending-syscall-exit-exec
+sudo /tmp/pending-syscall-exit-exec
+```
+
+The program prints its PID before blocking; the worker replaces the image, so a
+successful run exits with status 0. In the captured event stream, check that this
+PID has an `ExecEvent` for `/bin/true` and no `SocketAccept` event caused by the
+worker's `execve` return. Set `PID` to the value printed by the program. These commands should print no
+rows for a fabricated accept, and should print the exec event:
+
+```sh
+PID=2540
+jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and (tostring | contains("SocketAccept")))' events.jsonl
+jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and (tostring | contains("/bin/true")))' events.jsonl
+```
+
+The new per-CPU map is named `PENDING_EXIT_MISMATCH_DROPPED`; the kernel
+truncates displayed map names to 15 characters (`PENDING_EXIT_MI`). Find its ID
+with `sudo bpftool map show | grep PENDING_EXIT_MI`, then compare
+`sudo bpftool map dump id <ID>` before and after the run. At least one counter
+value should increase.
+
+This is a live lab reproduction. It complements the deterministic host-side test
+of the syscall-number match logic; it does not rely on timing sleeps to validate
+the core dispatch decision.
+
 Windows scenarios must run on a stock Windows PowerShell 5.1 under any locale
 (#433). They dot-source `common.ps1` and keep to its three rules: ASCII-only source
 (`tools/check-ps1-ascii.py`, run by CI), locale-dependent arguments built from the
