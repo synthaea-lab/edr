@@ -312,5 +312,6 @@ mod persistence;
 mod quarantine;
 mod rdp;
 mod session;
+mod sudo;
 mod tamper;
 mod windows;

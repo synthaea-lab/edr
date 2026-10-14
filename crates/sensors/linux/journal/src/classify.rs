@@ -46,6 +46,22 @@ pub enum JournalEvent {
     },
     /// The matching close for a [`JournalEvent::PamSessionOpened`].
     PamSessionClosed { service: String },
+    /// A PAM authentication failure (wrong password) for the `sudo`/`su`
+    /// service — parsed from the standard `pam_unix(<service>:auth):
+    /// authentication failure; ...` line. Only emitted for `sudo`/`su`:
+    /// `sshd`'s own PAM auth failure is the same event [`JournalEvent::SshFailed`]
+    /// already covers (its `"Failed password"` line), mapping both would
+    /// double-count, same reasoning as [`JournalEvent::PamSessionOpened`]'s own
+    /// restriction (#381, T1548.003).
+    PamAuthFailure {
+        service: String,
+        /// The `logname=` field: who typed the (wrong) password. Not currently
+        /// projected into `schema::AuthEvent` (narrower than this raw shape),
+        /// kept here for forensic completeness.
+        invoking_user: Option<String>,
+        /// The `user=` field: the account being authenticated as.
+        target_user: Option<String>,
+    },
     /// A `sudo` invocation with its logged command line (the `sudo:session` PAM
     /// wrapper around it is reported separately as `PamSessionOpened`/`Closed`).
     SudoCommand {
@@ -90,7 +106,7 @@ pub fn classify(record: &JournalRecord) -> Option<JournalEvent> {
         return Some(event);
     }
 
-    classify_pam_session(&record.message)
+    classify_pam(&record.message)
 }
 
 fn classify_unit_job(record: &JournalRecord) -> Option<JournalEvent> {
@@ -149,7 +165,7 @@ fn classify_sudo_command(message: &str) -> Option<JournalEvent> {
     })
 }
 
-fn classify_pam_session(message: &str) -> Option<JournalEvent> {
+fn classify_pam(message: &str) -> Option<JournalEvent> {
     let rest = message.strip_prefix("pam_unix(")?;
     let (service, _) = rest.split_once(':')?;
     let service = service.to_string();
@@ -163,6 +179,17 @@ fn classify_pam_session(message: &str) -> Option<JournalEvent> {
     }
     if message.contains("session closed for user") {
         return Some(JournalEvent::PamSessionClosed { service });
+    }
+    if (service == "sudo" || service == "su") && message.contains("authentication failure") {
+        // Field order is fixed (logname, uid, euid, tty, ruser, rhost, user), but
+        // "user=" is searched with a leading space: a bare `extract_field(..,
+        // "user=")` would match inside `ruser=` first (it reads "r" + "user="),
+        // taking the wrong, usually-empty field as the target.
+        return Some(JournalEvent::PamAuthFailure {
+            service,
+            invoking_user: extract_field(message, "logname="),
+            target_user: extract_field(message, " user="),
+        });
     }
     None
 }
@@ -455,6 +482,77 @@ mod tests {
                 target_user: Some("alice".into()),
             })
         );
+    }
+
+    // --- PAM auth failures (documented format, not lab-verified — see module
+    //     doc and crate doc; this VM's sudo has no PAM config to capture against).
+
+    #[test]
+    fn pam_auth_failure_for_sudo_to_root() {
+        let r = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            (
+                "MESSAGE",
+                "pam_unix(sudo:auth): authentication failure; logname=lab uid=1001 euid=0 \
+                 tty=/dev/pts/0 ruser= rhost=  user=root",
+            ),
+        ]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "sudo".into(),
+                invoking_user: Some("lab".into()),
+                target_user: Some("root".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn pam_auth_failure_for_su_to_another_user() {
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(su:auth): authentication failure; logname=lab uid=1001 euid=0 \
+             tty=pts/0 ruser=lab rhost=  user=alice",
+        )]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "su".into(),
+                invoking_user: Some("lab".into()),
+                target_user: Some("alice".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn a_nonempty_ruser_does_not_get_mistaken_for_the_target_user() {
+        // `extract_field` for "user=" with a leading space must not match inside
+        // "ruser=lab" — "r" + "user=" has no space before the embedded "user=".
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(su:auth): authentication failure; logname=lab uid=1001 euid=0 \
+             tty=pts/0 ruser=lab rhost=  user=root",
+        )]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "su".into(),
+                invoking_user: Some("lab".into()),
+                target_user: Some("root".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn pam_auth_failure_for_sshd_is_not_classified() {
+        // sshd's own "Failed password" line already covers this (`SshFailed`);
+        // mapping the PAM side too would double-count the same failed login.
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh \
+             ruser= rhost=10.0.0.5  user=alice",
+        )]);
+        assert_eq!(classify(&r), None);
     }
 
     #[test]

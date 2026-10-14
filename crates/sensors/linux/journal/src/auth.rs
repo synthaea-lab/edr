@@ -73,6 +73,17 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             target_user.clone()?,
             None,
         ),
+        // `classify` only emits this for the "sudo"/"su" services (sshd's own PAM
+        // auth failure would double-count `SshFailed`), so no service guard is
+        // needed here. `invoking_user` isn't projected: `AuthEvent` has no field
+        // for "who typed the password" distinct from `target_user`, same as every
+        // other mapping in this function.
+        JournalEvent::PamAuthFailure { target_user, .. } => (
+            AuthOutcome::Failure,
+            AuthKind::LogonFailure,
+            target_user.clone()?,
+            None,
+        ),
         _ => return None,
     };
 
@@ -240,6 +251,26 @@ mod tests {
             target_user: Some("alice".into()),
         };
         assert!(to_auth_event(&record, &event).is_none());
+    }
+
+    #[test]
+    fn pam_auth_failure_for_sudo_maps_to_logon_failure() {
+        let record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_PID", "100"),
+            ("_UID", "1001"),
+            ("_GID", "1001"),
+        ]);
+        let event = JournalEvent::PamAuthFailure {
+            service: "sudo".into(),
+            invoking_user: Some("lab".into()),
+            target_user: Some("root".into()),
+        };
+        let auth = to_auth_event(&record, &event).expect("should map");
+        assert_eq!(auth.outcome, AuthOutcome::Failure);
+        assert_eq!(auth.kind, AuthKind::LogonFailure);
+        assert_eq!(auth.target_user, "root");
+        assert_eq!(auth.source_address, None);
     }
 
     #[test]

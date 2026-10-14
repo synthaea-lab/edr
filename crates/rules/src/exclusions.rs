@@ -120,6 +120,14 @@ pub(crate) const RDP_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// five-minute interval includes slower interactive guessing while limiting
 /// stale failures that are no longer meaningful evidence for a later success.
 pub(crate) const RDP_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
+/// T1548.003 — a local privilege-escalation success (`sudo`/`su`) for a target
+/// account after this many authentication failures for that same account.
+/// Same reasoning as [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a
+/// human mistyping their password a couple of times before getting it right,
+/// catches a scripted or sustained guess that eventually succeeds.
+pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
+/// Sliding look-back window for [`SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD`].
+pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
 pub(crate) const BEACON_THRESHOLD: u32 = 3;
 pub(crate) const BEACON_WINDOW_NS: u64 = 60_000_000_000; // 60s
 
