@@ -60,4 +60,17 @@ describe("tenant provisioning (real database)", () => {
     const org = await prisma.organization.findUnique({ where: { id: tenant.id } });
     expect(org).not.toBeNull();
   });
+
+  it("rolls back the tenant and organization when the member write fails (review of #829)", async () => {
+    // A non-existent owner userId fails the Member→User foreign key. Without the
+    // $transaction wrapping all three writes, this would leave a Tenant and an
+    // Organization behind with no member able to make it their active session —
+    // exactly the orphaned state #821 exists to stop happening by hand.
+    await expect(
+      provisionTenant(prisma, "Acme", { userId: randomUUID() })
+    ).rejects.toThrow();
+
+    expect(await prisma.tenant.count()).toBe(0);
+    expect(await prisma.organization.count()).toBe(0);
+  });
 });

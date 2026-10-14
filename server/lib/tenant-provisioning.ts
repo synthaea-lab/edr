@@ -39,6 +39,20 @@ export async function provisionTenant(
           role: owner.role ?? "owner",
         },
       });
+      // Creating a tenant is at least as sensitive as any action content/release or
+      // content/rollback already audit — more so, given it's the one route no
+      // tenant-scoped role check can gate (review of #829). Written in the same
+      // transaction so a rolled-back provision leaves no orphaned entry; skipped
+      // without an owner (a test-only path with no caller to attribute it to).
+      await tx.auditLog.create({
+        data: {
+          tenantId: tenant.id,
+          userId: owner.userId,
+          action: "tenant.create",
+          resource: `tenants/${tenant.id}`,
+          details: { name: tenant.name },
+        },
+      });
     }
     return { id: tenant.id, name: tenant.name };
   });

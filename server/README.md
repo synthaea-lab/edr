@@ -41,13 +41,14 @@ schema. Two constraints follow, both found by running a real login:
   the headers.
 - **A session's `activeOrganizationId` is the tenant id**, so an organization's id must equal its
   tenant's. `lib/tenant-provisioning.ts`'s `provisionTenant` creates the pair (#821), called from
-  `POST /api/admin/tenants` (admin-only, same session check as the other admin routes — #803
-  tracks making that a real role check) with `{ name }`; the signed-in caller becomes the tenant's
-  owning member. To sign in against it afterward, call better-auth's own
-  `POST /api/auth/organization/set-active` with `{ organizationId: <the returned tenant id> }`.
-
-A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
-if a required one is missing from `prisma/schema.prisma`.
+  `POST /api/admin/tenants` with `{ name }`; the caller becomes the tenant's owning member. The
+  route is gated by `PLATFORM_OPERATOR_USER_IDS` (`lib/platform-operator.ts`), a comma-separated
+  allow-list of `auth_user.id` values, not a session role — the caller has no tenant yet at this
+  point, so a role *within* a tenant (`requireTenantAdmin`, #803) cannot gate it. To sign in
+  against the new tenant afterward, call better-auth's own `POST /api/auth/organization/set-active`
+  with `{ organizationId: <the returned tenant id> }`. Organization deletion is disabled
+  (`disableOrganizationDeletion` in `lib/auth.ts`): better-auth's own delete API has no notion of
+  the Tenant/Organization pairing and would orphan the Tenant row.
 
 A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
 if a required one is missing from `prisma/schema.prisma`.

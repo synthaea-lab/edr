@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getUserId } from "@/lib/tenant";
+import { requirePlatformOperator } from "@/lib/platform-operator";
 import { provisionTenant } from "@/lib/tenant-provisioning";
 
 const CreateTenantSchema = z.object({
@@ -10,10 +10,12 @@ const CreateTenantSchema = z.object({
 
 /**
  * POST /api/admin/tenants
- * Admin endpoint: provision a new tenant and its paired better-auth organization (#821).
+ * Platform-operator endpoint: provision a new tenant and its paired better-auth
+ * organization (#821).
  *
- * Authentication: better-auth session (admin only, same as the other admin endpoints —
- * #803 tracks making that a real role check rather than "any signed-in session").
+ * Authentication: `PLATFORM_OPERATOR_USER_IDS` allow-list (review of #829) — the caller
+ * has no tenant yet at this point, so `requireTenantAdmin` (#803), which checks a role
+ * *within* a tenant, cannot gate this route.
  * Request body: { name }
  * Response: { tenant: { id, name } }
  *
@@ -23,9 +25,16 @@ const CreateTenantSchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    const userId = await getUserId(req);
+    const authed = await requirePlatformOperator(req);
+    if ("response" in authed) return authed.response;
+    const { userId } = authed;
 
-    const body = await req.json();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Request body is not valid JSON" }, { status: 400 });
+    }
     const validation = CreateTenantSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json(

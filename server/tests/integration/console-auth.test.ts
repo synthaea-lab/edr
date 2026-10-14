@@ -72,6 +72,30 @@ describe("console authentication (real database)", () => {
     expect(session?.session.activeOrganizationId).toBe(tenant.id);
   });
 
+  it("refuses to delete a tenant's paired organization, rather than orphan the tenant (review of #829)", async () => {
+    // better-auth's own delete API has no notion of the Tenant/Organization pairing
+    // (#821) and would otherwise remove the Organization/Member rows while leaving
+    // the Tenant and all its data behind, reachable by no one — disableOrganizationDeletion
+    // (lib/auth.ts) refuses the call outright instead.
+    const { cookie } = await signUp("owner-delete@example.com");
+    const signedUp = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    const tenant = await createTestTenant(undefined, { userId: signedUp!.user.id });
+    await auth.api.setActiveOrganization({
+      headers: new Headers({ cookie }),
+      body: { organizationId: tenant.id },
+    });
+
+    await expect(
+      auth.api.deleteOrganization({
+        headers: new Headers({ cookie }),
+        body: { organizationId: tenant.id },
+      })
+    ).rejects.toThrow();
+
+    expect(await prisma.organization.findUnique({ where: { id: tenant.id } })).not.toBeNull();
+    expect(await prisma.tenant.findUnique({ where: { id: tenant.id } })).not.toBeNull();
+  });
+
   it("signs in with the right password and refuses the wrong one", async () => {
     await signUp("sign-in@example.com");
 
