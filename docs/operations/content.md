@@ -76,6 +76,40 @@ one it will assign, or lists an artifact that is missing from the store or does 
 value, so none of this shows up later as a failure for every agent of the ring. Agents fetch what
 differs and remove what it no longer lists (see above).
 
+## Staging an artifact in the store
+
+The artifact store is keyed by content hash, not by path (`storage/artifacts/<sha256>`, #804).
+To publish a release that adds or changes a file, put its bytes there under the hash of its own
+content before calling `POST /api/content/release` — the manifest's `sha256` for that entry must
+match:
+
+    sha=$(sha256sum rules/new.sigma | cut -d' ' -f1)
+    cp rules/new.sigma storage/artifacts/$sha
+
+An unchanged file needs nothing staged: its bytes are already under their hash from whichever
+release first uploaded them, and the store never prunes a hash that any release (active,
+rolled-back, or historical) still references (retention for hashes nothing references any more
+is #834). A publish that lists a hash not present in the store is refused (422, "not in the
+store"), naming the missing path.
+
+## Upgrading a server from the old, path-keyed store (#804)
+
+Before #804, `storage/artifacts/` held one file per manifest path
+(`storage/artifacts/rules/beacon.sigma`); the routes now read and write only
+`storage/artifacts/<sha256>`. A server upgraded without a migration step serves every agent a 404
+on its next fetch — a new enrollment, an agent moved back to its ring, or the same-release repair
+above. Before deploying past this change, copy each existing file to its hash-named sibling (the
+old path-keyed files are no longer read and can be removed once every active release's artifacts
+have a hash-named copy):
+
+    find storage/artifacts -type f ! -regex '.*/[0-9a-f]\{64\}$' | while read -r f; do
+        sha=$(sha256sum "$f" | cut -d' ' -f1)
+        cp "$f" "storage/artifacts/$sha"
+    done
+
+This is a one-time, idempotent step: re-running it after further uploads just re-copies files
+already at their hash name onto themselves.
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,

@@ -175,6 +175,18 @@ describe("POST /api/content/release: nothing is published that an agent could no
     expect((await publish(post(publishBody(manifest)))).status).toBe(422);
   });
 
+  it("refuses an entry sha256 that is not 64 lowercase hex characters, before it ever reaches the filesystem", async () => {
+    // The store now reads an entry by its sha256 as a path component (#804): without the
+    // schema's regex, a crafted manifest could point that read outside storage/artifacts
+    // (review of #835).
+    const manifest = manifestFor({
+      entries: [{ path: "rules/x.sigma", type: "rule", sha256: "../../../etc/passwd", size: 1 }],
+    });
+    store(manifest, {});
+    const res = await publish(post(publishBody(manifest)));
+    expect(res.status).toBe(422);
+  });
+
   it("answers 409, not 500, when a concurrent publish took the number first", async () => {
     // Two publishes read the same highest release; the unique (tenant, ring, version) row
     // makes the second `create` fail. The binary release route already says so with a 409.

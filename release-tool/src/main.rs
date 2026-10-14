@@ -140,17 +140,19 @@ fn report_change(change: &roll_forward::Change, current_version: u64) {
         eprintln!("  removed        {path}");
     }
     for path in &change.brought_back {
-        eprintln!("  brought back   {path} (its bytes must be in the artifact store)");
+        eprintln!("  brought back   {path} (its bytes must be in the artifact store under their hash)");
     }
     if !change.restored_bytes.is_empty() {
         eprintln!(
-            "WARNING: {} path(s) hold different bytes in the release being withdrawn. The artifact \
-             store keeps one file per path, so put the earlier bytes back at these paths BEFORE \
-             publishing, or the publish is refused and agents could not fetch them:",
+            "{} path(s) hold different bytes in the release being withdrawn. The artifact store \
+             is keyed by content hash (#804), so nothing needs restoring: the earlier bytes are \
+             still under their own hash, wherever they were first uploaded. This does not hold \
+             if the server predates #804 and was never migrated off the old path-keyed layout \
+             (docs/operations/content.md) — check that first if the publish below is refused:",
             change.restored_bytes.len()
         );
         for path in &change.restored_bytes {
-            eprintln!("  restore bytes  {path}");
+            eprintln!("  different      {path}");
         }
     }
 }

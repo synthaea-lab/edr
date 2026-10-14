@@ -14,10 +14,14 @@ use updater::ContentManifest;
 pub(crate) struct Change {
     /// Paths the ring has now that the corrective release no longer lists: agents delete them.
     pub(crate) removed: Vec<String>,
-    /// Paths both list with different bytes: the artifact store keeps one file per path, so the
-    /// earlier bytes must be put back at these paths before the release is published.
+    /// Paths both list with different bytes: the artifact store is keyed by content hash
+    /// (#804), so the earlier bytes need nothing restored at any path — they are still under
+    /// their own hash, wherever they were first uploaded, unless that hash predates #804 and
+    /// the server was never migrated off the old path-keyed layout (see
+    /// `docs/operations/content.md`).
     pub(crate) restored_bytes: Vec<String>,
-    /// Paths only the earlier release lists: agents fetch them again (their bytes must be in the store).
+    /// Paths only the earlier release lists: agents fetch them again (their bytes must be in the
+    /// store under their hash).
     pub(crate) brought_back: Vec<String>,
     pub(crate) unchanged: usize,
 }
