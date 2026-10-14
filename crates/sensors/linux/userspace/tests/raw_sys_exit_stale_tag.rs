@@ -18,8 +18,10 @@ use std::{
     time::Duration,
 };
 
-use schema::Event;
-use schema::sensor::{EventSink, Sensor};
+use schema::{
+    Event,
+    sensor::{EventSink, Sensor},
+};
 
 struct Collector(Arc<Mutex<Vec<Event>>>);
 
