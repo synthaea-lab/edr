@@ -1537,8 +1537,10 @@ fn package_change_upgraded_golden() {
 fn policy_denial_golden() {
     // v23 (#297): a SELinux AVC denial — httpd blocked (enforcing mode) from
     // reading a file labeled for a user's home directory, the classic
-    // web-shell-reading-secrets shape. `action` is absent: the AVC parser
-    // doesn't yet recover the requested permission set, see the type's doc.
+    // web-shell-reading-secrets shape. `action` is absent: this fixture
+    // predates #813, which taught the AVC parser to recover the requested
+    // permission set — see the type's doc. Frozen as-is; a v23 fixture must
+    // keep producing what v23 actually produced.
     // v30 (#427): `object_path` from the AVC record's `path=`/`name=`.
     assert_golden(
         &Event::PolicyDenial(PolicyDenialEvent {
