@@ -40,12 +40,15 @@ function manifestFor(overrides: Record<string, unknown> = {}) {
   );
 }
 
-/** Puts a manifest at storage://manifests/<name> and the given artifacts under storage/artifacts. */
+/**
+ * Puts a manifest at storage://manifests/<name> and the given artifacts' bytes in
+ * storage/artifacts, under their own hash (#804) — the map's keys are only there to make
+ * call sites at tests below readable, the store itself does not key on them.
+ */
 function store(manifest: Buffer, artifacts: Record<string, Buffer>, name = "content-canary_0-v5.json") {
   writeFileSync(join(sandbox, "storage", "manifests", name), manifest);
-  for (const [p, bytes] of Object.entries(artifacts)) {
-    mkdirSync(join(sandbox, "storage", "artifacts", p, ".."), { recursive: true });
-    writeFileSync(join(sandbox, "storage", "artifacts", p), bytes);
+  for (const bytes of Object.values(artifacts)) {
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(bytes)), bytes);
   }
 }
 
@@ -151,26 +154,17 @@ describe("POST /api/content/release: nothing is published that an agent could no
     expect(db.contentRelease.create).not.toHaveBeenCalled();
   });
 
-  it("refuses a corrective release over a modified path until the earlier bytes are back in the store", async () => {
-    // Release 4 changed rules/x.sigma. The store is keyed by path and shared across releases,
-    // so it holds release 4's bytes; the corrective release lists release 2's hash for that
-    // path. Published anyway, every agent on release 4 would get a 502 on that fetch, pruning
-    // would never run and the bad rule would stay (review of #782).
+  it("publishes a corrective release over a modified path with nothing restored first (#804)", async () => {
+    // Release 2 uploaded RULE_V2 under its own hash; release 4 later changed rules/x.sigma
+    // and uploaded RULE_V4 under ITS hash — content-addressed, so this never touched RULE_V2's
+    // bytes. A corrective release naming RULE_V2's hash for rules/x.sigma again (ADR-0032)
+    // needs nothing put back: those bytes never moved.
     const manifest = manifestFor(); // lists RULE_V2's hash for rules/x.sigma
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
+    store(manifest, GOOD_ARTIFACTS); // RULE_V2 and OTHER, as release 2 (or the test fixture) uploaded them
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(RULE_V4)), RULE_V4); // release 4's separate upload
     const res = await publish(post(publishBody(manifest)));
-    expect(res.status).toBe(422);
-    const { error } = await res.json();
-    expect(error).toContain("rules/x.sigma");
-    expect(error).toMatch(/earlier bytes|put .* back/i);
-    expect(db.contentRelease.create).not.toHaveBeenCalled();
-  });
-
-  it("publishes that corrective release once the earlier bytes have been put back", async () => {
-    const manifest = manifestFor();
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules/x.sigma"), RULE_V2); // restored
-    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.create).toHaveBeenCalledOnce();
   });
 
   it("refuses an entry path that would leave the store", async () => {

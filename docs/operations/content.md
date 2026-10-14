@@ -64,9 +64,11 @@ and refuses one that does not verify or lists nothing):
     release-tool sign --kind content --key-file release.key release-5.json --out release-5-signed.json
 
 `--current` (the manifest being withdrawn) is optional but worth giving: it lists what agents will
-remove, and the paths whose bytes differ between the two releases. **The artifact store keeps one
-file per path** (`storage/artifacts/<path>`), so for those paths the earlier bytes must be put
-back in the store before publishing. Content the later release only *added* needs nothing.
+remove, and the paths whose bytes differ between the two releases, for the operator's own
+information. **The artifact store is keyed by content hash** (`storage/artifacts/<sha256>`,
+#804), not by path, so nothing needs restoring: the earlier release's bytes are still sitting
+under their own hash, wherever they were first uploaded, whatever a later release did at that
+path. Publishing the corrective release needs only the manifest itself.
 
 Then publish with `POST /api/content/release`. The control plane refuses (422) a release whose
 manifest is not the one named, lists nothing, is for another ring, carries another number than the
