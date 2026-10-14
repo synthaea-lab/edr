@@ -5,6 +5,11 @@
 //! Needs real `CAP_BPF`/`CAP_PERFMON` (root) and a kernel the raw dispatcher attaches
 //! on — not run by default. `sudo -E ~/.cargo/bin/cargo test -p sensor-linux --release
 //! -- --ignored raw_sys_exit --nocapture`.
+//!
+//! `LinuxSensor` only exists for `target_os = "linux"` (`sensor-linux`'s own
+//! `lib.rs`): gated the same way so `cargo test --workspace` still builds an
+//! empty test binary here on Windows/macOS instead of failing to resolve it.
+#![cfg(target_os = "linux")]
 
 use std::{
     path::PathBuf,
