@@ -140,7 +140,9 @@ fn report_change(change: &roll_forward::Change, current_version: u64) {
         eprintln!("  removed        {path}");
     }
     for path in &change.brought_back {
-        eprintln!("  brought back   {path} (its bytes must be in the artifact store under their hash)");
+        eprintln!(
+            "  brought back   {path} (its bytes must be in the artifact store under their hash)"
+        );
     }
     if !change.restored_bytes.is_empty() {
         eprintln!(
