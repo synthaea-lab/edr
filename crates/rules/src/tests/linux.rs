@@ -1158,21 +1158,141 @@ fn permissive_mode_still_alerts_on_a_new_shape() {
     assert_eq!(alerts.len(), 1);
 }
 
+// ── POLICY-DENIAL-DRIFT via AppLocker/WDAC (#796, follow-up of #774) ──
+
 #[test]
-fn only_selinux_denials_alert_for_now() {
-    // AppLocker/WDAC PolicyDenialEvents carry no subject/object context
-    // (always None), so this rule's shape would collapse to object_class
-    // alone — far too coarse (see known_policy_denials' doc) — gated off
-    // until a richer per-mechanism key exists.
+fn a_new_applocker_block_alerts_once_and_a_repeat_does_not() {
     let mut state = RuleState::new();
-    let applocker = state.on_policy_denial(&policy_denial_event_full(
+    let first = state.on_policy_denial(&policy_denial_windows(
         "applocker",
         None,
-        None,
         Some("EXE"),
+        Some(r"C:\Users\x\evil.exe"),
         true,
     ));
-    assert!(applocker.is_empty());
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].technique, "T1562");
+    let second = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Users\x\evil.exe"),
+        true,
+    ));
+    assert!(second.is_empty());
+}
+
+#[test]
+fn an_applocker_repeat_in_a_different_case_is_still_the_same_shape() {
+    // Windows paths are case-insensitive; AppLocker reports the same file as
+    // `C:\Users\x\EVIL.EXE` from `FullFilePath` and `C:\USERS\X\EVIL.EXE` from an
+    // expanded `FilePath` (#796).
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Users\x\EVIL.EXE"),
+        true,
+    ));
+    let second = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\USERS\X\evil.exe"),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert!(
+        second.is_empty(),
+        "same file, different case: not a new shape"
+    );
+}
+
+#[test]
+fn two_distinct_applocker_blocks_each_alert() {
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Temp\a.exe"),
+        true,
+    ));
+    let second = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Temp\b.exe"),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+}
+
+#[test]
+fn an_applocker_audit_decision_is_low_an_enforced_one_is_medium() {
+    let mut state = RuleState::new();
+    let audited = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Temp\a.exe"),
+        false,
+    ));
+    let blocked = state.on_policy_denial(&policy_denial_windows(
+        "applocker",
+        None,
+        Some("EXE"),
+        Some(r"C:\Temp\b.exe"),
+        true,
+    ));
+    assert_eq!(audited[0].severity, schema::detection::Severity::Low);
+    assert_eq!(blocked[0].severity, schema::detection::Severity::Medium);
+}
+
+#[test]
+fn wdac_denials_are_keyed_by_the_loading_process_as_well_as_the_file() {
+    // Two different processes loading the same file are two distinct findings, not
+    // one: the loading process is part of WDAC's key (#796), unlike AppLocker's.
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&policy_denial_windows(
+        "wdac",
+        Some(r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe"),
+        Some("user-mode"),
+        Some(r"\Device\HarddiskVolume3\Temp\payload.dll"),
+        true,
+    ));
+    let second = state.on_policy_denial(&policy_denial_windows(
+        "wdac",
+        Some(r"\Device\HarddiskVolume3\Windows\System32\regsvr32.exe"),
+        Some("user-mode"),
+        Some(r"\Device\HarddiskVolume3\Temp\payload.dll"),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+}
+
+#[test]
+fn the_same_wdac_denial_repeated_does_not_realert() {
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&policy_denial_windows(
+        "wdac",
+        Some(r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe"),
+        Some("user-mode"),
+        Some(r"\Device\HarddiskVolume3\Temp\payload.dll"),
+        true,
+    ));
+    let second = state.on_policy_denial(&policy_denial_windows(
+        "wdac",
+        Some(r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe"),
+        Some("user-mode"),
+        Some(r"\Device\HarddiskVolume3\Temp\payload.dll"),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert!(second.is_empty());
 }
 
 #[test]

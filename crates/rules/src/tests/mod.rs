@@ -305,6 +305,27 @@ fn policy_denial_event_full(
     }
 }
 
+/// An AppLocker/WDAC-shaped `PolicyDenialEvent` (#796): no `SELinux`-style
+/// context, `object_class` is the rule collection or signing scenario,
+/// `object_path` is the file.
+fn policy_denial_windows(
+    mechanism: &str,
+    subject_context: Option<&str>,
+    object_class: Option<&str>,
+    object_path: Option<&str>,
+    enforced: bool,
+) -> PolicyDenialEvent {
+    PolicyDenialEvent {
+        meta: meta(),
+        mechanism: mechanism.to_string(),
+        subject_context: subject_context.map(str::to_string),
+        object_class: object_class.map(str::to_string),
+        object_path: object_path.map(str::to_string),
+        enforced,
+        ..schema::fixtures::policy_denial()
+    }
+}
+
 mod coverage;
 mod linux;
 mod motw_removal;

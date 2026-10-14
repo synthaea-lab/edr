@@ -10,8 +10,9 @@ use std::{
 use schema::{
     AuthEvent, AuthOutcome, ConnectEvent, Event, ExecEvent, FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN,
     FileDeleteEvent, FileOpenEvent, FileQuarantineEvent, FileRenameEvent, FileWriteEvent,
-    ListenPortEvent, MemfdCreateEvent, NetworkFlowEvent, O_CREAT, POLICY_MECHANISM_SELINUX,
-    PolicyDenialEvent, SessionEvent, SessionState, User, detection::Severity,
+    ListenPortEvent, MemfdCreateEvent, NetworkFlowEvent, O_CREAT, POLICY_MECHANISM_APPLOCKER,
+    POLICY_MECHANISM_SELINUX, POLICY_MECHANISM_WDAC, PolicyDenialEvent, SessionEvent, SessionState,
+    User, detection::Severity,
 };
 use store::BoundedMap;
 
@@ -108,9 +109,11 @@ impl PidFact {
     }
 }
 
-/// `known_policy_denials`' key: (mechanism, subject context, object context, object
-/// class). Named so clippy's `type_complexity` lint doesn't flag the field
-/// declaration.
+/// `known_policy_denials`' key: `mechanism` plus three mechanism-specific slots, built
+/// by [`RuleState::policy_denial_key`] — `SELinux`, `AppLocker` and WDAC each put
+/// different things in them, since each mechanism's `PolicyDenialEvent` carries
+/// different fields (#796). Named so clippy's `type_complexity` lint doesn't flag the
+/// field declaration.
 type PolicyDenialKey = (String, Option<String>, Option<String>, Option<String>);
 
 /// Sliding history needed by the correlation rules:
@@ -176,16 +179,16 @@ pub struct RuleState {
     /// first run is cold by design. LRU-bounded like every other stateful
     /// rule.
     ///
-    /// `SELinux` only (`check_policy_denial_drift` gates on
-    /// [`POLICY_MECHANISM_SELINUX`]): `scontext`/`tcontext` give each denial a
-    /// rich, domain-specific triple. AppLocker/WDAC `PolicyDenialEvent`s carry
-    /// no subject/object context at all (`None`/`None`), so their "shape"
-    /// would collapse to `object_class` alone — 5 values for `AppLocker`
-    /// (`EXE`/`DLL`/`MSI`/`SCRIPT`/`APPX`), 2 for WDAC — meaning the *first*
-    /// blocked `.exe` ever seen would alert and every distinct one after it,
-    /// forever, would not. Needs a richer per-mechanism key (likely
-    /// `object_path`) before it's worth extending; tracked as a follow-up,
-    /// not done here.
+    /// Per mechanism (#796, [`RuleState::policy_denial_key`]): `SELinux` keys on
+    /// `scontext`/`tcontext`'s type triple and `tclass`, unchanged from #774/#781.
+    /// `AppLocker` and WDAC `PolicyDenialEvent`s carry no `SELinux`-style context
+    /// (`subject_context`/`object_context` are `None`/`None` for `AppLocker`), so
+    /// keying them the same way would collapse to `object_class` alone — 5 values
+    /// for `AppLocker` (`EXE`/`DLL`/`MSI`/`SCRIPT`/`APPX`), 2 for WDAC — meaning the
+    /// *first* blocked `.exe` ever seen would alert and every distinct one after
+    /// it, forever, would not. They key on `object_path` instead (case-folded:
+    /// Windows paths are case-insensitive), plus whichever of rule collection,
+    /// signing scenario or loading process the mechanism reports.
     known_policy_denials: BoundedMap<PolicyDenialKey, ()>,
     /// (target user, source) → sliding failure counter for T1110 (AUTH-BURST).
     /// LRU-bounded like every other counter: a spray across many fabricated
@@ -983,52 +986,82 @@ impl RuleState {
     }
 
     /// POLICY-DENIAL-DRIFT (issue #774, T1562-adjacent) — see
-    /// `known_policy_denials`'s doc for why this alerts on a new
-    /// (subject, object, class) triple rather than on every denial. Fires for
-    /// `PolicyDenialEvent::enforced` either way (`SELinux` permissive logs the
-    /// same fact a managed Enforcing host would act on) — the point is a new
-    /// *shape* of denial, not whether this particular one was blocked.
+    /// `known_policy_denials`'s doc for why this alerts on a new shape rather
+    /// than on every denial, and for what the key holds per mechanism
+    /// ([`Self::policy_denial_key`]). `None` from that key (a mechanism this
+    /// rule doesn't cover) fails closed, same as every other unrecognized
+    /// shape.
     ///
-    /// `SELinux` only for now — see `known_policy_denials`'s doc for why an
-    /// AppLocker/WDAC `PolicyDenialEvent` would collapse to a far coarser
-    /// shape with this same key.
+    /// Severity: `SELinux` is always Medium regardless of `enforced` — a
+    /// permissive-mode log is the same fact a managed Enforcing host would
+    /// act on, so it carries the same weight (#774/#781, unchanged). `AppLocker`
+    /// and WDAC split by `enforced` (#796): Medium when the policy actually
+    /// blocked the action, Low in audit mode — a fresh `AppLocker`/WDAC rollout
+    /// in audit mode logs every unlisted binary once as a matter of course,
+    /// unlike an `SELinux` Enforcing host whose policy is already tuned.
     ///
     /// Inert while the eBPF sensor is selected (#780): `SELinux` AVC denials
     /// only reach the agent through the audit sensor, so silence here does not
     /// mean no denials happened.
     ///
-    /// The requested permission is not part of the key (#813): the audit
-    /// sensor does not parse it yet, so a routine `getattr` denial silences a
-    /// later, more interesting `read`/`write`/`open` on the same subject,
-    /// object and class.
+    /// The requested permission is not part of the `SELinux` key (#813): the
+    /// audit sensor does not parse it yet, so a routine `getattr` denial
+    /// silences a later, more interesting `read`/`write`/`open` on the same
+    /// subject, object and class.
     fn check_policy_denial_drift(&mut self, event: &PolicyDenialEvent) -> Option<Alert> {
-        if event.mechanism != POLICY_MECHANISM_SELINUX {
-            return None;
-        }
-        let key: PolicyDenialKey = (
-            event.mechanism.clone(),
-            Self::selinux_type_triple(event.subject_context.as_deref()),
-            Self::selinux_type_triple(event.object_context.as_deref()),
-            event.object_class.clone(),
-        );
+        let key = Self::policy_denial_key(event)?;
         if self.known_policy_denials.get(&key).is_some() {
             return None;
         }
         self.known_policy_denials.insert(key, ());
+        let severity = if event.mechanism != POLICY_MECHANISM_SELINUX && !event.enforced {
+            Severity::Low
+        } else {
+            Severity::Medium
+        };
         Some(Alert {
             technique: "T1562",
-            severity: Severity::Medium,
+            severity,
             message: format!(
-                "comm={} mechanism={} subject={} object={} class={} path={} enforced={} — new denial shape, not seen this run",
+                "comm={} mechanism={} subject={} object={} class={} action={} path={} enforced={} — new denial shape, not seen this run",
                 event.meta.comm,
                 event.mechanism,
                 event.subject_context.as_deref().unwrap_or("-"),
                 event.object_context.as_deref().unwrap_or("-"),
                 event.object_class.as_deref().unwrap_or("-"),
+                event.action.as_deref().unwrap_or("-"),
                 event.object_path.as_deref().unwrap_or("-"),
                 event.enforced,
             ),
         })
+    }
+
+    /// The dedup key for [`Self::check_policy_denial_drift`] — mechanism-specific,
+    /// since each mechanism's `PolicyDenialEvent` reports different fields
+    /// (`known_policy_denials`'s doc). `None` for a mechanism this rule has no key
+    /// for yet, same fail-closed behaviour as the pre-#796 `SELinux`-only gate.
+    fn policy_denial_key(event: &PolicyDenialEvent) -> Option<PolicyDenialKey> {
+        match event.mechanism.as_str() {
+            POLICY_MECHANISM_SELINUX => Some((
+                event.mechanism.clone(),
+                Self::selinux_type_triple(event.subject_context.as_deref()),
+                Self::selinux_type_triple(event.object_context.as_deref()),
+                event.object_class.clone(),
+            )),
+            POLICY_MECHANISM_APPLOCKER => Some((
+                event.mechanism.clone(),
+                event.object_class.clone(), // the rule collection (EXE/DLL/MSI/SCRIPT/APPX)
+                event.object_path.as_deref().map(str::to_lowercase), // NTFS: case-insensitive
+                None,
+            )),
+            POLICY_MECHANISM_WDAC => Some((
+                event.mechanism.clone(),
+                event.subject_context.as_deref().map(str::to_lowercase), // the loading process
+                event.object_path.as_deref().map(str::to_lowercase),     // NTFS: case-insensitive
+                event.object_class.clone(), // the signing scenario (kernel-mode/user-mode)
+            )),
+            _ => None,
+        }
     }
 
     /// The `user:role:type` prefix of a `SELinux` security context
