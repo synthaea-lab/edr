@@ -149,6 +149,71 @@ fn requests_read_in_one_poll_pair_with_the_last_one_in_the_log() {
     assert!(web[0].message.contains("/up/s.php"), "{}", web[0].message);
 }
 
+// ── A guess made before the real request's log line arrives (#706) ──
+
+#[test]
+fn a_shell_paired_with_an_older_request_is_corrected_once_the_real_one_arrives() {
+    // The access log is written when the request completes, after the shell it
+    // caused — so a shell evaluated before that line is read only has an older,
+    // unrelated request to pair with. Reproduces the lab finding (#696): an earlier
+    // 404 named instead of the real request, 11s before vs. ~1s after.
+    let mut engine = CorrelationEngine::new();
+    let old = Event::HttpRequest(HttpRequestEvent {
+        signature: HttpSignature::SqlInjection,
+        path: "/uploads/c99.php".into(),
+        status: 404,
+        ..match request(89 * SEC) {
+            Event::HttpRequest(r) => r,
+            _ => unreachable!(),
+        }
+    });
+    engine.on_event(old);
+    let first = engine.on_event(shell_under("php-fpm8.3", 700, 100 * SEC));
+    let first_web = web_alerts(&first);
+    assert_eq!(first_web.len(), 1, "{first:?}");
+    assert!(
+        first_web[0].message.contains("/uploads/c99.php"),
+        "the only candidate so far is the older request: {}",
+        first_web[0].message
+    );
+
+    let second = engine.on_event(request(101 * SEC)); // the real request, read ~1s later
+    let second_web = web_alerts(&second);
+    assert_eq!(
+        second_web.len(),
+        1,
+        "the real request arriving later must correct the guess: {second:?}"
+    );
+    assert!(
+        second_web[0].message.contains("/up/s.php"),
+        "{}",
+        second_web[0].message
+    );
+}
+
+#[test]
+fn a_pairing_already_backed_by_a_later_request_is_not_revisited() {
+    // Once a shell is paired with a request already known to follow it, a further,
+    // closer request arriving still later within the window must not bump that
+    // stable pairing again — only the one before/after correction is allowed.
+    let mut engine = CorrelationEngine::new();
+    assert!(web_alerts(&engine.on_event(shell_under("nginx", 800, 100 * SEC))).is_empty());
+    let far_after = Event::HttpRequest(HttpRequestEvent {
+        signature: HttpSignature::SqlInjection,
+        path: "/far.php".into(),
+        ..match request(150 * SEC) {
+            Event::HttpRequest(r) => r,
+            _ => unreachable!(),
+        }
+    });
+    let first = engine.on_event(far_after);
+    assert_eq!(web_alerts(&first).len(), 1, "{first:?}");
+    assert!(web_alerts(&first)[0].message.contains("/far.php"));
+
+    let closer_after = engine.on_event(request(101 * SEC));
+    assert!(web_alerts(&closer_after).is_empty());
+}
+
 #[test]
 fn two_requests_at_the_same_distance_pair_with_the_one_before_the_shell() {
     // 5 s before and 5 s after: only the earlier one can have started the shell.

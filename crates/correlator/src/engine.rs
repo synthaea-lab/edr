@@ -123,6 +123,12 @@ pub struct CorrelationEngine {
     /// exec+connect pair re-alerted on every subsequent event of that pid (review
     /// finding: identical alert floods from a single pattern).
     fired: BoundedMap<(&'static str, u32), Stamped<u64>>,
+    /// pid → the last `rule_web_request_shell` alert, with whether its pairing was
+    /// backed by a request known to follow the shell (#706). A separate map from
+    /// `fired`: that one's value is a bare timestamp, shared by every other rule
+    /// through `push_once`, and this rule alone needs the extra bit to allow its one
+    /// correction (`Self::web_shell_alerts`'s doc).
+    web_shell_fired: BoundedMap<u32, Stamped<(u64, bool)>>,
     /// Pids whose `ExecEvent` showed an IGNORED-list name running from an
     /// untrusted location — a rename masquerade (`/tmp/svchost.exe`). The
     /// exclusion is name-keyed and would otherwise be a trivial bypass (user
@@ -151,6 +157,7 @@ impl CorrelationEngine {
             beliefs: BoundedMap::new(BELIEF_CAP),
             pid_entities: BoundedMap::new(ENTITY_CAP),
             fired: BoundedMap::new(BELIEF_CAP),
+            web_shell_fired: BoundedMap::new(ENTITY_CAP),
             masquerading: BoundedMap::new(ENTITY_CAP),
         }
     }
@@ -264,22 +271,33 @@ impl CorrelationEngine {
         alerts
     }
 
-    /// Evaluates [`rule_web_request_shell`] over the bus, once per shell per window.
+    /// Evaluates [`rule_web_request_shell`] over the bus, once per shell per window —
+    /// except for one correction (#706). The rule is re-run on every new `HttpRequest`,
+    /// so a shell paired before its own causing request's log line was read (the log is
+    /// written when the request completes, which for a real web shell is *after* the
+    /// shell it caused — `WebShellCase::request_after_shell` is false for that guess)
+    /// gets a second look once that line arrives. Only that one correction is allowed:
+    /// a pairing already backed by a request known to follow the shell
+    /// (`request_after_shell: true`) is stable and not revisited, so a later, unrelated
+    /// request within the same window cannot bump it.
     fn web_shell_alerts(&mut self) -> Vec<CorrelationAlert> {
         let window_ns = self.window_ns;
         let mut alerts = Vec::new();
         for case in rule_web_request_shell(&self.bus) {
-            let key = ("web_request_shell", case.pid);
-            let recently = self.fired.get(&key).is_some_and(|entry| {
+            let previous = self.web_shell_fired.get(&case.pid).filter(|entry| {
                 entry.current(case.generation)
-                    && case.timestamp_ns.saturating_sub(entry.value) <= window_ns
+                    && case.timestamp_ns.saturating_sub(entry.value.0) <= window_ns
             });
-            if !recently {
-                self.fired.insert(
-                    key,
+            let should_alert = match previous {
+                None => true,
+                Some(entry) => !entry.value.1 && case.request_after_shell,
+            };
+            if should_alert {
+                self.web_shell_fired.insert(
+                    case.pid,
                     Stamped {
                         generation: case.generation,
-                        value: case.timestamp_ns,
+                        value: (case.timestamp_ns, case.request_after_shell),
                     },
                 );
                 alerts.push(case.alert);

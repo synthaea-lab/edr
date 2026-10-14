@@ -475,6 +475,14 @@ pub(crate) struct WebShellCase {
     pub(crate) generation: Option<u64>,
     /// The shell exec's timestamp.
     pub(crate) timestamp_ns: u64,
+    /// Whether the paired request's log line arrived strictly after the shell (#706):
+    /// the access log is only written once the request completes, so for a real web
+    /// shell that is the *expected* order, not a tie-break of last resort — a `false`
+    /// pairing was necessarily chosen from whatever had already arrived, which can be
+    /// an older, unrelated request if the real one's log line is still unread. See
+    /// [`crate::engine::CorrelationEngine::web_shell_alerts`] for how this lets a guess
+    /// be corrected once the real request's log line arrives.
+    pub(crate) request_after_shell: bool,
     pub(crate) alert: CorrelationAlert,
 }
 
@@ -489,6 +497,11 @@ pub(crate) struct WebShellCase {
 /// request is named. The message carries the request's signature, path, client and
 /// the matched parameter's *name*, never its value: the value is only redacted at the
 /// agent's sink (ADR-0018), downstream of this crate.
+///
+/// Called again on every new `HttpRequest`, so a shell evaluated before its own
+/// causing request's log line was read gets re-paired once that line arrives — see
+/// [`WebShellCase::request_after_shell`] for how the engine uses that to correct an
+/// early guess (#706).
 pub(crate) fn rule_web_request_shell(bus: &EventBus) -> Vec<WebShellCase> {
     let events: Vec<&Event> = bus.events().collect();
     let requests: Vec<&schema::HttpRequestEvent> = events
@@ -519,6 +532,7 @@ pub(crate) fn rule_web_request_shell(bus: &EventBus) -> Vec<WebShellCase> {
                 (ts.abs_diff(meta.timestamp_ns), ts > meta.timestamp_ns)
             })?;
             let delta_s = request.meta.timestamp_ns.abs_diff(meta.timestamp_ns) / 1_000_000_000;
+            let request_after_shell = request.meta.timestamp_ns > meta.timestamp_ns;
             let client = request
                 .client
                 .map_or_else(|| "unknown".to_owned(), |c| c.to_string());
@@ -530,6 +544,7 @@ pub(crate) fn rule_web_request_shell(bus: &EventBus) -> Vec<WebShellCase> {
                 pid: meta.pid,
                 generation: meta.process_generation,
                 timestamp_ns: meta.timestamp_ns,
+                request_after_shell,
                 alert: CorrelationAlert {
                     technique: "T1505.003",
                     severity: Severity::High,
