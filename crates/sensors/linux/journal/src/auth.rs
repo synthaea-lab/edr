@@ -43,16 +43,32 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             user.clone()?,
             parse_addr(source_addr),
         ),
-        JournalEvent::SudoCommand { target_user, .. } => {
-            let target_user = target_user.clone()?;
+        JournalEvent::SudoCommand {
+            invoking_user,
+            target_user,
+            ..
+        } => {
+            let real_target = target_user.clone()?;
             // Default target (no `-u`) is root — plain privilege elevation.
             // Any other explicit target is the same "became someone else" signal
             // as `su`, per AuthKind::ExplicitCredentials's own doc.
-            let kind = if target_user == "root" {
+            let kind = if real_target == "root" {
                 AuthKind::PrivilegedSession
             } else {
                 AuthKind::ExplicitCredentials
             };
+            // `target_user` here is the invoking account, not `real_target` above.
+            // `sudo`'s PAM check authenticates the *invoker's own* password (unless
+            // the host sets `rootpw`/`targetpw`, not assumed here) — a failed
+            // attempt's `pam_unix(sudo:auth)` line (`PamAuthFailure` below) never
+            // names the `-u` target the invoker was trying to reach, only the
+            // invoker. Reporting the real target here would make a sudo success
+            // un-joinable with the failures that preceded it (#838 review): the two
+            // sides would key on different strings. Falls back to `real_target` if
+            // `logname=`/the `user :` prefix couldn't be read, rather than dropping
+            // the event. `su` needs no such swap: there PAM authenticates the real
+            // target's password, so its `user=`/session-open line already is it.
+            let target_user = invoking_user.clone().unwrap_or(real_target);
             (AuthOutcome::Success, kind, target_user, None)
         }
         JournalEvent::PamSessionOpened {
@@ -75,9 +91,13 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
         ),
         // `classify` only emits this for the "sudo"/"su" services (sshd's own PAM
         // auth failure would double-count `SshFailed`), so no service guard is
-        // needed here. `invoking_user` isn't projected: `AuthEvent` has no field
-        // for "who typed the password" distinct from `target_user`, same as every
-        // other mapping in this function.
+        // needed here. `target_user` here is `classify_pam`'s `" user="` field,
+        // which already is the right join key for both services without further
+        // changes: for `su` it is the real target (PAM checks the target's own
+        // password); for `sudo` it is the invoker (PAM checks the invoker's own
+        // password) — the same value the `SudoCommand` arm above now swaps in for
+        // its own `target_user`, so a sudo failure and the success after it key
+        // identically (#838).
         JournalEvent::PamAuthFailure { target_user, .. } => (
             AuthOutcome::Failure,
             AuthKind::LogonFailure,
@@ -191,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn sudo_to_root_is_privileged_session() {
+    fn sudo_to_root_is_privileged_session_keyed_on_the_invoker() {
         let record = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             ("_PID", "100"),
@@ -204,12 +224,14 @@ mod tests {
             command: Some("/bin/echo hi".into()),
         };
         let auth = to_auth_event(&record, &event).expect("should map");
+        // `kind` still reflects the real target (root) — only the join key
+        // (`target_user`) swaps to the invoker, see the mapping's own comment.
         assert_eq!(auth.kind, AuthKind::PrivilegedSession);
-        assert_eq!(auth.target_user, "root");
+        assert_eq!(auth.target_user, "lab");
     }
 
     #[test]
-    fn sudo_to_other_user_is_explicit_credentials() {
+    fn sudo_to_other_user_is_explicit_credentials_keyed_on_the_invoker() {
         let record = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             ("_PID", "100"),
@@ -223,7 +245,64 @@ mod tests {
         };
         let auth = to_auth_event(&record, &event).expect("should map");
         assert_eq!(auth.kind, AuthKind::ExplicitCredentials);
-        assert_eq!(auth.target_user, "deploy");
+        assert_eq!(auth.target_user, "lab");
+    }
+
+    #[test]
+    fn a_sudo_success_with_no_invoking_user_falls_back_to_the_real_target() {
+        // `invoking_user` comes from a `" :"` split on the command line (#838);
+        // if that ever fails to parse, keying on the real target still produces
+        // a usable (if unjoinable) event instead of dropping it.
+        let record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_PID", "100"),
+            ("_UID", "1001"),
+            ("_GID", "1001"),
+        ]);
+        let event = JournalEvent::SudoCommand {
+            invoking_user: None,
+            target_user: Some("root".into()),
+            command: Some("/bin/echo hi".into()),
+        };
+        let auth = to_auth_event(&record, &event).expect("should map");
+        assert_eq!(auth.target_user, "root");
+    }
+
+    #[test]
+    fn a_sudo_failure_and_the_success_after_it_key_on_the_same_invoker() {
+        // The real shape of the bug (#838 review): the invoker (`omss`) fails
+        // sudo, then succeeds as `root`. The PAM failure line never names
+        // `root` — `pam_unix(sudo:auth)` only authenticates the invoker — so
+        // the two sides must key on the invoker, not on the escalation target,
+        // or a real success-after-failures join can never fire for `sudo`.
+        let failure_record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_PID", "6805"),
+            ("_UID", "1000"),
+            ("_GID", "1000"),
+        ]);
+        let failure = JournalEvent::PamAuthFailure {
+            service: "sudo".into(),
+            invoking_user: Some("omss".into()),
+            target_user: Some("omss".into()),
+        };
+        let failure_auth = to_auth_event(&failure_record, &failure).expect("should map");
+
+        let success_record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_PID", "6810"),
+            ("_UID", "1000"),
+            ("_GID", "1000"),
+        ]);
+        let success = JournalEvent::SudoCommand {
+            invoking_user: Some("omss".into()),
+            target_user: Some("root".into()),
+            command: Some("/bin/whoami".into()),
+        };
+        let success_auth = to_auth_event(&success_record, &success).expect("should map");
+
+        assert_eq!(failure_auth.target_user, success_auth.target_user);
+        assert_eq!(failure_auth.target_user, "omss");
     }
 
     #[test]

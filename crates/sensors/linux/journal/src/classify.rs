@@ -59,13 +59,26 @@ pub enum JournalEvent {
         /// projected into `schema::AuthEvent` (narrower than this raw shape),
         /// kept here for forensic completeness.
         invoking_user: Option<String>,
-        /// The `user=` field: the account being authenticated as.
+        /// The `user=` field: the account PAM checked a password against. For
+        /// `su` this is the real target (the account being switched to); for
+        /// `sudo` it is the invoker — `pam_unix(sudo:auth)` authenticates the
+        /// invoker's own password, never the `-u` target, so this equals
+        /// `invoking_user` on a sudo failure (#838). The PAM layer never learns
+        /// a sudo attempt's intended target at all, let alone on a failure.
         target_user: Option<String>,
     },
     /// A `sudo` invocation with its logged command line (the `sudo:session` PAM
     /// wrapper around it is reported separately as `PamSessionOpened`/`Closed`).
     SudoCommand {
         invoking_user: Option<String>,
+        /// The `USER=` field: the real escalation target (`root` by default, or
+        /// whoever `-u` names). Unlike [`JournalEvent::PamAuthFailure`]'s own
+        /// `target_user`, this is never the invoker — `classify_sudo_command`
+        /// only runs on the `COMMAND=` line, logged once sudo has already
+        /// authenticated and decided who to become. `auth::to_auth_event` swaps
+        /// this out for `invoking_user` before keying `schema::AuthEvent`,
+        /// precisely because it is *not* the same account a preceding failure
+        /// would have named.
         target_user: Option<String>,
         command: Option<String>,
     },
@@ -488,21 +501,27 @@ mod tests {
     //     doc and crate doc; this VM's sudo has no PAM config to capture against).
 
     #[test]
-    fn pam_auth_failure_for_sudo_to_root() {
+    fn pam_auth_failure_for_sudo_names_the_invoker_not_the_dash_u_target() {
+        // Real line (Fedora 43, 2026-10-13, #838 review): `sudo`'s PAM check
+        // authenticates the *invoker's* own password, not the `-u`/default
+        // target's — so `user=` here is `omss`, the invoker, same as
+        // `logname=`. A fixture with `user=root` (this test's shape before
+        // #838) encoded an assumption nobody had captured live, and PAM never
+        // actually produces it for `sudo`.
         let r = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             (
                 "MESSAGE",
-                "pam_unix(sudo:auth): authentication failure; logname=lab uid=1001 euid=0 \
-                 tty=/dev/pts/0 ruser= rhost=  user=root",
+                "pam_unix(sudo:auth): authentication failure; logname=omss uid=1000 euid=0 \
+                 tty=/dev/pts/2 ruser=omss rhost=  user=omss",
             ),
         ]);
         assert_eq!(
             classify(&r),
             Some(JournalEvent::PamAuthFailure {
                 service: "sudo".into(),
-                invoking_user: Some("lab".into()),
-                target_user: Some("root".into()),
+                invoking_user: Some("omss".into()),
+                target_user: Some("omss".into()),
             })
         );
     }

@@ -9,12 +9,18 @@
 //! time the same way, for the same reason: counting only what already arrived
 //! would make the alert depend on delivery order.
 //!
-//! Keyed by the target account alone (`root`, or whoever a `sudo -u`/`su` names),
-//! not by an external address — a local privilege elevation has no remote origin
-//! to key on, and `AuthEvent::source_address` is always `None` for it (see
-//! `sensor-linux-journal::auth`'s module doc). History is bounded by the caps
-//! below and the least-recently-seen account, never by time, for the same
-//! future-timestamp-pruning reason as [`crate::rdp`].
+//! Keyed by `AuthEvent::target_user` alone, not by an external address — a local
+//! privilege elevation has no remote origin to key on, and
+//! `AuthEvent::source_address` is always `None` for it (see
+//! `sensor-linux-journal::auth`'s module doc). That field is `su`'s real target
+//! (`root`, or whoever `su` names) but `sudo`'s *invoker* — `sensor-linux-journal`
+//! puts the one value there that a sudo failure and the success after it share,
+//! since PAM authenticates the invoker for `sudo` and never learns the `-u`
+//! target on a failed attempt (#838). This rule only ever sees that one string
+//! per side and joins on it; it has no opinion on what it represents for either
+//! service. History is bounded by the caps below and the least-recently-seen
+//! account, never by time, for the same future-timestamp-pruning reason as
+//! [`crate::rdp`].
 
 use std::collections::VecDeque;
 
