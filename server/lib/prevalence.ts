@@ -169,6 +169,43 @@ export async function getPrevalence(
   };
 }
 
+/**
+ * The sha256 keys of a tenant seen on at least `minHosts` distinct hosts: the members of the
+ * common-set snapshot (ADR-0020, `lib/common-set-snapshot.ts`). At most `limit` are returned,
+ * most widespread first; `truncated` says there were more, which a caller building a snapshot
+ * must treat as a failure, not drop: a filter missing common hashes reads them as rare.
+ */
+export async function getCommonHashes(
+  db: Pick<PrismaClient, "$queryRaw">,
+  tenantId: string,
+  minHosts: number,
+  limit: number
+): Promise<{ hashes: string[]; truncated: boolean }> {
+  const rows = await db.$queryRaw<{ key: string }[]>(Prisma.sql`
+    SELECT key FROM prevalence_sightings
+    WHERE tenant_id = ${tenantId} AND kind = 'sha256'
+    GROUP BY key
+    HAVING COUNT(*) >= ${minHosts}
+    ORDER BY COUNT(*) DESC, key
+    LIMIT ${limit + 1}`);
+  return { hashes: rows.slice(0, limit).map((r) => r.key), truncated: rows.length > limit };
+}
+
+/**
+ * How many of a tenant's hosts have reported anything: the snapshot's `hosts_covered`, which
+ * gates the "not in the common set" evidence (a fresh fleet must not look all-rare). Counts
+ * agents with at least one sighting of any kind, so a host whose events carried nothing
+ * countable is not counted.
+ */
+export async function countReportingHosts(
+  db: Pick<PrismaClient, "$queryRaw">,
+  tenantId: string
+): Promise<number> {
+  const rows = await db.$queryRaw<{ hosts: bigint }[]>(Prisma.sql`
+    SELECT COUNT(DISTINCT agent_id) AS hosts FROM prevalence_sightings WHERE tenant_id = ${tenantId}`);
+  return Number(rows[0]?.hosts ?? 0);
+}
+
 /** Row cap for one `(kind, key)` pivot — a hash that somehow showed up on every
  * host of a huge fleet still returns a bounded, renderable list. */
 export const MAX_PIVOT_HOSTS = 500;

@@ -17,8 +17,10 @@ Planned shape:
 
 ## Status (issue #76)
 
-Slice 1 is in: counters, the ingest hook and the lookup API. The code lives with the
-rest of the server (`lib/prevalence.ts`, `app/api/prevalence/route.ts`,
+Built: the counters, the ingest hook and the lookup API, the console triage line, the
+retention job, and the server half of the common-set snapshot (format and builder, below).
+Not built: publishing the snapshot to agents. The code lives with the rest of the server
+(`lib/prevalence.ts`, `lib/common-set-snapshot.ts`, `app/api/prevalence/route.ts`,
 `PrevalenceSighting` in `prisma/schema.prisma`) rather than in this directory.
 
 - **Storage:** one row per `(tenant, kind, key, agent)` with `first_seen`, `last_seen`
@@ -46,6 +48,19 @@ rest of the server (`lib/prevalence.ts`, `app/api/prevalence/route.ts`,
   `PREVALENCE_MAX_ROWS_PER_TENANT` (default 5,000,000), the oldest-seen rows. Every
   event is counted and an agent chooses its own paths and domains, so without this the
   table grows with the number of distinct keys anyone can invent. Schedule it daily.
+
+- **Snapshot (ADR-0020):** `getCommonHashes` (the `sha256` keys seen on at least K distinct
+  hosts, reporting `truncated` instead of dropping members past its limit) and
+  `countReportingHosts` (a snapshot's `hosts_covered`) read the counters;
+  `lib/common-set-snapshot.ts` builds the Bloom-filter bytes and parses them strictly, byte for
+  byte as `docs/detection/common-set-snapshot-format.md` and the golden fixture define. **Nothing
+  builds one on a schedule or serves it yet**: that is slices 5 and 6 of
+  `docs/detection/fleet-prevalence-snapshot-plan.md`, waiting on how a per-tenant snapshot is
+  signed and refreshed. The agent already loads a snapshot it finds in its content directory and
+  adds a capped, weak "not in the common set" term to a process's belief.
+- **Checked end to end (2026-10-13/14):** two enrolled lab identities, a real sign-in, and the
+  case page showing "seen on 1 host" for a transition one host ran and "seen on 2 hosts" for one
+  both ran (`lab/scenarios/prevalence-lineage.sh`).
 
 **Known limits:** the raw events are not kept anywhere (the lake, `server/datalake`,
 doesn't exist), so prevalence cannot be rebuilt from history if the counting rules
