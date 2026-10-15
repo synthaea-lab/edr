@@ -49,8 +49,11 @@ store URL is fetched over the network, as for content manifests).
    "no production signing key". The default (development and lab) build has the feature,
    which embeds the public test key; it then refuses both commands unless you pass
    `--allow-test-key`, because anyone who can serve the routes can sign for it. Packaged
-   builds (`packaging/linux`) turn the feature off (`--no-default-features`), and CI's
-   `tools/check-no-test-key.sh` fails if the test key reaches them. A lab that applies a
+   builds (`packaging/linux`, and the Windows MSI of `packaging/windows`, whose `build.ps1`
+   scans the binaries) turn the feature off (`--no-default-features`), and CI's
+   `tools/check-no-test-key.sh` fails if the test key reaches them; the Windows and macOS
+   static-agent jobs also scan the agent they build. There is no macOS package script yet,
+   so a macOS package will have to be built the same way when it lands. A lab that applies a
    release or content with a package therefore needs its own build with the feature.
 3. Put the manifest and the files at the paths above.
 4. `POST /api/release` (session-authenticated) with
