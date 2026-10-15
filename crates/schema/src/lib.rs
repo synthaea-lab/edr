@@ -274,10 +274,11 @@ pub mod time;
 /// was open, then 43 after #263 (`SocketCreate`, 42) merged, then 44 after #772
 /// (`PackageChange`) took 43; same coordination note as above.
 ///
-/// Bumped 44 → 45 for [`Event::LogCleared`] (#799): Windows Event Log
-/// Security 1102 and System 104 records, with the cleared channel and account
-/// fields. It may need renumbering if another open schema branch merges first.
-pub const SCHEMA_VERSION: u32 = 45;
+/// Bumped 44 → 46 for [`Event::LogCleared`] (#799): Windows Event Log Security 1102
+/// and System 104 records, with the cleared channel and account fields. 45 is left to
+/// BITS (#577), which was open first; whichever of the two merges second adds the
+/// other's fixture to its directory.
+pub const SCHEMA_VERSION: u32 = 46;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
