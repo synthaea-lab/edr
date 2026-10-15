@@ -3,7 +3,8 @@
 //!
 //! **No lineage block** (ADR-0034): six lineage columns were measured on real lab captures
 //! and made the forest worse for the attacks whose parent is ordinary. The parent is judged
-//! by rules (`rules::check_web_server_spawns_shell`); [`lineage`] stays as an extractor.
+//! by rules (`rules::check_web_server_spawns_shell`); [`lineage`](crate::features::lineage)
+//! stays as an extractor.
 //!
 //! One process incarnation `(pid, generation)` yields one vector: the command line comes
 //! from its most recent exec in the bus window, the correlation block from that
