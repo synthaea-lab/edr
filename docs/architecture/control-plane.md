@@ -42,7 +42,10 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     ],
     "spool_bytes": 1024,
     "spool_dropped": 0,
-    "enrich_dropped": 3
+    "enrich_dropped": 3,
+    "rarity_applied": 7,
+    "rarity_withheld": 11,
+    "rarity_unapplied": 2
   }
 }
 ```
@@ -55,9 +58,15 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
 | `spool_dropped` | cumulative records shed by the spool's byte cap |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
+| `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
+| `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
+| `rarity_unapplied` | cumulative rare images whose evidence found no belief to land on (evicted or never created): the loss, counted. Zero if the agent predates the field. |
 
-`transport`'s `heartbeat_body_is_the_documented_wire_shape` test pins this exact
-shape. A change that breaks it is a change to this contract.
+The three `rarity_*` fields are additive: the server stores a beacon without them (an older
+agent) as zeros, and an older server ignores them. The ops fleet table shows them in one
+"Rarity evidence" column ("N applied, N withheld, N lost"). `transport`'s
+`heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it
+is a change to this contract.
 
 ### Fleet status and telemetry loss
 

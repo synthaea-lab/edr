@@ -66,6 +66,7 @@ export default async function FleetHealthPage() {
                 <th className="px-4 py-2 text-right">Spool dropped</th>
                 <th className="px-4 py-2 text-right">Enrich dropped</th>
                 <th className="px-4 py-2 text-right">Spool backlog</th>
+                <th className="px-4 py-2">Rarity evidence</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -106,6 +107,11 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.enrichDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">
         {agent.health ? `${agent.health.spoolBytes} B` : "—"}
+      </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.health
+          ? `${agent.health.rarityApplied} applied, ${agent.health.rarityWithheld} withheld, ${agent.health.rarityUnapplied} lost`
+          : "—"}
       </td>
     </tr>
   );
