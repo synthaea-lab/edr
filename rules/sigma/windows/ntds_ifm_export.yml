@@ -1,0 +1,21 @@
+title: NTDS database exported through install-from-media
+description: >
+  Detects ntdsutil.exe requesting a full install-from-media export. The specific
+  IFM command can produce ntds.dit and supporting hives on a domain controller;
+  it does not detect a generic database read or prove credential extraction.
+tags:
+  - attack.credential_access
+  - attack.t1003.003
+  - synthaea.coverage.credential_access
+level: medium
+falsepositives:
+  - Domain administrators preparing installation media for an additional domain
+    controller or acquiring directory data during authorized incident response.
+detection:
+  selection:
+    Image|endswith: '\ntdsutil.exe'
+    CommandLine|contains:
+      - '"ifm" "create full '
+      - ' ifm "create full '
+      - ' ifm create full '
+  condition: selection

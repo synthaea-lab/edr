@@ -1,0 +1,22 @@
+title: Shadow password database copied with cp
+description: >
+  Detects cp receiving /etc/shadow or /etc/gshadow as an explicit source
+  argument. These files contain protected password hashes. This exec signal
+  does not inspect generic file reads or identify the caller's authorization.
+tags:
+  - attack.credential_access
+  - attack.t1003.008
+  - synthaea.coverage.credential_access
+level: medium
+falsepositives:
+  - Root backup jobs and administrators acquiring account databases for recovery,
+    migration or an approved password-strength audit.
+detection:
+  selection:
+    Image|endswith: '/cp'
+    CommandLine|contains:
+      - ' /etc/shadow '
+      - ' /etc/gshadow '
+      - ' "/etc/shadow" '
+      - ' "/etc/gshadow" '
+  condition: selection

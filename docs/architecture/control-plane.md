@@ -42,7 +42,10 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     ],
     "spool_bytes": 1024,
     "spool_dropped": 0,
-    "enrich_dropped": 3
+    "enrich_dropped": 3,
+    "rarity_applied": 7,
+    "rarity_withheld": 11,
+    "rarity_unapplied": 2
   }
 }
 ```
@@ -55,9 +58,49 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
 | `spool_dropped` | cumulative records shed by the spool's byte cap |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
+| `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
+| `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
+| `rarity_unapplied` | cumulative rare images whose evidence found no belief to land on (evicted or never created): the loss, counted. Zero if the agent predates the field. |
 
-`transport`'s `heartbeat_body_is_the_documented_wire_shape` test pins this exact
-shape. A change that breaks it is a change to this contract.
+The three `rarity_*` fields are additive: the server stores a beacon without them (an older
+agent) as zeros, and an older server ignores them. The ops fleet table shows them in one
+"Rarity evidence" column ("N applied, N withheld, N lost"). `transport`'s
+`heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it
+is a change to this contract.
+
+### Fleet status and telemetry loss
+
+The ops dashboard derives one status per agent, worst first: `silent` (no heartbeat for 5
+minutes), `no_beacon` (alive but never sent a beacon), `degraded`, else `healthy`. `degraded`
+has two causes: a sensor in the beacon reports `silent`, or the host **lost telemetry recently**.
+
+The loss counters (`spool_dropped`, `enrich_dropped`) are cumulative since the agent started and
+start at zero again when it restarts, and the server keeps only the latest beacon per agent, so
+recent loss is told from one beacon to the next:
+
+- if either counter **rose** compared with the stored beacon, the server stamps
+  `agent_health.loss_observed_at` with its own receive time (not the agent's clock);
+- the host is `degraded` for 10 minutes after that stamp (`LOSS_WINDOW_MS`), and the ops table
+  says "Lost telemetry in the last 10 min";
+- the **first** beacon of an agent never counts as loss, and a counter that **fell** is an agent
+  restart: it neither sets nor clears the stamp;
+- a beacon older than the stored one is ignored, so its lower counters cannot make the next beacon
+  look like a rise;
+- only these two counters count. The rarity evidence counters are information about a feature, not
+  lost telemetry, and loss does not feed the content rings' auto-halt (ADR-0016's criteria are the
+  silent-agent rate, the false-positive rate and the detection rate).
+
+What this does not see: loss the beacon does not carry, such as the kernel ring buffer
+overflowing (`ring buffer full, dropping open event` is logged but not counted).
+
+The other cause of `degraded`, a silent sensor, can also be an idle host: the eBPF and journal
+sensors pulse when they handle events and have a 120 s deadline, so a host with nothing in its
+journal for two minutes shows `linux-journal` silent. The ops table shows the two causes in
+separate columns ("Silent sensors", "Telemetry loss"), so an operator can tell them apart. Checked
+2026-10-14 with a real agent: after an outage the host went `Degraded` with "Lost telemetry in the
+last 10 min" (spool dropped 2048, enrich dropped 7443), the window followed the last rise of a
+counter and closed 10 minutes after it, and the host stayed `Degraded` about a minute longer
+for the silent journal sensor on the idle VM.
 
 ### Response
 

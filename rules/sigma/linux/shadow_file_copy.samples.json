@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/usr/bin/cp",
+    "cmdline": "cp --preserve=mode /etc/shadow /root/shadow.backup"
+  },
+  "non_matching": {
+    "image": "/usr/bin/cp",
+    "cmdline": "cp --preserve=mode /etc/shadow.example /root/shadow.example.backup",
+    "note": "A filename sharing the prefix is not the live password database; the argument boundary matters."
+  }
+}

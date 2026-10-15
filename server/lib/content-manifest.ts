@@ -46,7 +46,9 @@ export const ContentManifest = z.object({
   release_version: z.number().int().min(1), // Monotone counter (anti-rollback)
   ring: z.enum(["canary_0", "canary_1", "canary_2", "prod"]), // Target ring
   released_at: z.string(),                // ISO 8601 UTC timestamp
-  entries: z.array(ContentEntry),         // List of content artifacts
+  // At least one: an empty list would make every agent of the ring delete all its content
+  // (the agent refuses it too; the release manifest refuses an empty list the same way).
+  entries: z.array(ContentEntry).min(1),  // List of content artifacts
   signature: z.string(),                  // Ed25519 signature (hex) over canonical JSON
 });
 
