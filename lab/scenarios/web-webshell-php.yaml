@@ -30,3 +30,18 @@ notes: >
   shell answers as `httpd_t`), access log /var/log/httpd/access_log: T1505.003 names the request
   (GET /uploads/c99.php param=cmd, status 200, 0 s), T1059 reports `executed directly by ...
   php-fpm (service)`. No change to the stock SELinux policy was needed.
+  Validated 2026-10-15 on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main + php-fpm 8.0.30 (workers as `apache`, httpd_t),
+  access log /var/log/httpd/access_log: T1505.003 names the request (GET /uploads/c99.php param=cmd,
+  status 200, 0 s), T1059 reports `executed directly by ... php-fpm (service)`.
+  The #807 lab re-run (this scenario run after other signature requests, here after
+  web-webshell.sh) on Fedora 43 and on Rocky 9.8, agent of main: the alert names the status-200 request
+  (0 s) on both, not an earlier 404.
+  Not a scenario, a manual run on Fedora 43 (2026-10-15): a web server in a container. Rootful podman
+  5.8.8, image docker.io/library/php:8.4-apache, port 8090, /var/www/html and /var/log/apache2 bind-mounted
+  from the host (with `CustomLog /var/log/apache2/access.log combined`), `access_combined` source on the
+  mounted log, the same one-line PHP shell. T1059 `executed directly by ppid=... comm=apache2 (service)` and
+  T1505.003 `0s from a WebshellLike request (GET /uploads/c99.php param=cmd, status 200, client
+  10.88.0.1)` fire (the client is the podman bridge, not 127.0.0.1). The exec event carries no container
+  attribution: the container's cgroup is `machine.slice/libpod-<id>.scope/container`, and the id extraction
+  in crates/sensors/linux/uprobes/src/container.rs only knows `docker-<id>.scope` and
+  `cri-containerd-<id>.scope`.
