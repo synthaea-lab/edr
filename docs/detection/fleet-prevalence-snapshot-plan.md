@@ -26,6 +26,10 @@ in the ADR, see the last section).
 
 ## Open questions that block the slices (need an owner's answer)
 
+Questions 1 to 3 are framed for decision, with a recommendation and the alternatives, in
+ADR-0033 (proposed). Question 4 was answered by slice 4 (the enrichment worker feeds the
+correlator after the fact).
+
 1. **Who signs a per-tenant snapshot, and how often?** ADR-0027 puts the content key
    offline with two approvals; a snapshot rebuilt per tenant every cadence cannot be
    signed by hand. Options: (a) amend ADR-0027 with a narrower, separately held

@@ -3,6 +3,10 @@
 - **Status**: proposed
 - **Date**: 2026-10-06
 
+ADR-0033 (proposed) would add a fourth key to this trust set, `snapshot`, with one job: signing
+the per-tenant common-set snapshot manifest, held in a signing-only key service rather than in
+offline custody. It does not change the three keys decided here.
+
 ## Implementation status
 
 Decision items 3 and 4 are implemented (#753): `crates/updater/keys/{release,content,recovery}.pub`
