@@ -9,7 +9,7 @@ tags:
   - attack.persistence
   - attack.privilege_escalation
   - attack.t1543.003
-  - synthaea.coverage.discovery_lateral
+  - synthaea.coverage.privesc_impact
 level: medium
 falsepositives:
   - Installers and remediation scripts that register a temporary service wrapping a
