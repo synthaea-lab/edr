@@ -205,8 +205,10 @@ mod tests {
 
     #[test]
     fn the_line_hook_fires_for_every_non_blank_line_not_only_allowlisted_ones() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
 
         let input = [
             // allowlist miss
