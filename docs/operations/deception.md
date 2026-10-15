@@ -29,6 +29,12 @@ within the hour while the agent runs (the deletion itself already raised a detec
 that was modified or replaced is never overwritten. To get rid of a decoy, take its directory
 out of `canary_dirs`; deleting the file only makes it come back.
 
+**What an uninstall leaves** (checked on `main`, Fedora 44, 2026-10-14: two installs with
+different seeds, then one restarted without `[deception]`): the canaries are removed
+(`canaries removed removed=4`) and so is the inventory. The `seed` file stays in
+`<state_dir>/deception/` (ADR-0029). The canary directories were yours: the agent never creates a
+missing one and never removes one, so an empty directory afterwards is not a residue.
+
 ## With the packaged systemd unit
 
 The unit runs the agent as the unprivileged `synthaea` user with `ProtectSystem=strict`,
@@ -60,6 +66,13 @@ legitimate reads.
 - The Linux sensor does not report read-only opens under `/tmp`, `/var/tmp`, `/dev/shm`,
   `/dev`, `/sys` and `/proc`. A canary there still fires on delete, rename and write, never
   on a read, so it will not catch reconnaissance. Place canaries elsewhere.
+- **A canary touch can be missed while the host is flooded with file opens.** Detection reads
+  the sensor's open events, and the kernel ring buffer drops them when it overflows
+  (`ring buffer full, dropping open event` in the agent log). Measured 2026-10-14 on a 2 vCPU
+  Fedora 44 VM: 20 of 20 touches alerted on a quiet host, 9 of 20 while another process read
+  `/usr` and `/etc` (29,402 drops). Anyone who can generate open load can therefore hide a
+  touch, and the health beacon does not count these drops, so nothing on the control plane says
+  the sensor was blind. Place canaries as the first line of a defence in depth, not the only one.
 - Windows and macOS plant too, but the packaged-unit notes above are Linux-only.
 
 ## Letting a known indexer or backup read the canaries
@@ -76,6 +89,11 @@ is on the list and the process is in the agent's mount namespace. Never the proc
 - **Use the real file, not a link**: the agent resolves symlinks at start (so
   `/usr/bin/updatedb` is compared as `updatedb.plocate` on Debian), but check
   `readlink -f` on the host rather than assume.
+- **Check what your indexer really does before listing it.** plocate's `updatedb`, run as its
+  real systemd service on Fedora 44 (2026-10-14), indexed the canary directory (the directory and
+  its four files) and raised no detection **with and without** `allow_exe`: it reads directory
+  entries and does not open the files, so there was no touch to allow. The list is for tools that
+  open the files (backup agents, content indexers); this run did not exercise it.
 - **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
   `env`, ...): allowing one allows every script it runs.
 - **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be
@@ -130,6 +148,10 @@ a file, so canaries planted by a build before the decoy tokens keep their old co
 agent registers only the tokens it finds in the files on disk (none, for those). To get decoys
 on such a host, take its directories out of `canary_dirs` and restart (the canaries are
 removed), then put them back and restart. Nothing logs this case yet.
+
+Checked 2026-10-14 against a running control plane: the decoy bearer got a `401` and one
+`T1552.001` detection naming the planting agent and host; a random `syn_dk_...` bearer and a plain
+random bearer got a `401` and created nothing; no detection row contained the token.
 
 Limits: only a token presented on a route that evaluates a bearer (today the `/api/cron/*`
 routes) is seen; a standalone agent plants tokens that nothing recognises; and the control

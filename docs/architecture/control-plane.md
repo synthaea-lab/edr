@@ -84,6 +84,15 @@ recent loss is told from one beacon to the next:
 What this does not see: loss the beacon does not carry, such as the kernel ring buffer
 overflowing (`ring buffer full, dropping open event` is logged but not counted).
 
+The other cause of `degraded`, a silent sensor, can also be an idle host: the eBPF and journal
+sensors pulse when they handle events and have a 120 s deadline, so a host with nothing in its
+journal for two minutes shows `linux-journal` silent. The ops table shows the two causes in
+separate columns ("Silent sensors", "Telemetry loss"), so an operator can tell them apart. Checked
+2026-10-14 with a real agent: after an outage the host went `Degraded` with "Lost telemetry in the
+last 10 min" (spool dropped 2048, enrich dropped 7443), the window followed the last rise of a
+counter and closed 10 minutes after it, and the host stayed `Degraded` about a minute longer
+for the silent journal sensor on the idle VM.
+
 ### Response
 
 | Status | When | Body |
