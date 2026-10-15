@@ -52,12 +52,16 @@
 //!   cursor now being persisted.
 
 mod auth;
+mod canary;
 mod classify;
 mod persistence;
 mod record;
 mod tail;
 
 pub use auth::to_auth_event;
+pub use canary::{CANARY_IDENTIFIER, canary_payload};
+#[cfg(target_os = "linux")]
+pub use canary::{JOURNAL_SOCKET, send_canary};
 pub use classify::{JournalEvent, classify};
 pub use persistence::UnitPersistenceTracker;
 pub use record::{JournalRecord, parse_record};
