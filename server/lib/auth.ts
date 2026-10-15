@@ -1,11 +1,13 @@
 import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
 import { organization } from "better-auth/plugins";
+import { prisma } from "@/lib/prisma";
 
 export const auth = betterAuth({
-  database: {
-    provider: "postgresql",
-    url: process.env.DATABASE_URL!,
-  },
+  // The Prisma client the rest of the server uses; the auth tables are Prisma models
+  // (`prisma/schema.prisma`). A bare `{ provider, url }` is not a shape better-auth accepts:
+  // it left the adapter uninitialized and every sign-in failed (#810).
+  database: prismaAdapter(prisma, { provider: "postgresql" }),
   emailAndPassword: {
     enabled: true,
   },

@@ -31,3 +31,8 @@ notes: >
   Re-run 2026-10-07 on Debian 13 (6.12.107) against Apache 2.4 with `FAKE_COMM=apache2`: T1505.003
   and T1059 fire, four `http_request` events. php-fpm as the parent is web-webshell-php; a custom
   LogFormat is web-custom-logformat.
+  Re-run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68 with `FAKE_COMM=httpd`, access log
+  /var/log/httpd/access_log: T1505.003 (0 s from the webshell_like request, status 404) and T1059
+  fire, the four `http_request` events (sql_injection, path_traversal, scanner_user_agent,
+  webshell_like) are written, then one `http_summary`. The sqlmap-agent request returns 403 on
+  this httpd, not 404; the signature is unaffected.

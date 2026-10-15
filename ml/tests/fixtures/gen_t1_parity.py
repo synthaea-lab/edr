@@ -2,15 +2,15 @@
 
     ml/tests/fixtures/t1_events.jsonl   (schema::Event JSON-Lines: identity under `meta`,
                                          lineage beside the command line)
-    ml/tests/fixtures/t1_golden.jsonl   ({pid, process_generation, features[23]} per
+    ml/tests/fixtures/t1_golden.jsonl   ({pid, process_generation, features[17]} per
                                          process incarnation)
 
-The T1 vector is cmdline (9) + correlation (8) + lineage (6). Python builds it with
+The T1 vector is cmdline (9) + correlation (8) (the lineage is judged by rules, ADR-0034). Python builds it with
 `synthaea_ml.data.behavior_dataset.records_from_events` + `synthaea_ml.features.t1`; Rust
 builds it with `ml::features::t1::extract_features` over a `correlator::EventBus`. A model
 trained on one only scores consistently on the other if both give these vectors.
 
-The capture is crafted to pin the cases that make the 23-feature vector different from
+The capture is crafted to pin the cases that make the 17-feature vector different from
 three independent ones: a web server parent, a recycled pid (two incarnations, the first
 of which connected out and must not leak into the second), no generation stamps, no
 lineage, a Windows-style exec with no argv (flat cmdline), and an incarnation with two

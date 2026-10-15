@@ -1,0 +1,19 @@
+name: prevalence-lineage
+platform: linux
+script: prevalence-lineage.sh
+simulates: >
+  A process named "nginx", started from a directory named by TAG, spawns a shell: the
+  T1059 lineage detection, with a parent -> child transition whose key is rare (one host)
+  or shared (several hosts running the same TAG) — the prevalence triage line on a case
+  (issue #76, box 1).
+expected_detections:
+  - technique: "T1059"
+    rule: check_web_server_spawns_shell
+    min_count: 3   # ITERATIONS=3 in the script, one alert per iteration
+    tolerance: 0
+notes: >
+  The assertion is on the server, not in the agent: after the grouping cron
+  (`/api/cron/group-detections`), `GET /api/cases/{id}` returns a prevalence line per
+  detection. TAG=shared on two enrolled hosts reads "seen on 2 hosts"; a TAG run on one
+  host reads "seen on 1 host" (the count includes the detection's own event). Needs an
+  uploading agent; `--standalone` produces the alert and no server-side evidence.

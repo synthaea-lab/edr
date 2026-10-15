@@ -11,7 +11,7 @@ a normal-looking process lineage across a fleet over time has no cheap rewrite).
 | 2 | Static ML | device | T0 models (`crates/ml` inference, `synthaea_ml` training): cmdline anomaly today, static file features later | in progress (#13) |
 | 3 | Behavioral rules | device | `rules` (stateless + stateful) · `sigma` content | built |
 | 4 | Behavioral ML | device | `correlator` behavior vectors + calibrated Bayesian LLR (T1) · T2 correlation scorer | Bayes built · T2 with #13 |
-| 5 | Reputation / prevalence | server → device | `server/prevalence`: fleet first-seen/rarity, fed back into T0/T1 features and correlator evidence | drafted |
+| 5 | Reputation / prevalence | server → device | `server/prevalence`: fleet first-seen/rarity, fed back into T0/T1 features and correlator evidence | counters, console triage line, snapshot format, agent loader and capped correlator evidence built; snapshot publication and calibration open (#76) |
 | 6 | Attack-chain correlation | device | `correlator` co-occurrence rules + cases | built |
 | 7 | Cross-endpoint correlation | server | `server/fleet`: fleet cases + adaptive posture | drafted (#62) |
 | 8 | Identity / network / cloud | server | XDR scope: identity signals arrive with `server/disruption` connectors; network/cloud ingestion is post-v1 (kept deliberately out of the agent) | direction |

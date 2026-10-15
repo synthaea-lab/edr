@@ -3,8 +3,10 @@ import { NextRequest } from "next/server";
 import { config, middleware } from "@/middleware";
 
 // vi.mock is hoisted above the imports, so the mock fn must be hoisted with it.
+// The middleware runs in the Edge runtime, so it must not import `@/lib/auth` (Prisma): it
+// asks `lookupSession` (#810).
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
+vi.mock("@/lib/session-lookup", () => ({ lookupSession: getSession }));
 
 /**
  * The request headers `NextResponse.next({ request: { headers } })` forwards
