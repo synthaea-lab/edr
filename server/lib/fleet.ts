@@ -29,6 +29,13 @@ export type FleetAgent = {
     rarityApplied: number;
     rarityWithheld: number;
     rarityUnapplied: number;
+    /** Watchdog restarts of the agent since the watchdog started; 0 without a watchdog (#863). */
+    watchdogRestarts: number;
+    /** Tamper-class alerts since the agent started, plus the watchdog's own events. */
+    tamperEvents: number;
+    /** Parent-image cache entries dropped while their process was alive (the loss), and after it exited. */
+    parentImageEvictedLive: number;
+    parentImageEvictedDead: number;
     sensors: SensorState[];
   } | null;
 };
@@ -74,6 +81,10 @@ export async function loadFleet(
           rarityApplied: Number(a.health.rarityApplied),
           rarityWithheld: Number(a.health.rarityWithheld),
           rarityUnapplied: Number(a.health.rarityUnapplied),
+          watchdogRestarts: Number(a.health.watchdogRestarts),
+          tamperEvents: Number(a.health.tamperEvents),
+          parentImageEvictedLive: Number(a.health.parentImageEvictedLive),
+          parentImageEvictedDead: Number(a.health.parentImageEvictedDead),
           sensors,
         },
       };
