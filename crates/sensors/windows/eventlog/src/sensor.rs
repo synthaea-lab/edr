@@ -21,18 +21,18 @@ use std::{
 use schema::{
     AuthEvent, AuthKind, AuthOutcome, DefenderEvent, DefenderEventKind, Event, EventMeta,
     FLAG_PERSISTENCE_ACCOUNT_ARTIFACT, FLAG_PERSISTENCE_ARTIFACT, FLAG_PERSISTENCE_TASK_ARTIFACT,
-    FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT, FileOpenEvent, POLICY_MECHANISM_APPLOCKER,
-    POLICY_MECHANISM_WDAC, PolicyDenialEvent, SessionEvent, SessionState, User,
+    FLAG_PERSISTENCE_TASK_UPDATE_ARTIFACT, FileOpenEvent, LogClearedEvent,
+    POLICY_MECHANISM_APPLOCKER, POLICY_MECHANISM_WDAC, PolicyDenialEvent, SessionEvent,
+    SessionState, User,
     sensor::{Capabilities, EventSink, Sensor, SensorError},
     time::now_ns,
 };
 
 use crate::xml::{self, LogonEvent};
 
-/// All channels are polled on the same cadence — persistence detection and
-/// logon-event normalization both have no sub-second stakes (the underlying
-/// Windows event already exists by the time a poll tick could see it), so one
-/// constant covers all three threads.
+/// All targets are polled on the same cadence — event-log detection and
+/// normalization have no sub-second stakes (the underlying Windows event
+/// already exists by the time a poll tick could see it).
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The audit subcategory events 4698 and 4702 depend on (lab, 2026-09-22: a 4702
@@ -272,6 +272,66 @@ fn persistence_file_open(pid: u32, comm: String, path: String, flags: u32) -> Ev
         flags,
     })
 }
+
+// ── Events 1102/104 — Windows Event Log clear (T1070.001, #799) ─────────────
+
+/// Both records are written by the Event Log service without an audit-subcategory
+/// prerequisite; Microsoft's Windows Event Forwarding examples distinguish
+/// Security 1102 from event 104 for other logs. Both channels are enabled by default.
+fn normalize_log_cleared(block: &str) -> ParsedBlock {
+    let Some(cleared) = xml::parse_log_cleared_block(block) else {
+        // A valid 104 can lack the UserData payload on a malformed or
+        // version-skewed host. Advance past that unusable record instead of
+        // asking `wevtutil` for it on every poll tick.
+        let record_id = xml::extract_between(block, "<EventRecordID>", "</EventRecordID>")?
+            .trim()
+            .parse()
+            .ok()?;
+        return Some((record_id, None));
+    };
+    let record_id = cleared.record_id;
+    let event = Event::LogCleared(LogClearedEvent {
+        meta: EventMeta {
+            pid: 0,
+            ppid: 0,
+            user: User::Unknown,
+            timestamp_ns: cleared.timestamp_ns.unwrap_or_else(now_ns),
+            comm: "windows-eventlog".into(),
+            container: None,
+            process_generation: None,
+            parent_process_generation: None,
+        },
+        channel: cleared.channel,
+        subject_user_sid: cleared.subject_user_sid,
+        subject_user_name: cleared.subject_user_name,
+        subject_domain_name: cleared.subject_domain_name,
+        subject_logon_id: cleared.subject_logon_id,
+        source_event_id: cleared.event_id,
+    });
+    Some((record_id, Some(event)))
+}
+
+static SECURITY_LOG_CLEARS: PollTarget = PollTarget {
+    label: "security-log-clear",
+    heartbeat: "windows-eventlog:security-log-clear",
+    channel: "Security",
+    id_filter: "EventID=1102",
+    counter: |c| &c.security_log_clears,
+    parse_block: normalize_log_cleared,
+    enable_audit: None,
+    enabled: |c| c.log_clears_enabled,
+};
+
+static SYSTEM_LOG_CLEARS: PollTarget = PollTarget {
+    label: "system-log-clear",
+    heartbeat: "windows-eventlog:system-log-clear",
+    channel: "System",
+    id_filter: "EventID=104",
+    counter: |c| &c.system_log_clears,
+    parse_block: normalize_log_cleared,
+    enable_audit: None,
+    enabled: |c| c.log_clears_enabled,
+};
 
 /// Runs `auditpol /set /subcategory:<guid>` — best-effort and non-blocking: if
 /// it fails (insufficient rights despite being admin, a GPO overriding it, the
@@ -1168,7 +1228,7 @@ static RDP_CONNECTIONS: PollTarget = PollTarget {
 // `EventLogConfig` when constructing the sensor. See
 // `docs/adr/0006-eventlog-channel-allowlist-and-volume-counters.md`.
 
-/// Which of this sensor's three independent poll targets are active. A
+/// Which of this sensor's independent poll targets are active. A
 /// disabled group is never even queried — not filtered after the fact — so a
 /// host that, say, disables logon-event polling pays no `wevtutil` cost for it
 /// either.
@@ -1248,6 +1308,8 @@ pub struct EventLogConfig {
     /// and RDP authentications (`RemoteConnectionManager` 1149), reported as
     /// `SessionEvent` (#285). Console sessions included.
     pub terminal_sessions_enabled: bool,
+    /// Security 1102 and System 104 records for cleared Event Log channels (#799).
+    pub log_clears_enabled: bool,
 }
 
 /// Every poll target. Adding one = one entry here: its switch, heartbeat name
@@ -1267,6 +1329,8 @@ static TARGETS: &[&PollTarget] = &[
     &WDAC_OP,
     &SESSION_LIFECYCLE,
     &RDP_CONNECTIONS,
+    &SECURITY_LOG_CLEARS,
+    &SYSTEM_LOG_CLEARS,
 ];
 
 impl Default for EventLogConfig {
@@ -1284,6 +1348,7 @@ impl Default for EventLogConfig {
             defender_enabled: true,
             wdac_enabled: true,
             terminal_sessions_enabled: true,
+            log_clears_enabled: true,
         }
     }
 }
@@ -1309,6 +1374,8 @@ pub struct EventLogCounters {
     pub wdac: AtomicU64,
     pub session_lifecycle: AtomicU64,
     pub rdp_connections: AtomicU64,
+    pub security_log_clears: AtomicU64,
+    pub system_log_clears: AtomicU64,
     /// Channels found disabled at start-up for an enabled target (#786): each
     /// is polled or subscribed like any other but cannot deliver an event.
     pub disabled_channels: AtomicU64,
@@ -1559,6 +1626,7 @@ mod config_tests {
         assert!(config.defender_enabled);
         assert!(config.wdac_enabled);
         assert!(config.terminal_sessions_enabled);
+        assert!(config.log_clears_enabled);
     }
 
     #[test]
@@ -1598,6 +1666,7 @@ mod config_tests {
             defender_enabled: false,
             wdac_enabled: false,
             terminal_sessions_enabled: false,
+            log_clears_enabled: false,
         });
         let caps = sensor.capabilities();
         assert!(!caps.file_events);
@@ -1617,6 +1686,7 @@ mod config_tests {
             defender_enabled: false,
             wdac_enabled: false,
             terminal_sessions_enabled: false,
+            log_clears_enabled: false,
         });
         assert!(sensor.capabilities().file_events);
     }
@@ -1635,6 +1705,7 @@ mod config_tests {
             defender_enabled: false,
             wdac_enabled: false,
             terminal_sessions_enabled: false,
+            log_clears_enabled: false,
             transport: EventLogTransport::default(),
         });
         assert!(!sensor.capabilities().file_events);
@@ -1652,6 +1723,7 @@ mod config_tests {
             defender_enabled: false,
             wdac_enabled: false,
             terminal_sessions_enabled: false,
+            log_clears_enabled: false,
             transport: EventLogTransport::default(),
         });
         assert!(sensor.capabilities().file_events);
@@ -1672,6 +1744,8 @@ mod config_tests {
         assert_eq!(counters.wdac.load(Ordering::Relaxed), 0);
         assert_eq!(counters.session_lifecycle.load(Ordering::Relaxed), 0);
         assert_eq!(counters.rdp_connections.load(Ordering::Relaxed), 0);
+        assert_eq!(counters.security_log_clears.load(Ordering::Relaxed), 0);
+        assert_eq!(counters.system_log_clears.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -1698,6 +1772,8 @@ mod config_tests {
                 "windows-eventlog:wdac",
                 "windows-eventlog:session-lifecycle",
                 "windows-eventlog:rdp-connection",
+                "windows-eventlog:security-log-clear",
+                "windows-eventlog:system-log-clear",
             ]
         );
     }
@@ -1714,6 +1790,7 @@ mod config_tests {
             defender_enabled: false,
             wdac_enabled: false,
             terminal_sessions_enabled: false,
+            log_clears_enabled: false,
             transport: EventLogTransport::Polling,
         });
         let names: Vec<_> = sensor.liveness().into_iter().map(|(n, _)| n).collect();
@@ -2555,6 +2632,66 @@ mod session_tests {
         assert!(!SESSION_LIFECYCLE.id_filter.contains("59"));
         assert!(!SESSION_LIFECYCLE.id_filter.contains("EventID=22"));
         assert_eq!(RDP_CONNECTIONS.id_filter, "EventID=1149");
+    }
+}
+
+#[cfg(test)]
+mod log_cleared_tests {
+    use super::*;
+
+    const EVENT_1102: &str = include_str!("../tests/fixtures/log_cleared_1102.xml");
+    const EVENT_104: &str = include_str!("../tests/fixtures/log_cleared_104.xml");
+
+    #[test]
+    fn security_1102_normalizes_actor_and_event_time() {
+        let Some((record_id, Some(Event::LogCleared(event)))) = normalize_log_cleared(EVENT_1102)
+        else {
+            panic!("1102 fixture must normalize");
+        };
+        assert_eq!(record_id, 1_087_729);
+        assert_eq!(event.channel, "Security");
+        assert_eq!(event.source_event_id, 1102);
+        assert_eq!(event.subject_user_name.as_deref(), Some("dadmin"));
+        assert_eq!(event.subject_domain_name.as_deref(), Some("CONTOSO"));
+        assert_eq!(event.meta.timestamp_ns, 1_444_955_998_656_871_200);
+        assert_eq!(event.meta.pid, 0);
+        assert_eq!(event.meta.user, User::Unknown);
+    }
+
+    #[test]
+    fn system_104_normalizes_the_cleared_channel() {
+        let Some((record_id, Some(Event::LogCleared(event)))) = normalize_log_cleared(EVENT_104)
+        else {
+            panic!("104 fixture must normalize");
+        };
+        assert_eq!(record_id, 21_592);
+        assert_eq!(event.channel, "Windows PowerShell");
+        assert_eq!(event.source_event_id, 104);
+        assert_eq!(event.subject_user_name.as_deref(), Some("Élodie"));
+        assert_eq!(event.meta.timestamp_ns, 1_792_051_200_000_000_000);
+    }
+
+    #[test]
+    fn unusable_104_advances_its_record_cursor_without_emitting() {
+        let block = EVENT_104.replace(
+            "<UserData><LogFileCleared xmlns=\"http://manifests.microsoft.com/win/2004/08/windows/eventlog\"><SubjectUserName>Élodie</SubjectUserName><SubjectDomainName>LAB</SubjectDomainName><Channel>Windows PowerShell</Channel><BackupPath/></LogFileCleared></UserData>",
+            "",
+        );
+        assert!(matches!(
+            normalize_log_cleared(&block),
+            Some((21_592, None))
+        ));
+    }
+
+    #[test]
+    fn log_clear_targets_use_the_expected_channels_and_ids_without_audit_toggles() {
+        assert_eq!(SECURITY_LOG_CLEARS.channel, "Security");
+        assert_eq!(SECURITY_LOG_CLEARS.id_filter, "EventID=1102");
+        assert!(SECURITY_LOG_CLEARS.enable_audit.is_none());
+        assert_eq!(SYSTEM_LOG_CLEARS.channel, "System");
+        assert_eq!(SYSTEM_LOG_CLEARS.id_filter, "EventID=104");
+        assert!(SYSTEM_LOG_CLEARS.enable_audit.is_none());
+        assert!(EventLogConfig::default().log_clears_enabled);
     }
 }
 

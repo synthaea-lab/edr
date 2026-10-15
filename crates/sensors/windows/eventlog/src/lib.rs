@@ -8,6 +8,7 @@
 //! - Microsoft-Windows-AppLocker + WDAC, Defender operational, Task-Scheduler
 //! - Terminal Services: session lifecycle 21/23/24/25 and RDP authentication
 //!   1149 (#285, see the section below)
+//! - Security 1102 and System 104: Windows Event Log clear records (#799)
 //!
 //! Implements three persistence detections, ported from a spike validated
 //! end-to-end on a real Windows VM (see
@@ -166,6 +167,17 @@
 //! `EventLogConfig::terminal_sessions_enabled`, gates the pair. The consuming
 //! rule (`rules`' `session` module) flags a disconnected session reconnected
 //! from another client, T1563.002.
+//!
+//! ## Event Log clear records (#799)
+//!
+//! Security event 1102 records a cleared Security audit log. System event 104
+//! records clears of other channels and carries the cleared channel in
+//! `UserData/LogFileCleared/Channel`. Both normalize into
+//! `schema::Event::LogCleared` with the actor fields Windows provides. The
+//! sensor leaves process identity unknown because the record is written by the
+//! Event Log service. Both targets are enabled by default and need no
+//! `auditpol` subcategory. Each source event raises its own High T1070.001 alert;
+//! the command-line rule remains separate evidence when available.
 //!
 //! ## Transport: polling (default) vs. `EvtSubscribe` (#322)
 //!

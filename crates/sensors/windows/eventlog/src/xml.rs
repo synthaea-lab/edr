@@ -838,6 +838,105 @@ pub fn time_created_ns(block: &str) -> Option<u64> {
     system_time_ns(text.trim())
 }
 
+/// Maximum retained size for a single user-controlled Event Log field.
+/// Windows account names, SIDs, channels, and logon IDs are far below this;
+/// an unexpectedly large field is omitted while preserving the clear signal.
+const MAX_LOG_CLEAR_FIELD_BYTES: usize = 4096;
+
+/// A parsed Security 1102 or System 104 record describing an event log clear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogClearedEvent {
+    /// `EventRecordID` from the log that contains this record.
+    pub record_id: u64,
+    /// The source record ID: 104 or 1102.
+    pub event_id: u32,
+    /// Name of the channel that was cleared, not the channel containing the record.
+    pub channel: String,
+    /// Subject SID when the source record carries one (1102).
+    pub subject_user_sid: Option<String>,
+    /// Subject account name when present.
+    pub subject_user_name: Option<String>,
+    /// Subject domain or machine name when present.
+    pub subject_domain_name: Option<String>,
+    /// Subject logon ID when the source record carries one (1102).
+    pub subject_logon_id: Option<String>,
+    /// Time from the event header, in nanoseconds since the Unix epoch.
+    pub timestamp_ns: Option<u64>,
+}
+
+/// Parses one Windows Event Log clear record: Security 1102 or System 104.
+///
+/// Event 1102 itself identifies a Security-log clear even when its payload is
+/// absent, so its channel comes from `System/Channel` and account fields may be
+/// missing. Event 104 carries the cleared channel in `UserData/LogFileCleared`;
+/// without that field it is not safe to guess which log was cleared.
+#[must_use]
+pub fn parse_log_cleared_block(block: &str) -> Option<LogClearedEvent> {
+    let system = extract_between(block, "<System>", "</System>")?;
+    let record_id = extract_between(system, "<EventRecordID>", "</EventRecordID>")?
+        .trim()
+        .parse()
+        .ok()?;
+    let event_id = extract_between(system, "<EventID>", "</EventID>")?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    if !matches!(event_id, 104 | 1102) {
+        return None;
+    }
+
+    let user_data = extract_xml_element(block, "UserData");
+    let payload = user_data.and_then(|data| extract_xml_element(data, "LogFileCleared"));
+    let channel = match event_id {
+        1102 => bounded_log_clear_field(extract_xml_element(system, "Channel")?)?,
+        104 => bounded_log_clear_field(extract_xml_element(payload?, "Channel")?)?,
+        _ => return None,
+    };
+
+    let field = |name: &str| {
+        payload
+            .and_then(|data| extract_xml_element(data, name))
+            .and_then(bounded_log_clear_field)
+    };
+
+    Some(LogClearedEvent {
+        record_id,
+        event_id,
+        channel,
+        subject_user_sid: field("SubjectUserSid"),
+        subject_user_name: field("SubjectUserName"),
+        subject_domain_name: field("SubjectDomainName"),
+        subject_logon_id: field("SubjectLogonId"),
+        timestamp_ns: time_created_ns(block),
+    })
+}
+
+/// Returns the first direct-format XML element's text, accepting namespace
+/// attributes on the opening tag. This is deliberately limited to the fixed,
+/// primitive tags above rather than a general XML parser.
+fn extract_xml_element<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+    let marker = format!("<{name}");
+    let start = xml.find(&marker)?;
+    let after_name = &xml[start + marker.len()..];
+    let first = after_name.as_bytes().first().copied()?;
+    if first != b'>' && !first.is_ascii_whitespace() {
+        return None;
+    }
+    let open_end = start + marker.len() + after_name.find('>')? + 1;
+    let close = format!("</{name}>");
+    let content = &xml[open_end..];
+    let end = content.find(&close)?;
+    Some(&content[..end])
+}
+
+fn bounded_log_clear_field(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_LOG_CLEAR_FIELD_BYTES {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
 fn digits(text: &str, from: usize, to: usize) -> Option<u32> {
     let part = text.get(from..to)?;
     if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {

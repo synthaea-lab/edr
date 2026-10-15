@@ -1864,6 +1864,9 @@ impl EventSink for DetectionSink {
             Event::Auth(e) => self.detect_auth(&event, e),
             Event::Session(e) => self.detect_session(&event, e),
             Event::FileDelete(e) => self.detect_file_delete(&event, e),
+            Event::LogCleared(e) => {
+                self.record_rule_alerts(&event, rules::evaluate_log_cleared(e));
+            }
             Event::Signal(e) => self.detect_signal(&event, e),
             Event::FileQuarantine(e) => self.detect_file_quarantine(e),
             Event::FileRename(e) => self.detect_file_rename(&event, e),

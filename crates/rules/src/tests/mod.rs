@@ -307,6 +307,7 @@ fn policy_denial_event_full(
 
 mod coverage;
 mod linux;
+mod log_cleared;
 mod motw_removal;
 mod persistence;
 mod quarantine;

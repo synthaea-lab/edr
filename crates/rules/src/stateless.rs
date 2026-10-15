@@ -751,6 +751,55 @@ pub(crate) fn check_log_clear_exec(event: &ExecEvent) -> Option<Alert> {
     })
 }
 
+/// T1070.001 — Windows recorded that an Event Log channel was cleared. The
+/// Event Log service's own record catches API/.NET and renamed-tool paths that
+/// do not appear in the command line. This deliberately emits one alert per
+/// source event; 1102 and 104 are separate evidence if Windows ever reports one
+/// clear through both records.
+#[must_use]
+pub(crate) fn check_log_cleared(event: &schema::LogClearedEvent) -> Option<Alert> {
+    if !matches!(event.source_event_id, 104 | 1102) || event.channel.trim().is_empty() {
+        return None;
+    }
+
+    let name = event
+        .subject_user_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty());
+    let domain = event
+        .subject_domain_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty());
+    let mut account = match (domain, name) {
+        (Some(domain), Some(name)) => format!("{domain}\\{name}"),
+        (Some(domain), None) => domain.to_string(),
+        (None, Some(name)) => name.to_string(),
+        (None, None) => "unknown account".to_string(),
+    };
+    if let Some(sid) = event
+        .subject_user_sid
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        account.push_str(&format!(" (SID {sid})"));
+    }
+
+    Some(Alert {
+        technique: "T1070.001",
+        severity: Severity::High,
+        message: format!(
+            "Windows event log cleared: {} by {} (event {})",
+            event.channel, account, event.source_event_id,
+        ),
+    })
+}
+
+/// Evaluates a normalized Windows Event Log clear record.
+#[must_use]
+pub fn evaluate_log_cleared(event: &schema::LogClearedEvent) -> Vec<Alert> {
+    check_log_cleared(event).into_iter().collect()
+}
+
 /// Unix log locations whose deletion is the anti-forensics signal
 /// ([`check_log_file_delete`]). Substring/prefix matches, same tolerance as
 /// [`check_persistence_write`]'s patterns.

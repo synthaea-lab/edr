@@ -1,0 +1,18 @@
+{
+  "type": "log_cleared",
+  "meta": {
+    "pid": 0,
+    "ppid": 0,
+    "user": {
+      "os": "unknown"
+    },
+    "timestamp_ns": 1444955998656871200,
+    "comm": "windows-eventlog"
+  },
+  "channel": "Security",
+  "subject_user_sid": "S-1-5-21-3457937927-2839227994-823803824-1104",
+  "subject_user_name": "dadmin",
+  "subject_domain_name": "CONTOSO",
+  "subject_logon_id": "0x55cd1d",
+  "source_event_id": 1102
+}

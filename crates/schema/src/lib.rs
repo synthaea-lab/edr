@@ -273,7 +273,11 @@ pub mod time;
 /// address, NTLM version). Windows-only. It claimed 41 while #632 (`LdapSearch`)
 /// was open, then 43 after #263 (`SocketCreate`, 42) merged, then 44 after #772
 /// (`PackageChange`) took 43; same coordination note as above.
-pub const SCHEMA_VERSION: u32 = 44;
+///
+/// Bumped 44 → 45 for [`Event::LogCleared`] (#799): Windows Event Log
+/// Security 1102 and System 104 records, with the cleared channel and account
+/// fields. It may need renumbering if another open schema branch merges first.
+pub const SCHEMA_VERSION: u32 = 45;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -2126,6 +2130,34 @@ pub struct PackageChangeEvent {
     pub version: Option<String>,
 }
 
+/// A Windows Event Log channel was cleared (issue #799): Security 1102 or
+/// System 104, emitted by the Event Log service after the clear. The event's
+/// own metadata uses `pid = 0`, `ppid = 0`, and `User::Unknown`: neither record
+/// identifies the clearing process as an event producer. The actor is carried
+/// separately in the optional subject fields. `channel` names the log that was
+/// cleared, while `source_event_id` identifies which Windows record reported it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogClearedEvent {
+    /// Event timestamp and non-attributed producer metadata.
+    pub meta: EventMeta,
+    /// Name of the channel that was cleared.
+    pub channel: String,
+    /// Actor SID when the source record provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_user_sid: Option<String>,
+    /// Actor account name when the source record provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_user_name: Option<String>,
+    /// Actor domain or machine name when the source record provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_domain_name: Option<String>,
+    /// Actor logon ID when the source record provides one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_logon_id: Option<String>,
+    /// Windows source record ID (104 or 1102).
+    pub source_event_id: u32,
+}
+
 /// Which user/group identity syscall produced an [`IdentityChangeEvent`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2236,6 +2268,7 @@ pub enum Event {
     UdpRecv(UdpRecvEvent),
     Auth(AuthEvent),
     Session(SessionEvent),
+    LogCleared(LogClearedEvent),
     ListenPort(ListenPortEvent),
     NetworkFlow(NetworkFlowEvent),
     TlsCapture(TlsCaptureEvent),
@@ -2300,6 +2333,7 @@ impl Event {
             Event::UdpRecv(e) => &e.meta,
             Event::Auth(e) => &e.meta,
             Event::Session(e) => &e.meta,
+            Event::LogCleared(e) => &e.meta,
             Event::ListenPort(e) => &e.meta,
             Event::NetworkFlow(e) => &e.meta,
             Event::TlsCapture(e) => &e.meta,

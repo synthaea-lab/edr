@@ -15,8 +15,8 @@ use schema::{
     FileRemovexattrEvent, FileRenameEvent, FileSetxattrEvent, FileWriteEvent,
     GatekeeperVerdictEvent, HttpClientCount, HttpEvidence, HttpRequestEvent, HttpSignature,
     HttpSummaryEvent, IdentityChangeEvent, IdentityChangeKind, ImageLoadEvent, KernelModuleAction,
-    KernelModuleEvent, LdapSearchEvent, ListenPortEvent, MemfdCreateEvent, MountEvent,
-    NamespaceEvent, NamespaceSyscall, NetworkFlowEvent, NtlmAuthEvent, NtlmDirection,
+    KernelModuleEvent, LdapSearchEvent, ListenPortEvent, LogClearedEvent, MemfdCreateEvent,
+    MountEvent, NamespaceEvent, NamespaceSyscall, NetworkFlowEvent, NtlmAuthEvent, NtlmDirection,
     POLICY_MECHANISM_SELINUX, PackageChangeEvent, PackageChangeKind, PolicyDenialEvent, PrctlEvent,
     ProcessVmReadEvent, ProcessVmWriteEvent, PtraceEvent, ReadlineInputEvent, RegistrySetEvent,
     ScriptBlockEvent, SessionEvent, SessionState, ShellType, SignalEvent, SmbConnectEvent,
@@ -1559,6 +1559,31 @@ fn package_change_upgraded_golden() {
 }
 
 #[test]
+fn log_cleared_security_golden() {
+    assert_golden(
+        &Event::LogCleared(LogClearedEvent {
+            meta: EventMeta {
+                pid: 0,
+                ppid: 0,
+                user: User::Unknown,
+                timestamp_ns: 1_444_955_998_656_871_200,
+                comm: "windows-eventlog".into(),
+                container: None,
+                process_generation: None,
+                parent_process_generation: None,
+            },
+            channel: "Security".into(),
+            subject_user_sid: Some("S-1-5-21-3457937927-2839227994-823803824-1104".into()),
+            subject_user_name: Some("dadmin".into()),
+            subject_domain_name: Some("CONTOSO".into()),
+            subject_logon_id: Some("0x55cd1d".into()),
+            source_event_id: 1102,
+        }),
+        "log_cleared_security",
+    );
+}
+
+#[test]
 fn policy_denial_golden() {
     // v23 (#297): a SELinux AVC denial — httpd blocked (enforcing mode) from
     // reading a file labeled for a user's home directory, the classic
@@ -2202,6 +2227,15 @@ fn meta_accessor_covers_all_variants() {
             target_user: String::new(),
             source_address: None,
             console: false,
+        }),
+        Event::LogCleared(LogClearedEvent {
+            meta: meta.clone(),
+            channel: "Security".into(),
+            subject_user_sid: None,
+            subject_user_name: None,
+            subject_domain_name: None,
+            subject_logon_id: None,
+            source_event_id: 1102,
         }),
         Event::ListenPort(ListenPortEvent {
             meta: meta.clone(),
