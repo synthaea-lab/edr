@@ -22,7 +22,7 @@ expected_detections:
     min_count: 1
     tolerance: 2
 notes: >
-  NOT YET RUN ON A VM. What is verified: the join and the kill through the real sink
+  Run on a VM 2026-10-15 (see the last paragraph). What was verified before: the join and the kill through the real sink
   in-process (agent/src/sink.rs, the `a_burst_then_a_canary_touch_...`,
   `a_canary_touch_then_a_burst_...`, `with_kill_disabled_the_reflex_is_observe_only` and
   allow-list tests), and this script's own mechanics with no agent (observe passes; enforce
@@ -46,3 +46,15 @@ notes: >
   be in [deception] allow_exe. Covers the single-process shape only: a shell loop of short-lived
   `mv` pids (ransomware-rename-burst.sh loop mode) is alerted per parent, and the reflex does
   not join it.
+
+  Run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, agent build of #820 run as root,
+  CANARY_DIR=/srv/synthaea-lab-canaries, four canaries planted, no server): both EXPECT values
+  pass. Observe: the encryptor renamed all 300 files; T1083 (canary file touched, by the
+  encryptor's python3 and by this script's own grep), T1486 ("20 files renamed with an appended
+  suffix in 5s") and "pid N would have been killed on a corroborated ransomware signal (burst
+  rule + canary touch) (observe-only)". Enforce: "killed pid N on a corroborated ransomware
+  signal", the encryptor exits 137 with 20 of 300 files renamed, well under MAX_ENCRYPTED=60
+  (the first window the rule can act in). One run per mode: the 20 is a first measurement, not
+  a bound. The scenario's own grep of the canaries also raises T1083, so a T1083 count is not
+  proof of the encryptor alone: read the pid. An unrelated `sshd-session` was also killed by
+  the BAYES gate in the enforce run (#652).
