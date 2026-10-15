@@ -29,4 +29,6 @@ notes: >
   source=local: 5 failed authentications in 60s`. A client logged with an IP is keyed by it: with
   `skip_name_resolve = ON` and an account bound to 127.0.0.1, the same burst raises T1110
   `source=127.0.0.1`. Without a matching account such a client gets ERROR 1130 (host not allowed),
-  which is not logged as an Access denied line. Not covered: a Rocky/RHEL run.
+  which is not logged as an Access denied line. Rocky Linux 9.8 (kernel 5.14, SELinux Enforcing, 0 AVC) with
+  MySQL 8.0.45 the same day: T1110 `source=local`, and with `skip_name_resolve` plus an account bound to
+  127.0.0.1, `source=127.0.0.1`.
