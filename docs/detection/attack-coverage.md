@@ -122,6 +122,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1548.003 | 3 | `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1557 | 3 | `rules:crates/rules/src/ntlm.rs` |
+| T1558 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |
