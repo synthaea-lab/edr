@@ -178,13 +178,32 @@ describe("POST /api/content/release: nothing is published that an agent could no
   it("refuses an entry sha256 that is not 64 lowercase hex characters, before it ever reaches the filesystem", async () => {
     // The store now reads an entry by its sha256 as a path component (#804): without the
     // schema's regex, a crafted manifest could point that read outside storage/artifacts
-    // (review of #835).
-    const manifest = manifestFor({
-      entries: [{ path: "rules/x.sigma", type: "rule", sha256: "../../../etc/passwd", size: 1 }],
-    });
-    store(manifest, {});
-    const res = await publish(post(publishBody(manifest)));
-    expect(res.status).toBe(422);
+    // (review of #835). An empty store already answers 422 "not in the store" for ANY
+    // sha256, traversal or not, which made the original version of this test pass whether
+    // or not the regex existed (SherlockOmss's review): removing the regex left all tests
+    // green. A file genuinely readable at the path the traversal targets, outside
+    // storage/artifacts, makes the two cases diverge: without the regex, the read would
+    // succeed and the loop would move on to the next entry; with it,
+    // `ContentManifest.safeParse` rejects the manifest before any file lookup runs. The
+    // error text is schema wording ("does not match the content manifest schema"), not the
+    // store's ("is not in the store") — asserting on it is what actually pins the regex.
+    const traversalTarget = join(sandbox, "..", "escaped-by-835-test.txt");
+    writeFileSync(traversalTarget, "should never be read as an artifact");
+    try {
+      const manifest = manifestFor({
+        entries: [
+          { path: "rules/x.sigma", type: "rule", sha256: "../../../escaped-by-835-test.txt", size: 1 },
+        ],
+      });
+      store(manifest, {});
+      const res = await publish(post(publishBody(manifest)));
+      const body = await res.json();
+      expect(res.status).toBe(422);
+      expect(body.error).toContain("does not match the content manifest schema");
+      expect(body.error).not.toContain("is not in the store");
+    } finally {
+      rmSync(traversalTarget, { force: true });
+    }
   });
 
   it("answers 409, not 500, when a concurrent publish took the number first", async () => {
