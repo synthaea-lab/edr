@@ -92,7 +92,7 @@ gap.
 | **Network** | eBPF · tracepoints | connect/bind/listen/accept/socket, UDP send+recv — discrete, real-time | ✅ used | T1071/T1041, backdoor listeners | #263 |
 | **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features | #92 |
 | **Network** | eBPF · tracepoints | mount/umount → platform-neutral v21 `Mount` | 📋 planned | staging, evidence destruction | #362 |
-| **DNS** | eBPF | query/answer joined to the resolving process (udp:53 parse vs. `getaddrinfo` uprobe — choice in-issue) | 📋 planned | T1071.004, DGA features | #267 |
+| **DNS** | glibc `getaddrinfo` uprobe/uretprobe | query plus up to eight ordered IPv4/IPv6 answers, process-attributed; truncation is marked | ✅ used (glibc) | T1071.004, DGA and fast-flux features | #267/#458 |
 | **Encrypted traffic** | eBPF · uprobes | TLS plaintext pre-encryption/post-decryption (OpenSSL/BoringSSL/GnuTLS), byte-budgeted + redacted | ✅ used | T1071 C2 visibility without MITM | #90 |
 | **Encrypted traffic** | eBPF | JA4 fingerprint + SNI on connects | 📋 planned | C2 tooling fingerprints | #86 |
 | **Scripts & shells** | eBPF · uprobes | interactive shell input (readline) incl. builtins that never exec | ✅ used | T1059 | #90 |

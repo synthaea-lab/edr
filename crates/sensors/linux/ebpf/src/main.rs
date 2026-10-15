@@ -14,13 +14,13 @@ use aya_ebpf::{
 };
 use aya_log_ebpf::{info, warn};
 use sensor_linux_wire::{
-    BpfEvent, CapSetEvent, ConnectEvent, ExecEvent, FileChmodEvent, FileChownEvent,
+    BpfEvent, CapSetEvent, ConnectEvent, DnsAnswer, ExecEvent, FileChmodEvent, FileChownEvent,
     FileDeleteEvent, FileOpenEvent, FileRemovexattrEvent, FileRenameEvent, FileSetxattrEvent,
     FileWriteEvent, GetAddrInfoEvent, IdentityChangeEvent, KernelModuleEvent, LineageEntry,
-    MAX_TLS_CAPTURE, MemfdCreateEvent, MountEvent, NamespaceEvent, PrctlEvent, ProcessVmReadEvent,
-    ProcessVmWriteEvent, PtraceEvent, ReadlineInputEvent, SignalEvent, SocketAcceptEvent,
-    SocketBindEvent, SocketCreateEvent, SocketListenEvent, TASK_COMM_LEN, TlsCaptureEvent,
-    UdpRecvEvent, UdpSendEvent, is_filtered_path,
+    MAX_DNS_ANSWERS, MAX_TLS_CAPTURE, MemfdCreateEvent, MountEvent, NamespaceEvent, PrctlEvent,
+    ProcessVmReadEvent, ProcessVmWriteEvent, PtraceEvent, ReadlineInputEvent, SignalEvent,
+    SocketAcceptEvent, SocketBindEvent, SocketCreateEvent, SocketListenEvent, TASK_COMM_LEN,
+    TlsCaptureEvent, UdpRecvEvent, UdpSendEvent, is_filtered_path,
 };
 
 // Raw scheduler tracepoints expose task pointers instead of formatted event records.
@@ -4359,6 +4359,7 @@ static GETADDRINFO_ARGS: HashMap<u64, (u64, u64)> = HashMap::with_max_entries(10
 /// this sensor doesn't target 32-bit userspace processes.
 const ADDRINFO_FAMILY_OFFSET: u64 = 4;
 const ADDRINFO_ADDR_PTR_OFFSET: u64 = 24;
+const ADDRINFO_NEXT_OFFSET: u64 = 40;
 
 /// `sockaddr_in`/`sockaddr_in6` field offsets: the address bytes start right
 /// after `sin_family`+`sin_port` (4 bytes) for IPv4, and after
@@ -4382,8 +4383,8 @@ pub fn getaddrinfo_entry(ctx: ProbeContext) -> u32 {
     0
 }
 
-/// Uretprobe on `getaddrinfo(3)` return: emits the query, the status, and —
-/// on success — the first resolved address.
+/// Uretprobe on `getaddrinfo(3)` return: emits the query, status, and a bounded
+/// answer set on success.
 #[uretprobe]
 pub fn getaddrinfo_exit(ctx: RetProbeContext) -> u32 {
     match try_getaddrinfo_exit(ctx) {
@@ -4402,45 +4403,79 @@ fn try_getaddrinfo_exit(ctx: RetProbeContext) -> Result<u32, u32> {
     };
     let _ = GETADDRINFO_ARGS.remove(&pid_tgid);
 
-    // Only the FIRST addrinfo entry is decoded — see this crate's
-    // WIRE_VERSION v12 changelog for why walking `ai_next` is deferred.
-    let mut addr_resolved = false;
-    let mut is_ipv6 = false;
-    let mut addr_v4 = [0u8; 4];
-    let mut addr_v6 = [0u8; 16];
+    let empty_answer = DnsAnswer {
+        family: 0,
+        address: [0; 16],
+    };
+    let mut answers = [empty_answer; MAX_DNS_ANSWERS];
+    let mut answer_count = 0usize;
+    let mut answers_truncated = false;
     if status == 0 && res_ptr_ptr != 0 {
-        let addrinfo_ptr = unsafe { bpf_probe_read_user(res_ptr_ptr as *const u64) }.unwrap_or(0);
-        if addrinfo_ptr != 0 {
-            let family = unsafe {
-                bpf_probe_read_user((addrinfo_ptr + ADDRINFO_FAMILY_OFFSET) as *const i32)
+        let mut current = unsafe { bpf_probe_read_user(res_ptr_ptr as *const u64) }.unwrap_or(0);
+        // Keep this loop statically bounded. #429 showed that seemingly simple
+        // iterator/loop code can multiply verifier work or exceed its instruction
+        // budget across attached programs; no traversal runs beyond this cap.
+        for index in 0..MAX_DNS_ANSWERS {
+            if current == 0 {
+                break;
             }
-            .unwrap_or(0);
-            let sockaddr_ptr = unsafe {
-                bpf_probe_read_user((addrinfo_ptr + ADDRINFO_ADDR_PTR_OFFSET) as *const u64)
-            }
-            .unwrap_or(0);
-            if sockaddr_ptr != 0 {
+
+            let Ok(family) =
+                (unsafe { bpf_probe_read_user((current + ADDRINFO_FAMILY_OFFSET) as *const i32) })
+            else {
+                break;
+            };
+            let Ok(sockaddr_ptr) = (unsafe {
+                bpf_probe_read_user((current + ADDRINFO_ADDR_PTR_OFFSET) as *const u64)
+            }) else {
+                break;
+            };
+            let Ok(next) =
+                (unsafe { bpf_probe_read_user((current + ADDRINFO_NEXT_OFFSET) as *const u64) })
+            else {
+                break;
+            };
+
+            if sockaddr_ptr != 0 && answer_count < MAX_DNS_ANSWERS {
                 if family == i32::from(AF_INET) {
-                    if let Ok(addr) = unsafe {
+                    let Ok(address) = (unsafe {
                         bpf_probe_read_user(
                             (sockaddr_ptr + SOCKADDR_IN_ADDR_OFFSET) as *const [u8; 4],
                         )
-                    } {
-                        addr_v4 = addr;
-                        addr_resolved = true;
-                    }
-                } else if family == i32::from(AF_INET6)
-                    && let Ok(addr) = unsafe {
+                    }) else {
+                        break;
+                    };
+                    let mut padded = [0u8; 16];
+                    padded[0] = address[0];
+                    padded[1] = address[1];
+                    padded[2] = address[2];
+                    padded[3] = address[3];
+                    answers[answer_count] = DnsAnswer {
+                        family: AF_INET as u8,
+                        address: padded,
+                    };
+                    answer_count += 1;
+                } else if family == i32::from(AF_INET6) {
+                    let Ok(address) = (unsafe {
                         bpf_probe_read_user(
                             (sockaddr_ptr + SOCKADDR_IN6_ADDR_OFFSET) as *const [u8; 16],
                         )
-                    }
-                {
-                    addr_v6 = addr;
-                    is_ipv6 = true;
-                    addr_resolved = true;
+                    }) else {
+                        break;
+                    };
+                    answers[answer_count] = DnsAnswer {
+                        family: AF_INET6 as u8,
+                        address,
+                    };
+                    answer_count += 1;
                 }
             }
+
+            if index + 1 == MAX_DNS_ANSWERS {
+                answers_truncated = next != 0;
+                break;
+            }
+            current = next;
         }
     }
 
@@ -4466,10 +4501,9 @@ fn try_getaddrinfo_exit(ctx: RetProbeContext) -> Result<u32, u32> {
             (*e).query_len = query.len() as u16;
         }
         (*e).status = status;
-        (*e).addr_resolved = addr_resolved;
-        (*e).is_ipv6 = is_ipv6;
-        (*e).addr_v4 = addr_v4;
-        (*e).addr_v6 = addr_v6;
+        (*e).answer_count = answer_count as u8;
+        (*e).answers_truncated = answers_truncated;
+        (*e).answers = answers;
 
         if DNS_QUERY_EVENTS.output::<GetAddrInfoEvent>(&*e, 0).is_err() {
             warn!(
