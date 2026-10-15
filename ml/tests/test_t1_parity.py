@@ -2,7 +2,7 @@
 `features.t1` must reproduce `fixtures/t1_golden.jsonl` from `fixtures/t1_events.jsonl`.
 
 The Rust counterpart is `crates/ml/tests/t1_golden.rs`. If either breaks, the trainer and
-the on-device scorer disagree on the 23-feature vector. Regenerate with
+the on-device scorer disagree on the 17-feature vector. Regenerate with
 `fixtures/gen_t1_parity.py` only on a deliberate change.
 """
 
@@ -40,5 +40,15 @@ def test_the_recycled_pids_second_life_does_not_inherit_the_first() -> None:
     names = t1.FEATURE_NAMES
     assert first[names.index("connect_count")] == 1.0
     assert second[names.index("connect_count")] == 0.0
-    assert first[names.index("parent_comm_is_webserver")] == 1.0
-    assert second[names.index("parent_comm_is_webserver")] == 0.0
+    # each life carries its own command line (the first column is its length)
+    assert first[names.index("length")] != second[names.index("length")]
+
+
+def test_the_t1_vector_is_cmdline_plus_correlation_without_the_lineage() -> None:
+    """#617 / ADR-0034: lineage failed to help the forest (it diluted it for the 92% of
+    attacks whose lineage is ordinary), so it is judged by rules, not by this vector."""
+    from synthaea_ml.features import cmdline, correlation, lineage
+
+    assert t1.FEATURE_NAMES == [*cmdline.FEATURE_NAMES, *correlation.FEATURE_NAMES]
+    assert t1.FEATURE_COUNT == 17
+    assert not set(t1.FEATURE_NAMES) & set(lineage.FEATURE_NAMES)

@@ -1,7 +1,7 @@
 """T1 behavior dataset builder and trainer (issue #617).
 
 Synthetic wire-format captures only: they prove the pipeline (capture -> per-incarnation
-records -> 23 features -> model -> record) holds together and fails closed. They say
+records -> 17 features -> model -> record) holds together and fails closed. They say
 nothing about detection quality; that needs a real capture of normal activity.
 """
 
@@ -105,7 +105,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, dataset: Path, out: Path, *extra: str)
 # --- the dataset builder --------------------------------------------------------------
 
 
-def test_one_record_per_incarnation_with_lineage_and_correlation_context(tmp_path: Path) -> None:
+def test_one_record_per_incarnation_and_correlation_context(tmp_path: Path) -> None:
     d = _write_dataset(tmp_path, _capture(6))
     records = load_records(d / BEHAVIOR_CAPTURE_FILENAME)
     assert len(records) == 6
@@ -114,7 +114,7 @@ def test_one_record_per_incarnation_with_lineage_and_correlation_context(tmp_pat
     assert first["argv"][0] == "/usr/bin/tool0"
     assert len(first["correlation_features"]) == 8
     assert first["correlation_features"][1] == 1.0, "tool0 connected out (i % 3 == 0)"
-    assert len(t1.extract_features(first)) == t1.FEATURE_COUNT == 23
+    assert len(t1.extract_features(first)) == t1.FEATURE_COUNT == 17
 
 
 def test_a_recycled_pid_yields_two_records_and_the_first_life_does_not_leak(
@@ -214,7 +214,7 @@ def test_train_behavior_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert (out / "model.onnx").exists()
     metadata = json.loads((out / "model_metadata.json").read_text(encoding="utf-8"))
     assert metadata["feature_bounds"]["feature_names"] == t1.FEATURE_NAMES
-    assert len(metadata["feature_bounds"]["min_values"]) == 23
+    assert len(metadata["feature_bounds"]["min_values"]) == 17
 
     record = load_training_record(out)
     assert record.training_script == "synthaea_ml/training/train_behavior.py"
@@ -226,7 +226,7 @@ def test_train_behavior_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     graph_input = onnx.load(str(out / "model.onnx")).graph.input[0]
     width = graph_input.type.tensor_type.shape.dim[1].dim_value
-    assert width == 23, "the exported model takes the 23-feature T1 vector"
+    assert width == 17, "the exported model takes the 17-feature T1 vector"
 
 
 def test_train_behavior_refuses_a_capture_too_small_to_calibrate(
@@ -311,6 +311,6 @@ def test_train_behavior_runs_the_t1_robustness_tier_and_records_the_card(
     (call,) = calls
     assert call["tier"] == "T1"
     assert call["events_source"] == malicious
-    assert call["model"].n_features_in_ == 23
+    assert call["model"].n_features_in_ == 17
     (card,) = load_training_record(out).robustness_cards
     assert card.scenario_name == "beacon"

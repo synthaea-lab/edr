@@ -142,35 +142,34 @@ happening now; the adversarial harness and conformal thresholds land with
 `synthaea_ml/evaluation/` and `synthaea_ml/calibration/`; the adaptation loop, fleet
 rarity, and case narratives need T3 and the control plane ingest path.
 
-## Retraining the T1 behavior model (lineage-aware)
+## Retraining the T1 behavior model
 
-T1 scores one process incarnation on 23 features: command line (9), correlation window
-(8) and parent lineage (6). The `argv`-only baselines the T0 trainers use carry no pids,
+T1 scores one process incarnation on 17 features: command line (9) and correlation window
+(8). The parent lineage is **not** a model input (ADR-0034): it is judged by rules. The `argv`-only baselines the T0 trainers use carry no pids,
 generations or parents, so T1 trains from a **raw agent capture of normal activity**:
 
 1. **Capture** on a real host or lab VM, with the agent writing `events.jsonl` (the
    `--events` file), while the machine does ordinary work for a representative session.
    Do not capture on WSL2: its kernel reports `ppid=0` for every event (see
-   `lab/scenarios/lineage.yaml`), so the lineage block would be empty. Prefer a lab host
+   `lab/scenarios/lineage.yaml`), which breaks the correlation block's incarnations. Prefer a lab host
    from `lab/MATRIX.md`. The benign activity must include the lineage a real fleet sees
-   (build tools, package managers, shells under terminals, services): an Isolation Forest
-   never splits on a feature that is constant in training, so a capture where every
-   parent is a system path cannot flag a suspicious parent.
+   (build tools, package managers, shells under terminals, services), so the command-line and
+   correlation blocks see what a real fleet does.
 2. **Write the manifest** next to it:
    `python -m synthaea_ml.data.manifest ... --baseline-filename events.jsonl`.
 3. **Train**:
    `python -m synthaea_ml.training.train_behavior --dataset <dir> --output-dir ml/registry/behavior-iforest-<platform>/<version>/`
-   (`--robustness-scenarios` and `--robustness-events` record the T1 robustness card, lineage
-   mutators included; `--robustness-events` must be a capture of the *malicious* activity).
+   (`--robustness-scenarios` and `--robustness-events` record the T1 robustness card, command-line
+   mutators only; `--robustness-events` must be a capture of the *malicious* activity).
 4. **Compare** against the baseline T1 model on the scenario suite and record detection,
    escape and false-positive rates in `model_record.json`. The release gate then holds the
    escape rate to `robustness_cli verify --max-escape-rate 0.15`.
 
 One incarnation is one `(pid, process_generation)`: a recycled pid's earlier life never
-feeds the next one's correlation counts or lineage. `tests/test_train_behavior.py` proves
+feeds the next one's correlation counts or command line. `tests/test_train_behavior.py` proves
 the pipeline mechanically on synthetic captures and says nothing about detection quality.
 
-**Not shippable yet:** the Rust side now has the 23-feature vector
+**Not shippable yet:** the Rust side now has the 17-feature vector
 (`ml::features::t1::extract_features(bus, pid, generation)`, pinned against Python by
 `ml/tests/fixtures/t1_golden.jsonl`) and the scorer, `ml::BehaviorScorer`. The scorer loads a
 T1 ONNX model with its `model_metadata.json`, applies the conformal threshold (a normal score
@@ -178,7 +177,7 @@ returns `None`) and the feature bounds (an out-of-range vector is an error, not 
 returns the score with its top attributions. Metadata means a calibrated model and must carry
 both the threshold and the bounds (`train_behavior.py` always writes both): one without the other
 is refused at load rather than leaving a guard off silently; no metadata at all is the explicit
-uncalibrated mode. It also refuses a model that is not 23 features wide and bounds that are not
+uncalibrated mode. It also refuses a model that is not 17 features wide and bounds that are not
 for exactly the T1 features, in order. It is pinned to onnxruntime by
 `crates/ml/tests/fixtures/t1_scorer_golden.jsonl` (`gen_t1_scorer_fixture.py`, checked from
 `crates/ml/tests/t1_scorer.rs`) on a small model trained on jittered synthetic vectors: that
@@ -192,3 +191,14 @@ and evaluated here but not run on-device.
 no more anomalous than the range edge, so on its own it will not flag a feature value it
 has never seen. That is what the shipped feature-bounds guard (`model_metadata.json`) is for;
 read a T1 robustness card with that in mind.
+
+### Why the lineage is not a model input
+
+Six lineage columns (parent is a shell, a web server, an Office app; parent path is system,
+suspicious; has a parent) were tried in the T1 vector and measured by
+`python -m synthaea_ml.evaluation.t1_lineage_gain` on real lab captures (ADR-0034). They raised
+detection of attacks with an odd parent (AUC +0.08 to +0.32) and lowered it for the 92% whose
+lineage is ordinary (-0.10), so the aggregate was -0.08 +/- 0.02, worse in 20 of 20 splits.
+The parent is judged by rules: `rules::check_web_server_spawns_shell` (Linux) and
+`check_parent_suspect` (Windows Office/PDF parents). Re-run the tool on a better capture
+before changing that.
