@@ -20,8 +20,9 @@ expected_detections:
     min_count: 1
     tolerance: 5
 notes: >
-  Run on a VM 2026-10-15 (see the last paragraph); before that, 2026-09-30, only what follows was
-  verified. What was verified: the detection and response chain
+  First run on a VM 2026-10-05 (Fedora 44, kernel 6.19.10): both modes pass; the enforce run also
+  killed NetworkManager (#652). Re-run 2026-10-15 on Fedora 43 (last paragraph). Before the first
+  run, 2026-09-30, only what follows was verified. What was verified: the detection and response chain
   (correlator -> BAYES -> kill; write-intent FileOpen -> YARA -> quarantine; both
   audited; observe-only with policy off; restore afterwards) through the real sink
   in-process, in agent/src/sink.rs (`a_beacon_with_a_dropped_payload_is_killed_and_quarantined_...`
@@ -47,7 +48,7 @@ notes: >
   Needs root (eBPF) and the marker rule installed under <content-dir>/rules/yara/
   before the agent starts (lab/scenarios/response-marker.yar).
 
-  Run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, agent build of #820 run as root,
+  Re-run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, agent build of #820 run as root,
   marker rule under a dedicated content dir, no server): EXPECT=observe and EXPECT=enforce both
   pass. Observe: the implant ran to completion, the payload stayed, the alerts say "pid N would
   have been killed ... (observe-only)" and "... would have been quarantined ... (observe-only)".
@@ -55,5 +56,5 @@ notes: >
   correlated verdict", the implant exits 137, and the payload is "quarantined ... on a confirmed
   YARA match". Caveat: in enforce mode the same run also killed five `sshd-session` processes
   (the lab's own SSH connections, BAYES 91-97%): a service-shaped process crosses the gate and is
-  killed (#652). Do not drive an enforce run over an interactive SSH session; start the agent and
+  killed (#652; NetworkManager was the victim on Fedora 44, sshd-session here). Do not drive an enforce run over an interactive SSH session; start the agent and
   the script detached and collect the files afterwards.
