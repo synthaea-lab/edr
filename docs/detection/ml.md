@@ -69,8 +69,23 @@ carries agent id, time and image hash is enough; the telemetry lake is not neede
 `python -m synthaea_ml.training.train_site_rarity` trains the 9-feature cmdline baseline and the
 11-feature candidate on the same **time-ordered** split (train, calibrate to the FP budget, test),
 and records each model's false-positive rate on the untouched test slice in `model_record.json`.
-Only the false-positive side is measured (the corpus is benign); the global-model-floor check of
-`train_site_model.py` still has to pass before a site model leaves the lab.
+Only the false-positive side is measured (the corpus is benign).
+
+A run also checks a **floor** and writes no model if it fails. The rarity is withheld (0, 0) until a
+snapshot covers enough hosts, which is the state of every freshly enrolled fleet; in a real corpus
+only the rows before the first snapshot boundary are withheld, a few percent, so a forest trained as
+the corpus stands learns (0, 0) as a rare combination and flags the withheld state of every new
+fleet, while its false-positive rate at the natural mix of the test slice still reads near 0% (on the
+repo's synthetic corpus: 100% flagged with the rarity withheld, 0.00% at the natural mix). The run
+therefore measures the false-positive rate on the test slice with the rarity forced to withheld,
+which may exceed the cmdline-only model's by at most one point (`WITHHELD_FP_MARGIN`), and, with
+`--robustness-scenarios`, compares the escape rate and median degradation of the adversarial
+scenario suite for the candidate (rarity withheld) with the cmdline-only model of the same corpus,
+each at its own calibrated threshold and with the tolerances of `train_site_model.py`.
+`--withhold-fraction F` (default 0) withholds the rarity of a random share of the training rows so
+the model learns that state; on the synthetic corpus 0.1 still fails (67% flagged) and 0.2 and above
+pass, a figure to calibrate on a real corpus, not to copy. The comparison with the **global** model
+is still not made for this family: the record says `NOT CHECKED against the global model`.
 
 **The Rust mirror** is `ml::features::rarity` (`crates/ml/src/features/rarity.rs`). It takes the
 two inputs ADR-0020 names, through a `CommonSet` trait (a membership test and the number of hosts
