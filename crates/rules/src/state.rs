@@ -1182,8 +1182,8 @@ impl RuleState {
         // arrival order — see the `sudo` module's doc. Gated on `comm`, not
         // just `User::Unix`: an sshd failure (`LogonFailure` from `SshFailed`)
         // is also a Unix identity, and an attacker-controlled sshd username
-        // must never reach this join at all (#838 review) — it would pollute
-        // another account's sudo/su history, or, at volume, evict real sudo/su
+        // must never reach this join at all — it would pollute another
+        // account's sudo/su history, or, at volume, evict real sudo/su
         // history out of the bounded per-account cache before the matching
         // success arrives. `comm` is the syslog identifier, which a logging client
         // chooses: `sensor-linux-journal::to_auth_event` has already dropped a line

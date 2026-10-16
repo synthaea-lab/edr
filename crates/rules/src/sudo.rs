@@ -16,13 +16,13 @@
 //! target (`root`, or whoever `su` names) but `sudo`'s *invoker* —
 //! `sensor-linux-journal` puts the one value there that a sudo failure and the
 //! success after it share, since PAM authenticates the invoker for `sudo` and
-//! never learns the `-u` target on a failed attempt (#838). This rule only ever
-//! sees that one string per side and joins on it; it has no opinion on what it
+//! never learns the `-u` target on a failed attempt. This rule only ever sees
+//! that one string per side and joins on it; it has no opinion on what it
 //! represents for either service. `service` (`"sudo"` or `"su"`,
 //! `RuleState::on_auth` passes `AuthEvent::meta.comm`) is part of the key so a
 //! `su` failure naming `root` as its real target and a later `sudo` success by
 //! an invoker literally named `root` — two different accounts' histories —
-//! never share one bucket (#838 review). History is bounded by the caps below
+//! never share one bucket. History is bounded by the caps below
 //! and the least-recently-seen `(service, account)` pair, never by time, for
 //! the same future-timestamp-pruning reason as [`crate::rdp`].
 //!
@@ -320,8 +320,8 @@ mod tests {
         // A `su` failure whose real target is "root" and a later `sudo` success
         // by an invoker literally named "root" are two different accounts'
         // histories, even though both land in `AuthEvent::target_user` as the
-        // same string "root" (#838 review) — only the key `(service, account)`
-        // tells them apart.
+        // same string "root" — only the key `(service, account)` tells them
+        // apart.
         let mut state = SudoSuccessAfterFailures::new();
         for second in 0..EXPECTED_THRESHOLD as u64 {
             state.on_failure("su", "root", second * SECOND);

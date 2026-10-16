@@ -128,6 +128,13 @@ pub(crate) const RDP_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; //
 /// [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a human mistyping their
 /// password a couple of times before getting it right, catches a scripted or
 /// sustained guess that eventually succeeds.
+///
+/// Known noise source: `pam_unix` logs one failure per wrong
+/// password and `sudo` itself allows up to three per invocation, so this
+/// counts per *attempt*, not per invocation — two fumbled commands (3
+/// failures each) followed by a correct third easily reach 6 with no attack
+/// involved. Not re-tuned here; a per-invocation count (keyed by `_PID` or the
+/// failed `COMMAND=` line) would be the fix if this proves noisy in practice.
 pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// Sliding look-back window for [`SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD`].
 pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s

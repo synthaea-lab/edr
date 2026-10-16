@@ -79,8 +79,8 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             // attempt's `pam_unix(sudo:auth)` line (`PamAuthFailure` below) never
             // names the `-u` target the invoker was trying to reach, only the
             // invoker. Reporting the real target here would make a sudo success
-            // un-joinable with the failures that preceded it (#838 review): the two
-            // sides would key on different strings. Falls back to `real_target` if
+            // un-joinable with the failures that preceded it: the two sides would
+            // key on different strings. Falls back to `real_target` if
             // `logname=`/the `user :` prefix couldn't be read, rather than dropping
             // the event. `su` needs no such swap: there PAM authenticates the real
             // target's password, so its `user=`/session-open line already is it.
@@ -303,8 +303,8 @@ mod tests {
 
     #[test]
     fn a_sudo_failure_and_the_success_after_it_key_on_the_same_invoker() {
-        // The real shape of the bug (#838 review): the invoker (`omss`) fails
-        // sudo, then succeeds as `root`. The PAM failure line never names
+        // The invoker (`omss`) fails sudo, then succeeds as `root`. The PAM
+        // failure line never names
         // `root` — `pam_unix(sudo:auth)` only authenticates the invoker — so
         // the two sides must key on the invoker, not on the escalation target,
         // or a real success-after-failures join can never fire for `sudo`.

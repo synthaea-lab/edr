@@ -13,7 +13,7 @@ const THRESHOLD: u64 = SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD as u64;
 
 /// `comm` defaults to `"sudo"`: `RuleState::on_auth` only joins a failure or a
 /// `PrivilegedSession`/`ExplicitCredentials` success into the sudo/su burst
-/// when the reporting process is `sudo` or `su` (#838 review) — every test in
+/// when the reporting process is `sudo` or `su` — every test in
 /// this file that means to exercise the join needs that, same as a real
 /// journal record would carry it (`AuthEvent::meta.comm` is the syslog
 /// identifier, `sensor-linux-journal::auth::reporter_meta`).
@@ -196,7 +196,7 @@ fn success_delivered_before_the_last_failure_still_alerts() {
 fn sshd_failures_do_not_feed_the_sudo_su_join() {
     // sshd's own PAM auth failure maps to `SshFailed`/`LogonFailure` too, and
     // both it and a sudo/su failure carry `User::Unix` — only `meta.comm`
-    // (the reporting process) tells them apart (#838 review). Five sshd
+    // (the reporting process) tells them apart. Five sshd
     // failures for "root", then a real sudo success for "root", must not
     // alert: the join has nothing genuine behind it.
     let mut state = RuleState::new();
@@ -216,7 +216,7 @@ fn an_attacker_controlled_sshd_username_cannot_evict_real_sudo_history() {
     // Before the comm filter, a flood of distinct sshd usernames (attacker-
     // controlled, unlike a local sudo/su invoker) could evict a real sudo
     // target's bounded history out of `SudoSuccessAfterFailures` before its
-    // success arrived (#838 review, sudo.rs's `TARGETS_CAP`). With sshd kept
+    // success arrived (`sudo.rs`'s `TARGETS_CAP`). With sshd kept
     // out of the join entirely, this many distinct sshd "failures" must do
     // nothing to root's own, unrelated sudo failures.
     let mut state = RuleState::new();
