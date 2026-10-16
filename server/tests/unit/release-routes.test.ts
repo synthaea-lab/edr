@@ -9,6 +9,7 @@ const db = vi.hoisted(() => ({
   agent: { findUnique: vi.fn() },
   binaryRelease: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
   auditLog: { create: vi.fn() },
+  member: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
@@ -77,6 +78,8 @@ beforeEach(() => {
   mkdirSync(join(sandbox, "storage", "releases", "v2"), { recursive: true });
   process.chdir(sandbox);
   db.agent.findUnique.mockResolvedValue(AGENT);
+  // Publishing is admin-only (#837); the caller is the tenant's owner unless a test says otherwise.
+  db.member.findFirst.mockResolvedValue({ role: "owner" });
 });
 
 afterEach(() => {
@@ -287,14 +290,44 @@ describe("POST /api/release (publish)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("without a tenant context it is not served", async () => {
+  it("refuses a plain member before reading the body (#837)", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const manifest = manifestJson();
+    store(manifest);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(403);
+    expect(db.binaryRelease.create).not.toHaveBeenCalled();
+    // An invalid body still gets 403, not the schema's 400: the gate runs first.
+    expect((await publish(post({ ring: "nope", releaseVersion: 0 }))).status).toBe(403);
+  });
+
+  it("refuses a caller with no membership row at all (#837)", async () => {
+    db.member.findFirst.mockResolvedValue(null);
+    const manifest = manifestJson();
+    store(manifest);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(403);
+  });
+
+  it("accepts an admin member, not only an owner (#837)", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "admin" });
+    const manifest = manifestJson();
+    store(manifest);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+    expect(db.member.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: "t1", userId: "u1" },
+      select: { role: true },
+    });
+  });
+
+  it("without a tenant context it gets a clean 401, not a 500 (review of #831)", async () => {
+    // getTenantId/getUserId throw when there is no active organization; requireTenantAdmin
+    // used to let that fall through to the route's generic catch as a 500.
     const res = await publish(
       new NextRequest("http://localhost/api/release", {
         method: "POST",
         body: JSON.stringify(publishBody(manifestJson())),
       })
     );
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(401);
   });
 });
 

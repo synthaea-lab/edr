@@ -31,6 +31,12 @@ export const HealthBeacon = z.object({
   rarity_applied: counter.default(0),
   rarity_withheld: counter.default(0),
   rarity_unapplied: counter.default(0),
+  // #863: watchdog restarts, tamper-class alerts, and what the Linux parent-image cache dropped.
+  // Absent from an agent that predates them: counted as zero.
+  watchdog_restarts: counter.default(0),
+  tamper_events: counter.default(0),
+  parent_image_evicted_live: counter.default(0),
+  parent_image_evicted_dead: counter.default(0),
 });
 export type HealthBeacon = z.infer<typeof HealthBeacon>;
 
