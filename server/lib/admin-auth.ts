@@ -22,8 +22,21 @@ const ADMIN_ROLES = new Set(["owner", "admin"]);
 export async function requireTenantAdmin(
   req: NextRequest
 ): Promise<{ tenantId: string; userId: string } | { response: NextResponse }> {
-  const tenantId = await getTenantId(req);
-  const userId = await getUserId(req);
+  let tenantId: string;
+  let userId: string;
+  try {
+    tenantId = await getTenantId(req);
+    userId = await getUserId(req);
+  } catch {
+    // A session with no active organization never gets an `x-tenant-id`/`x-user-id` header
+    // (middleware strips any client-supplied one); `getTenantId`/`getUserId` throw rather
+    // than return it missing. Without this, every caller of these three routes with no
+    // active organization hit the generic `catch` below as a 500, not the 401 the doc
+    // comment promises (review of #831).
+    return {
+      response: NextResponse.json({ error: "Authentication required" }, { status: 401 }),
+    };
+  }
 
   const member = await prisma.member.findFirst({
     where: { organizationId: tenantId, userId },

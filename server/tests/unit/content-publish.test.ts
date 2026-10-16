@@ -244,11 +244,11 @@ describe("POST /api/content/rollback: it says what it does not do (#665)", () =>
 });
 
 describe("content/release, content/rollback and content/halt require the admin role (#803)", () => {
-  function rollbackReq() {
+  function rollbackReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
     return new NextRequest("http://localhost/api/content/rollback", {
       method: "POST",
       headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
-      body: JSON.stringify({ ring: "canary_0", reason: "bad rule" }),
+      body: JSON.stringify(body),
     });
   }
 
@@ -318,6 +318,47 @@ describe("content/release, content/rollback and content/halt require the admin r
     db.member.findFirst.mockResolvedValue({ role: "member" });
     const res = await publish(post({ ring: "not-a-real-ring" }));
     expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid rollback body with 403, not the schema's 400", async () => {
+    // The first such test (above) only exercised /release; the gate runs identically before
+    // the body is read on every one of the three routes, not just that one (review of #831).
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await rollback(rollbackReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid halt body with 403, not the schema's 400", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await halt(haltReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("accepts a comma-separated role including admin or owner on a route other than release", async () => {
+    // The release-only version of this test (above) could pass even if another route's own
+    // split/compare had a bug of its own; this pins the same behavior on rollback too
+    // (review of #831).
+    db.contentRelease.findFirst
+      .mockResolvedValueOnce({ id: "r4", releaseVersion: 4, status: "active" })
+      .mockResolvedValueOnce({ id: "r2", releaseVersion: 2, status: "active" })
+      .mockResolvedValueOnce({ releaseVersion: 4 });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    db.member.findFirst.mockResolvedValue({ role: "member,admin" });
+    expect((await rollback(rollbackReq())).status).toBe(200);
+  });
+
+  it("a caller with no tenant context (no active organization) gets a clean 401, not a 500", async () => {
+    // getTenantId/getUserId throw when the middleware found no active organization to set
+    // x-tenant-id/x-user-id from; requireTenantAdmin must not let that fall through to the
+    // route's generic catch, which would answer 500 (review of #831).
+    const req = new NextRequest("http://localhost/api/content/release", {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // no x-tenant-id, no x-user-id
+      body: JSON.stringify({ ring: "canary_0" }),
+    });
+    const res = await publish(req);
+    expect(res.status).toBe(401);
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
   });
 
   it("halts the ring for an admin and audits it", async () => {

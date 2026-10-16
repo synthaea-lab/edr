@@ -318,14 +318,16 @@ describe("POST /api/release (publish)", () => {
     });
   });
 
-  it("without a tenant context it is not served", async () => {
+  it("without a tenant context it gets a clean 401, not a 500 (review of #831)", async () => {
+    // getTenantId/getUserId throw when there is no active organization; requireTenantAdmin
+    // used to let that fall through to the route's generic catch as a 500.
     const res = await publish(
       new NextRequest("http://localhost/api/release", {
         method: "POST",
         body: JSON.stringify(publishBody(manifestJson())),
       })
     );
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(401);
   });
 });
 

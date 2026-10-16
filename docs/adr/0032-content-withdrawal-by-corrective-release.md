@@ -65,9 +65,9 @@ carries the earlier content.
   publish); the tool says which paths and the server refuses a publish that skips it.
 - Known and not changed here: after an agent was pointed at another ring the "stays on release N"
   message can be wrong, because the agent's applied-entries state is one map for all rings (#666).
-  (The release and rollback routes checking a session and a tenant but not an administrator role,
-  noted here as predating this ADR, is fixed by #803: both now require an `owner` or `admin`
-  member of the tenant.)
+  (The release, rollback and halt routes checking a session and a tenant but not an administrator
+  role, noted here as predating this ADR, is fixed by #803/#831: all three now require an `owner`
+  or `admin` member of the tenant.)
 - No new trust primitive, no change to what an attacker who can replay old manifests can do, and
   no new thing to verify, rotate or revoke.
 - Withdrawing content takes a signing step. With the custody of the production keys still open
