@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -187,12 +187,18 @@ describe("POST /api/content/release: nothing is published that an agent could no
     // `ContentManifest.safeParse` rejects the manifest before any file lookup runs. The
     // error text is schema wording ("does not match the content manifest schema"), not the
     // store's ("is not in the store") — asserting on it is what actually pins the regex.
-    const traversalTarget = join(sandbox, "..", "escaped-by-835-test.txt");
+    // A per-run unique name, not a fixed one: `sandbox`'s parent is the real project
+    // directory (`originalCwd`), shared by every test file and worker, not a sandbox
+    // of its own — a fixed name would collide under parallel test execution, and a
+    // crash before the `finally` below would leave a stray file for the next run to
+    // trip over (review of #835).
+    const traversalName = `escaped-by-835-test-${randomBytes(8).toString("hex")}.txt`;
+    const traversalTarget = join(sandbox, "..", traversalName);
     writeFileSync(traversalTarget, "should never be read as an artifact");
     try {
       const manifest = manifestFor({
         entries: [
-          { path: "rules/x.sigma", type: "rule", sha256: "../../../escaped-by-835-test.txt", size: 1 },
+          { path: "rules/x.sigma", type: "rule", sha256: `../../../${traversalName}`, size: 1 },
         ],
       });
       store(manifest, {});

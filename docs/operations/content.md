@@ -95,20 +95,47 @@ store"), naming the missing path.
 ## Upgrading a server from the old, path-keyed store (#804)
 
 Before #804, `storage/artifacts/` held one file per manifest path
-(`storage/artifacts/rules/beacon.sigma`); the routes now read and write only
-`storage/artifacts/<sha256>`. A server upgraded without a migration step serves every agent a 404
-on its next fetch — a new enrollment, an agent moved back to its ring, or the same-release repair
-above. Before deploying past this change, copy each existing file to its hash-named sibling (the
-old path-keyed files are no longer read and can be removed once every active release's artifacts
-have a hash-named copy):
+(`storage/artifacts/rules/beacon.sigma`), **overwritten on every release that changed that
+path** — the old layout never kept more than the current bytes. The routes now read and write
+only `storage/artifacts/<sha256>`. A server upgraded without a migration step serves every agent
+a 404 on its next fetch — a new enrollment, an agent moved back to its ring, or the same-release
+repair above. Before deploying past this change, copy each existing file to its hash-named
+sibling (the old path-keyed files are no longer read and can be removed once every active
+release's artifacts have a hash-named copy):
 
-    find storage/artifacts -type f ! -regex '.*/[0-9a-f]\{64\}$' | while read -r f; do
+    find storage/artifacts -type f ! -regex '.*/[0-9a-f]\{64\}$' | while IFS= read -r f; do
         sha=$(sha256sum "$f" | cut -d' ' -f1)
         cp "$f" "storage/artifacts/$sha"
     done
 
-This is a one-time, idempotent step: re-running it after further uploads just re-copies files
-already at their hash name onto themselves.
+Safe to re-run (a hash-named destination that already exists is overwritten with the same
+bytes), but re-running does **not** verify completeness or re-heal a hash-named file that is
+already missing or corrupt — it only ever reads path-named files, which the `! -regex` exclusion
+skips once they have a hash-named copy. Verify after running: for every release still referenced
+(active, rolled-back, or historical — same scope as the retention note above), its manifest's
+every `sha256` must resolve with `test -f storage/artifacts/$sha`.
+
+**This migration cannot recover a path's *overwritten* versions — only what is on disk right
+now.** Because the old layout kept one file per path, a release that changed `rules/x.yml`
+discarded whatever bytes were there before; by the time this migration runs, only the
+*current* release's bytes survive at that path, and only those get a hash-named copy. A
+corrective release naming an *earlier* release's hash for `rules/x.yml` (ADR-0032) is refused
+(422, "not in the store") exactly as if it had never been uploaded, because for this migration's
+purposes it never was: that hash's bytes were already gone before #804 shipped. Re-stage them
+under their own hash from the original release's build artifacts (the `dist/` directory
+`release-tool manifest` built that release from, not the live server) before publishing a
+corrective release that reaches back past the most recent change to a path.
+
+**`sha256` is schema-validated on every load, not only on publish** (`ContentEntry.sha256`,
+`/^[a-f0-9]{64}$/`, since #835): `loadActiveManifest` runs the same `ContentManifest.safeParse`
+the publish route does, on every agent fetch of every still-active release's stored manifest
+file. A manifest that predates the regex, or was otherwise stored with a non-conforming hash
+before this change shipped, now makes every agent of that release's ring get a 502 ("Manifest
+does not match the expected schema") on every fetch, not just the next publish. Before deploying
+this change, check every currently-active release's stored manifest against the regex (a quick
+`jq '.entries[].sha256' storage/manifests/*.json | grep -vE '^"[a-f0-9]{64}"$'` over the active
+ones is enough) and re-sign a corrected manifest for any that fail, same as the #804 migration
+above is itself a pre-deploy step, not something the running server does for you.
 
 ## Running it from a timer
 

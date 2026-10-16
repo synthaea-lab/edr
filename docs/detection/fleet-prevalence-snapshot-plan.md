@@ -76,9 +76,13 @@ Each slice lands its tests first (CLAUDE.md), and each is useful or inert on its
    event or detection source. If review finds one is needed it comes with its own
    justification.
 5. **Publish path (server).** The snapshot becomes a manifest entry
-   (`snapshots/common-set-<tenant>.bin`; the artifact store is keyed by path and shared
-   across tenants, so the path must be tenant-unique), with K, false-positive rate and
-   `hosts_covered` in the entry's `metadata`. Needs answers 1 and 2 above. The entry
+   (`snapshots/common-set.bin`; the artifact *store* is keyed by content hash, not path,
+   and shared across tenants (#804), so two tenants' snapshots need no tenant-unique
+   storage name — they land under their own hash automatically because their bytes
+   differ. The manifest `path` can be the one fixed name every tenant's manifest uses;
+   see `common-set-snapshot-format.md`'s own note that the agent-side path is fixed),
+   with K, false-positive rate and `hosts_covered` in the entry's `metadata`. Needs
+   answers 1 and 2 above. The entry
    must stay in every later release or agents prune it.
 6. **Lab run and calibration.** A lab scenario with at least two enrolled hosts: a binary
    common to both and a binary on one host only; assert the first is in the common set
