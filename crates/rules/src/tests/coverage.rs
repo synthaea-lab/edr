@@ -132,23 +132,44 @@ fn journald_vacuum_alerts_but_status_queries_do_not() {
 
 // --- T1562.002 disable Windows event logging (exec) ------------------------
 
+/// A Windows exec event: the rule is gated on `User::Windows`.
+fn win_exec(cmdline: &str) -> ExecEvent {
+    exec_event_win(1, 0, "cmd.exe", cmdline, 0)
+}
+
+fn t1562_002(event: &ExecEvent) -> bool {
+    evaluate_exec(event)
+        .iter()
+        .any(|a| a.technique == "T1562.002")
+}
+
 #[test]
 fn disabling_windows_event_logging_is_tagged_t1562_002() {
     for cmdline in [
         r#"wevtutil sl "Microsoft-Windows-PowerShell/Operational" /e:false"#,
         "wevtutil.exe set-log Microsoft-Windows-Sysmon/Operational /enabled:false",
+        "wevtutil.exe\tsl Security /e:\"false\"",
+        r#""C:\Windows\System32\wevtutil.exe" sl Security /e:False"#,
         "auditpol /clear /y",
         "auditpol.exe /remove /allusers",
         r#"auditpol /set /subcategory:"Process Creation" /success:disable /failure:disable"#,
         r"C:\Windows\system32\sc.exe config eventlog start= disabled",
+        r#"sc config "eventlog" start= disabled"#,
+        "sc config eventlog start=disabled",
+        r"sc \\lab-host stop eventlog",
         "net stop eventlog /y",
         "net1 stop EventLog",
+        r#"net stop "Windows Event Log" /y"#,
         "sc stop eventlog",
+        r#"sc stop "eventlog""#,
         "powershell -c Stop-Service -Name EventLog -Force",
+        r#"powershell -Command "Stop-Service -Name 'EventLog' -Force""#,
         "powershell -c Set-Service EventLog -StartupType Disabled",
+        r#"pwsh -c "Set-Service -Name EventLog -StartupType Disabled""#,
         r"reg add HKLM\SYSTEM\CurrentControlSet\Services\EventLog /v Start /t REG_DWORD /d 4 /f",
+        r#"reg add "HKLM\SYSTEM\CurrentControlSet\Services\EventLog" /v Start /t REG_DWORD /d 4 /f"#,
     ] {
-        let alert = check_event_logging_disable_exec(&exec_event(cmdline))
+        let alert = check_event_logging_disable_exec(&win_exec(cmdline))
             .unwrap_or_else(|| panic!("must alert: {cmdline}"));
         assert_eq!(alert.technique, "T1562.002", "{cmdline}");
         assert_eq!(
@@ -169,12 +190,7 @@ fn the_agents_own_audit_and_query_commands_do_not_alert() {
         "wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true",
         "auditpol /get /category:*",
     ] {
-        assert!(
-            evaluate_exec(&exec_event(cmdline))
-                .iter()
-                .all(|a| a.technique != "T1562.002"),
-            "{cmdline}"
-        );
+        assert!(!t1562_002(&win_exec(cmdline)), "{cmdline}");
     }
 }
 
@@ -189,9 +205,43 @@ fn reading_or_querying_the_eventlog_service_does_not_alert() {
         "net start eventlog",
     ] {
         assert!(
-            check_event_logging_disable_exec(&exec_event(cmdline)).is_none(),
+            check_event_logging_disable_exec(&win_exec(cmdline)).is_none(),
             "{cmdline}"
         );
+    }
+}
+
+#[test]
+fn lookalike_command_lines_do_not_alert() {
+    for cmdline in [
+        // A substring of the program or of the service name is not the command.
+        "dotnet MyApp.dll stop eventlog-forwarder",
+        r"C:\tools\descr.exe stop eventlog",
+        "net stop eventlog-forwarder",
+        // Another service, or EventLog named in another statement.
+        "sc stop spooler",
+        "net stop spooler",
+        r#"powershell -c "Stop-Service -Name Spooler; Get-WinEvent -LogName EventLog""#,
+        r#"powershell -c "Set-Service Spooler -StartupType Disabled; Get-EventLog System""#,
+        // The same service set to start automatically, or a channel's own configuration.
+        "sc config eventlog start= auto",
+        r"reg add HKLM\SYSTEM\CurrentControlSet\Services\EventLog /v Start /t REG_DWORD /d 2 /f",
+        r"reg add HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Security /v File /t REG_SZ /d 4 /f",
+    ] {
+        assert!(!t1562_002(&win_exec(cmdline)), "{cmdline}");
+    }
+}
+
+#[test]
+fn a_non_windows_exec_never_raises_the_windows_event_logging_rule() {
+    // The same text on a Unix agent (a script path, `ssh host net stop eventlog`) is not a
+    // Windows command.
+    for cmdline in [
+        "net stop eventlog /y",
+        "ssh winhost net stop eventlog",
+        "wevtutil sl Security /e:false",
+    ] {
+        assert!(!t1562_002(&exec_event(cmdline)), "{cmdline}");
     }
 }
 
