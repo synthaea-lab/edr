@@ -61,9 +61,11 @@ pub enum JournalEvent {
     /// restriction (#381, T1548.003).
     PamAuthFailure {
         service: String,
-        /// The `logname=` field: who typed the (wrong) password. Not currently
-        /// projected into `schema::AuthEvent` (narrower than this raw shape),
-        /// kept here for forensic completeness.
+        /// The `logname=` field: who typed the (wrong) password. For `sudo` it is
+        /// the join key when `user=` is missing from the line (the two name the
+        /// same account there, see `target_user`); for `su` it is not projected
+        /// into `schema::AuthEvent` (narrower than this raw shape), kept here for
+        /// forensic completeness.
         invoking_user: Option<String>,
         /// The `user=` field: the account PAM checked a password against. For
         /// `su` this is the real target (the account being switched to); for
@@ -180,11 +182,26 @@ const SUDO_COMMAND_FAILURE_MARKERS: &[&str] = &[
     "a password is required",
 ];
 
-fn classify_sudo_command(message: &str) -> Option<JournalEvent> {
-    if SUDO_COMMAND_FAILURE_MARKERS
+/// Whether a `sudo` `COMMAND=` line records a refused attempt. The reason sudo
+/// gives is the first `" ; "`-separated segment after the `"<user> :"` prefix
+/// (`lab : 3 incorrect password attempts ; TTY=...`; a success starts straight
+/// at `TTY=`/`PWD=`), so only that segment is searched. Everything after it
+/// (`PWD=`, `USER=`, `COMMAND=`) is chosen by the invoking user: scanning the
+/// whole line would let a directory or an argument named like a marker turn a
+/// real success into a dropped one, and with it silence the T1548.003 join
+/// (#838 review).
+fn sudo_attempt_failed(message: &str) -> bool {
+    let Some((_, after_user)) = message.split_once(" :") else {
+        return false;
+    };
+    let reason = after_user.split(" ; ").next().unwrap_or_default();
+    SUDO_COMMAND_FAILURE_MARKERS
         .iter()
-        .any(|marker| message.contains(marker))
-    {
+        .any(|marker| reason.contains(marker))
+}
+
+fn classify_sudo_command(message: &str) -> Option<JournalEvent> {
+    if sudo_attempt_failed(message) {
         return None;
     }
     let command_idx = message.find("COMMAND=")?;
@@ -487,6 +504,27 @@ mod tests {
                 classify(&r),
                 None,
                 "classified a failure as a success: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_marker_in_the_directory_or_the_command_does_not_make_a_success_a_failure() {
+        // `PWD=` and `COMMAND=` are chosen by the invoking user: a directory or an
+        // argument that reads like a failure marker must not drop a real success
+        // (that would silence the T1548.003 join for whoever types it, #838).
+        for message in [
+            "     lab : TTY=pts/0 ; PWD=/tmp/a password is required ; USER=root ; \
+             COMMAND=/bin/ls",
+            "     lab : TTY=pts/0 ; PWD=/home/lab ; USER=root ; \
+             COMMAND=/bin/echo user NOT in sudoers",
+            "     lab : PWD=/home/lab ; USER=root ; \
+             COMMAND=/bin/echo 3 incorrect password attempts ; command not allowed",
+        ] {
+            let r = record_with(&[("SYSLOG_IDENTIFIER", "sudo"), ("MESSAGE", message)]);
+            assert!(
+                matches!(classify(&r), Some(JournalEvent::SudoCommand { .. })),
+                "dropped a successful sudo: {message}"
             );
         }
     }

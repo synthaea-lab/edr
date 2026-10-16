@@ -4,7 +4,8 @@ use schema::{AuthEvent, AuthKind, AuthOutcome, User, fixtures};
 
 use super::*;
 use crate::exclusions::{
-    SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD, SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS,
+    AUTH_FAILURE_THRESHOLD, SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD,
+    SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS,
 };
 
 const SEC: u64 = 1_000_000_000;
@@ -59,7 +60,7 @@ fn privileged_session_after_five_failures_alerts_once_per_window() {
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].technique, "T1548.003");
     assert_eq!(alerts[0].severity, schema::detection::Severity::Medium);
-    assert!(alerts[0].message.contains("account=root (sudo)"));
+    assert!(alerts[0].message.contains("sudo invoker=root"));
     assert!(alerts[0].message.contains("5 failed authentications"));
     assert!(
         state
@@ -250,4 +251,46 @@ fn failure_timestamped_after_the_success_does_not_count() {
         alerts.iter().all(|a| a.technique != "T1548.003"),
         "a failure after the success is not a failure before it"
     );
+}
+
+#[test]
+fn a_su_spray_of_throwaway_names_cannot_evict_real_sudo_history() {
+    // Unlike an sshd name, a `su <name>` failure does reach the join (it is a real
+    // `su` PAM line), and a local user chooses the name. Its own bounded history
+    // keeps that spray away from `sudo`'s (#838 review).
+    let mut state = RuleState::new();
+    for i in 0..THRESHOLD {
+        state.on_auth(&failure("root", i * SEC));
+    }
+    for i in 0..10_000u64 {
+        state.on_auth(&failure_from(
+            "su",
+            &format!("spray{i}"),
+            (THRESHOLD + i) * SEC,
+        ));
+    }
+    let alerts = state.on_auth(&success("root", AuthKind::PrivilegedSession, 10 * SEC));
+    assert_eq!(
+        alerts.len(),
+        1,
+        "root's real sudo failures must survive a su spray"
+    );
+}
+
+#[test]
+fn local_sudo_failures_also_feed_the_generic_t1110_burst() {
+    // `AuthEvent` failures from sudo/su reach `on_auth`'s generic burst counter as
+    // well (key: target account, source "local"): five wrong sudo passwords in the
+    // window raise T1110 on their own, whether or not a success ever follows. That
+    // is deliberate (local password guessing is T1110), and it is separate from the
+    // T1548.003 join, which needs the success (#838 review).
+    let mut state = RuleState::new();
+    let mut alerts = Vec::new();
+    for i in 0..u64::from(AUTH_FAILURE_THRESHOLD) {
+        alerts.extend(state.on_auth(&failure("lab", i * SEC)));
+    }
+    let burst: Vec<_> = alerts.iter().filter(|a| a.technique == "T1110").collect();
+    assert_eq!(burst.len(), 1);
+    assert!(burst[0].message.contains("target=lab source=local"));
+    assert!(alerts.iter().all(|a| a.technique != "T1548.003"));
 }

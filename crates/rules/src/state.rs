@@ -1130,7 +1130,10 @@ impl RuleState {
     /// that signal is [`Self::rdp_success`] (T1021.001, joined from a separate
     /// `SessionEvent`); for a local `sudo`/`su` success it is
     /// [`Self::sudo_success`] (T1548.003, #381) below, joined from this same
-    /// `AuthEvent` stream.
+    /// `AuthEvent` stream. A local `sudo`/`su` failure also counts into the burst
+    /// counter below (key: target account, source `"local"`, `sudo` and `su` sharing
+    /// one key), so five wrong passwords in the window raise T1110 by themselves,
+    /// before and independently of any success (#838).
     pub fn on_auth(&mut self, event: &AuthEvent) -> Vec<Alert> {
         let ts = event.meta.timestamp_ns;
         if event.outcome == AuthOutcome::Success {
@@ -1182,7 +1185,10 @@ impl RuleState {
         // must never reach this join at all (#838 review) — it would pollute
         // another account's sudo/su history, or, at volume, evict real sudo/su
         // history out of the bounded per-account cache before the matching
-        // success arrives.
+        // success arrives. `comm` is the syslog identifier, which a logging client
+        // chooses: `sensor-linux-journal::to_auth_event` has already dropped a line
+        // whose trusted `_COMM` is not `sudo`/`su` (`logger -t sudo ...`), so the
+        // match below is only as good as that check, and only for journal records.
         if matches!(event.meta.user, User::Unix { .. })
             && matches!(event.meta.comm.as_str(), "sudo" | "su")
         {

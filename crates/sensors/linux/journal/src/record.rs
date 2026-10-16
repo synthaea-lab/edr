@@ -30,6 +30,11 @@ pub struct JournalRecord {
     /// `SYSLOG_IDENTIFIER` — the program name as it identified itself to the log
     /// (`"sshd"`, `"sudo"`, `"su"`, ...). Absent on structured-only sources.
     pub syslog_identifier: Option<String>,
+    /// `_COMM` — the emitting process's own name, stamped by journald from the
+    /// kernel's view of the sender (a client cannot set or override a `_`-prefixed
+    /// field). Unlike `SYSLOG_IDENTIFIER`, which the logging client picks freely
+    /// (`logger -t sudo ...`), this says what actually wrote the line (#838 review).
+    pub comm: Option<String>,
     /// `_UID` — numeric UID of the process that emitted the record (the logger, not
     /// necessarily the account being authenticated — that's parsed from `message`
     /// by [`classify`](crate::classify) instead).
@@ -86,6 +91,7 @@ pub fn parse_record(line: &str) -> Result<JournalRecord, JournalError> {
         realtime_us,
         boot_id: get_str("_BOOT_ID"),
         syslog_identifier: get_str("SYSLOG_IDENTIFIER"),
+        comm: get_str("_COMM"),
         uid: get_str("_UID"),
         pid: get_str("_PID"),
         gid: get_str("_GID"),
@@ -110,9 +116,18 @@ mod tests {
         let record = parse_record(REAL_SUDO_COMMAND_LINE).unwrap();
         assert_eq!(record.syslog_identifier.as_deref(), Some("sudo"));
         assert_eq!(record.uid.as_deref(), Some("1001"));
+        assert_eq!(record.comm, None, "the capture predates `_COMM`");
         assert!(record.message.contains("COMMAND=/bin/echo hi"));
         assert_eq!(record.realtime_us, 1_789_125_702_949_307);
         assert!(record.job_type.is_none());
+    }
+
+    #[test]
+    fn parses_the_trusted_comm_field() {
+        let line = r#"{"__CURSOR":"c","__REALTIME_TIMESTAMP":"1","SYSLOG_IDENTIFIER":"sudo","_COMM":"logger","MESSAGE":"hi"}"#;
+        let record = parse_record(line).unwrap();
+        assert_eq!(record.syslog_identifier.as_deref(), Some("sudo"));
+        assert_eq!(record.comm.as_deref(), Some("logger"));
     }
 
     #[test]

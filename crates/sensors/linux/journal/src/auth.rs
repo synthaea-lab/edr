@@ -25,6 +25,19 @@ use schema::{AuthEvent, AuthKind, AuthOutcome, EventMeta, User};
 
 use crate::{JournalEvent, JournalRecord};
 
+/// Whether `record` was written by the program `program` (`"sudo"`/`"su"`), going
+/// by the trusted `_COMM` journald stamps from the sender's process rather than by
+/// `SYSLOG_IDENTIFIER`, which the logging client chooses (`logger -t sudo
+/// 'pam_unix(sudo:auth): authentication failure; ... user=root'` is a line any local
+/// user can write; its `_COMM` is `logger`). Without this check a local user could
+/// inject sudo/su failures to fill another account's history, or a success to join
+/// real failures (#838 review). A record with no `_COMM` is accepted: journald
+/// stamps it on every record that comes from a process, so only a fixture built
+/// by hand lacks it.
+fn emitted_by(record: &JournalRecord, program: &str) -> bool {
+    record.comm.as_deref().is_none_or(|comm| comm == program)
+}
+
 /// `record`/`event` come from the same [`crate::classify::classify`] call
 /// ([`crate::tail::ClassifiedJournal`] always yields them paired) — `record` for
 /// the reporting process's identity, `event` for what happened.
@@ -48,6 +61,9 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             target_user,
             ..
         } => {
+            if !emitted_by(record, "sudo") {
+                return None;
+            }
             let real_target = target_user.clone()?;
             // Default target (no `-u`) is root — plain privilege elevation.
             // Any other explicit target is the same "became someone else" signal
@@ -74,12 +90,17 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
         JournalEvent::PamSessionOpened {
             service,
             target_user,
-        } if service == "su" => (
-            AuthOutcome::Success,
-            AuthKind::ExplicitCredentials,
-            target_user.clone()?,
-            None,
-        ),
+        } if service == "su" => {
+            if !emitted_by(record, "su") {
+                return None;
+            }
+            (
+                AuthOutcome::Success,
+                AuthKind::ExplicitCredentials,
+                target_user.clone()?,
+                None,
+            )
+        }
         JournalEvent::PamSessionOpened {
             service,
             target_user,
@@ -91,19 +112,31 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
         ),
         // `classify` only emits this for the "sudo"/"su" services (sshd's own PAM
         // auth failure would double-count `SshFailed`), so no service guard is
-        // needed here. `target_user` here is `classify_pam`'s `" user="` field,
-        // which already is the right join key for both services without further
-        // changes: for `su` it is the real target (PAM checks the target's own
-        // password); for `sudo` it is the invoker (PAM checks the invoker's own
-        // password) — the same value the `SudoCommand` arm above now swaps in for
-        // its own `target_user`, so a sudo failure and the success after it key
-        // identically (#838).
-        JournalEvent::PamAuthFailure { target_user, .. } => (
-            AuthOutcome::Failure,
-            AuthKind::LogonFailure,
-            target_user.clone()?,
-            None,
-        ),
+        // needed here beyond the sender check. The account is `classify_pam`'s
+        // `" user="` field, which already is the right join key for both services:
+        // for `su` it is the real target (PAM checks the target's own password); for
+        // `sudo` it is the invoker (PAM checks the invoker's own password) — the
+        // same value the `SudoCommand` arm above swaps in for its own
+        // `target_user`, so a sudo failure and the success after it key identically
+        // (#838). For `sudo` a line without `user=` still names the invoker through
+        // `logname=` (the same account there), so it is not dropped; `su` has no
+        // such stand-in (`logname=` is who typed the password, not whose it was),
+        // so a `su` failure with no `user=` is skipped, not fabricated.
+        JournalEvent::PamAuthFailure {
+            service,
+            invoking_user,
+            target_user,
+        } => {
+            if !emitted_by(record, service) {
+                return None;
+            }
+            let account = if service == "sudo" {
+                target_user.clone().or_else(|| invoking_user.clone())
+            } else {
+                target_user.clone()
+            }?;
+            (AuthOutcome::Failure, AuthKind::LogonFailure, account, None)
+        }
         _ => return None,
     };
 
@@ -372,6 +405,93 @@ mod tests {
         let event = JournalEvent::SshAccepted {
             user: Some("alice".into()),
             source_addr: None,
+        };
+        assert!(to_auth_event(&record, &event).is_none());
+    }
+
+    // --- who actually wrote the line (`_COMM`, not the spoofable identifier) -----
+
+    #[test]
+    fn a_sudo_line_written_by_another_program_is_not_mapped() {
+        // `logger -t sudo '...'` sets `SYSLOG_IDENTIFIER=sudo` freely, but the
+        // trusted `_COMM` is `logger`: a local user must not be able to feed the
+        // sudo/su join with fabricated failures or successes (#838 review).
+        let spoofed = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_COMM", "logger"),
+            ("_PID", "100"),
+            ("_UID", "1001"),
+            ("_GID", "1001"),
+        ]);
+        let failure = JournalEvent::PamAuthFailure {
+            service: "sudo".into(),
+            invoking_user: Some("victim".into()),
+            target_user: Some("victim".into()),
+        };
+        let success = JournalEvent::SudoCommand {
+            invoking_user: Some("victim".into()),
+            target_user: Some("root".into()),
+            command: Some("/bin/id".into()),
+        };
+        let su_session = JournalEvent::PamSessionOpened {
+            service: "su".into(),
+            target_user: Some("root".into()),
+        };
+        assert!(to_auth_event(&spoofed, &failure).is_none());
+        assert!(to_auth_event(&spoofed, &success).is_none());
+        assert!(to_auth_event(&spoofed, &su_session).is_none());
+    }
+
+    #[test]
+    fn a_sudo_line_written_by_sudo_itself_is_mapped() {
+        let genuine = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_COMM", "sudo"),
+            ("_PID", "100"),
+            ("_UID", "0"),
+            ("_GID", "0"),
+        ]);
+        let success = JournalEvent::SudoCommand {
+            invoking_user: Some("lab".into()),
+            target_user: Some("root".into()),
+            command: Some("/bin/id".into()),
+        };
+        let auth = to_auth_event(&genuine, &success).expect("should map");
+        assert_eq!(auth.target_user, "lab");
+    }
+
+    #[test]
+    fn a_sudo_failure_without_user_falls_back_to_logname() {
+        let record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            ("_PID", "100"),
+            ("_UID", "0"),
+            ("_GID", "0"),
+        ]);
+        let event = JournalEvent::PamAuthFailure {
+            service: "sudo".into(),
+            invoking_user: Some("lab".into()),
+            target_user: None,
+        };
+        let auth = to_auth_event(&record, &event).expect("should map");
+        assert_eq!(auth.target_user, "lab");
+        assert_eq!(auth.outcome, AuthOutcome::Failure);
+    }
+
+    #[test]
+    fn a_su_failure_without_user_is_skipped_not_guessed() {
+        // For `su`, `logname=` is who typed the password, not whose account it was
+        // checked against, so it cannot stand in for the missing `user=`.
+        let record = record_with(&[
+            ("SYSLOG_IDENTIFIER", "su"),
+            ("_PID", "100"),
+            ("_UID", "0"),
+            ("_GID", "0"),
+        ]);
+        let event = JournalEvent::PamAuthFailure {
+            service: "su".into(),
+            invoking_user: Some("lab".into()),
+            target_user: None,
         };
         assert!(to_auth_event(&record, &event).is_none());
     }

@@ -25,6 +25,14 @@
 //! never share one bucket (#838 review). History is bounded by the caps below
 //! and the least-recently-seen `(service, account)` pair, never by time, for
 //! the same future-timestamp-pruning reason as [`crate::rdp`].
+//!
+//! `sudo` and `su` keep their histories in separate bounded maps: `su <name>`
+//! logs a failure for whatever name a local user types, so a loop over throwaway
+//! names can only displace other `su` history, never `sudo`'s. What it can still
+//! do to `su` history is a residual limit, not a fixed one: the rule cannot tell
+//! a throwaway name from a real account. The alert names what the key is for
+//! each service (`sudo invoker=`, `su target=`); `su` failures do not say who
+//! typed the wrong password (`logname=` is not part of the key).
 
 use std::collections::VecDeque;
 
@@ -66,13 +74,31 @@ struct Target {
 /// Per-`(service, account)` history that joins a privilege-escalation success
 /// to the authentication failures before it.
 pub(crate) struct SudoSuccessAfterFailures {
+    /// `sudo` history, one entry per invoker. `sudo` only authenticates an account
+    /// that exists, so a local user's own failures fill at most their own entry.
     targets: BoundedMap<(String, String), Target>,
+    /// `su` history, one entry per target. A map of its own: `su <name>` records a
+    /// failure for any name an unprivileged local user types, so a loop over 4096+
+    /// throwaway names can push other `su` history out of this map but never
+    /// `sudo`'s (#838 review). It cannot be closed for `su` itself: the rule has no
+    /// way to tell a throwaway name from a real account.
+    su_targets: BoundedMap<(String, String), Target>,
 }
 
 impl SudoSuccessAfterFailures {
     pub(crate) fn new() -> Self {
         Self {
             targets: BoundedMap::new(TARGETS_CAP),
+            su_targets: BoundedMap::new(TARGETS_CAP),
+        }
+    }
+
+    /// The history map `service` keeps its accounts in.
+    fn history(&mut self, service: &str) -> &mut BoundedMap<(String, String), Target> {
+        if service == "su" {
+            &mut self.su_targets
+        } else {
+            &mut self.targets
         }
     }
 
@@ -85,7 +111,7 @@ impl SudoSuccessAfterFailures {
         target_user: &str,
         timestamp_ns: u64,
     ) -> Vec<Alert> {
-        let target = self.targets.get_or_insert_with(
+        let target = self.history(service).get_or_insert_with(
             (service.to_string(), target_user.to_string()),
             Target::default,
         );
@@ -101,7 +127,7 @@ impl SudoSuccessAfterFailures {
         target_user: &str,
         timestamp_ns: u64,
     ) -> Vec<Alert> {
-        let target = self.targets.get_or_insert_with(
+        let target = self.history(service).get_or_insert_with(
             (service.to_string(), target_user.to_string()),
             Target::default,
         );
@@ -157,14 +183,22 @@ impl Target {
                 if self.alerted_windows.len() > ALERTED_WINDOWS_CAP {
                     self.alerted_windows.pop_front();
                 }
+                // What the account is differs per service (see the module doc): say
+                // which, so an analyst does not read a `sudo` invoker as the
+                // escalation target.
+                let account = if service == "su" {
+                    format!("su target={target_user}")
+                } else {
+                    format!("{service} invoker={target_user}")
+                };
                 alerts.push(Alert {
                     technique: "T1548.003",
                     severity: Severity::Medium,
                     message: format!(
-                        "account={target_user} ({service}): a local privilege escalation \
-                         succeeded after {count} failed authentications for that account \
-                         in {}s: guessed or sprayed credentials worked, or a shared \
-                         account under sustained attempts",
+                        "{account}: a local privilege escalation succeeded after {count} \
+                         failed authentications for that account in {}s: guessed or \
+                         sprayed credentials worked, or a shared account under sustained \
+                         attempts",
                         SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS / 1_000_000_000,
                     ),
                 });
@@ -297,6 +331,38 @@ mod tests {
             "sudo's own root-invoker success must not borrow su's root-target failures"
         );
         assert!(!state.on_success("su", "root", 10 * SECOND).is_empty());
+    }
+
+    #[test]
+    fn a_su_spray_of_throwaway_names_cannot_evict_sudo_history() {
+        // `su <name>` logs a failure for any name a local user types (#838
+        // review): more throwaway names than the map holds must not push a real
+        // `sudo` invoker's failures out before the matching success arrives.
+        let mut state = SudoSuccessAfterFailures::new();
+        for second in 0..EXPECTED_THRESHOLD as u64 {
+            state.on_failure("sudo", "root", second * SECOND);
+        }
+        for index in 0..(EXPECTED_TARGETS_CAP as u64 * 2) {
+            state.on_failure("su", &format!("spray{index}"), 5 * SECOND + index);
+        }
+        assert!(
+            !state.on_success("sudo", "root", 10 * SECOND).is_empty(),
+            "the su spray displaced sudo's history"
+        );
+        assert!(state.su_targets.len() <= EXPECTED_TARGETS_CAP);
+    }
+
+    #[test]
+    fn the_alert_says_what_the_account_is_for_each_service() {
+        let mut state = SudoSuccessAfterFailures::new();
+        for second in 0..EXPECTED_THRESHOLD as u64 {
+            state.on_failure("sudo", "alice", second * SECOND);
+            state.on_failure("su", "root", second * SECOND);
+        }
+        let sudo_alert = state.on_success("sudo", "alice", 10 * SECOND);
+        let su_alert = state.on_success("su", "root", 10 * SECOND);
+        assert!(sudo_alert[0].message.starts_with("sudo invoker=alice:"));
+        assert!(su_alert[0].message.starts_with("su target=root:"));
     }
 
     #[test]
