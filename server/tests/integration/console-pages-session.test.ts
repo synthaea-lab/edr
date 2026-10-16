@@ -82,6 +82,39 @@ describe("console pages read the session with the request's headers (real databa
     expect(html).toMatch(/lost telemetry in the last 10 min/i);
   });
 
+  it("shows the watchdog restarts, tamper events and parent-image evictions of a host on the ops page (#863)", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id, "agent-ops-self", { hostname: "selfprotect-host", lastSeen: new Date() });
+    await prisma.agentHealth.create({
+      data: {
+        agentId: agent.id,
+        tenantId: tenant.id,
+        beaconAt: new Date(),
+        receivedAt: new Date(),
+        agentVersion: "0.1.0",
+        spoolBytes: BigInt(0),
+        spoolDropped: BigInt(0),
+        enrichDropped: BigInt(0),
+        watchdogRestarts: BigInt(3),
+        tamperEvents: BigInt(5),
+        parentImageEvictedLive: BigInt(13),
+        parentImageEvictedDead: BigInt(209000),
+        sensors: [{ name: "linux-ebpf", pulse_count: 3, silent: false }],
+      },
+    });
+    activeOrganizationId = tenant.id;
+
+    const html = await render("ops/page");
+
+    expect(html).toContain("selfprotect-host");
+    expect(html).toMatch(/Watchdog restarts/);
+    expect(html).toMatch(/Tamper events/);
+    expect(html).toMatch(/Parent images evicted/);
+    expect(html).toMatch(/<td[^>]*>3<\/td>/);
+    expect(html).toMatch(/<td[^>]*>5<\/td>/);
+    expect(html).toContain("13 live, 209000 exited");
+  });
+
   it("tells a session without an organization to contact the administrator, on every page", async () => {
     activeOrganizationId = null;
     for (const [page, props] of [

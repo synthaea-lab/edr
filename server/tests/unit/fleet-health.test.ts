@@ -36,6 +36,26 @@ describe("parseHeartbeatBody", () => {
     expect([old?.rarity_applied, old?.rarity_withheld, old?.rarity_unapplied]).toEqual([0, 0, 0]);
   });
 
+  it("reads the watchdog, tamper and eviction counters, and counts them as zero for an agent that predates them (#863)", () => {
+    const withCounters = parseHeartbeatBody({
+      beacon: beacon({
+        watchdog_restarts: 3,
+        tamper_events: 5,
+        parent_image_evicted_live: 13,
+        parent_image_evicted_dead: 209000,
+      }),
+    });
+    expect([
+      withCounters?.watchdog_restarts,
+      withCounters?.tamper_events,
+      withCounters?.parent_image_evicted_live,
+      withCounters?.parent_image_evicted_dead,
+    ]).toEqual([3, 5, 13, 209000]);
+
+    const old = parseHeartbeatBody({ beacon: beacon() });
+    expect([old?.watchdog_restarts, old?.tamper_events, old?.parent_image_evicted_live, old?.parent_image_evicted_dead]).toEqual([0, 0, 0, 0]);
+  });
+
   it("returns null for a body with no usable beacon instead of throwing", () => {
     for (const body of [null, "x", 7, {}, { beacon: null }, { beacon: { timestamp_ns: 1 } }]) {
       expect(parseHeartbeatBody(body)).toBeNull();
@@ -50,6 +70,11 @@ describe("parseHeartbeatBody", () => {
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_applied: -1 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_withheld: 0.5 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_unapplied: "3" }) })).toBeNull();
+    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead"]) {
+      expect(parseHeartbeatBody({ beacon: beacon({ [field]: -1 }) }), `${field} -1`).toBeNull();
+      expect(parseHeartbeatBody({ beacon: beacon({ [field]: 0.5 }) }), `${field} 0.5`).toBeNull();
+      expect(parseHeartbeatBody({ beacon: beacon({ [field]: "3" }) }), `${field} "3"`).toBeNull();
+    }
     expect(parseHeartbeatBody({ beacon: beacon({ agent_version: "v".repeat(129) }) })).toBeNull();
   });
 });
