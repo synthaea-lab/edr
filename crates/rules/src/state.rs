@@ -109,16 +109,48 @@ impl PidFact {
     }
 }
 
-/// `known_policy_denials`' key: (mechanism, subject context, object context,
-/// object class, object path). Named so clippy's `type_complexity` lint doesn't
-/// flag the field declaration.
+/// `known_policy_denials`' key: (mechanism, subject context, object context, object
+/// class, detail, enforced). `detail` is the part that tells two denials of one
+/// mechanism apart beyond the contexts: the requested permission set for `SELinux`
+/// (normalised, #813), the file for AppLocker/WDAC (#796). `enforced` is part of the
+/// key for AppLocker/WDAC only (always `false` for `SELinux`): a file first seen in audit
+/// mode and later blocked is a new, Medium, shape. Named so clippy's `type_complexity`
+/// lint doesn't flag the field declaration.
 type PolicyDenialKey = (
     String,
     Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
+    bool,
 );
+
+/// The alert budgets POLICY-DENIAL-DRIFT keeps apart (#812, #796 review): `SELinux`
+/// denials, enforced AppLocker/WDAC blocks (Medium), and AppLocker/WDAC audit-mode
+/// denials (Low). A fresh audit-mode rollout logs every unlisted binary once, which
+/// must not use up the budget a real block, or an `SELinux` denial, needs.
+const POLICY_DENIAL_BUDGET_NAMES: [&str; 3] = ["selinux", "windows-enforced", "windows-audit"];
+
+/// Index into [`POLICY_DENIAL_BUDGET_NAMES`] of the budget `event` draws on.
+fn policy_denial_budget(event: &PolicyDenialEvent) -> usize {
+    if event.mechanism == POLICY_MECHANISM_SELINUX {
+        0
+    } else if event.enforced {
+        1
+    } else {
+        2
+    }
+}
+
+/// The permission set of an AVC denial in canonical form for the dedup key: whitespace-separated
+/// permissions, sorted and deduplicated, so `read write`, `write read` and `read  write` are one
+/// shape. The wire value (`PolicyDenialEvent::action`) stays as the kernel wrote it.
+fn normalized_permissions(action: &str) -> String {
+    let mut permissions: Vec<&str> = action.split_whitespace().collect();
+    permissions.sort_unstable();
+    permissions.dedup();
+    permissions.join(" ")
+}
 
 /// Sliding history needed by the correlation rules:
 /// - T1105 (Ingress Tool Transfer): a path recently written by `curl`/`wget` is
@@ -172,33 +204,50 @@ pub struct RuleState {
     /// listener space is a few dozen, not unbounded, but a hostile loop binding
     /// many ports must not grow this without limit either.
     known_listeners: BoundedMap<(IpAddr, u16), ()>,
-    /// (mechanism, subject context, object context, object class) → seen, for
-    /// POLICY-DENIAL-DRIFT (issue #774, T1562-adjacent). Same "first new shape
-    /// wins, the routine repeat doesn't" principle as `known_listeners` above:
-    /// a `SELinux`-Enforcing host denies constantly as part of normal
-    /// operation, so alerting on every `PolicyDenial` would be unusable — a
-    /// *new* (subject, object, class) triple appearing is the signal. No
+    /// [`PolicyDenialKey`] (mechanism, subject context, object context, object class,
+    /// detail, enforced) → seen, for POLICY-DENIAL-DRIFT (issue #774, T1562-adjacent).
+    /// Same "first new shape wins, the routine repeat doesn't" principle as
+    /// `known_listeners` above: a `SELinux`-Enforcing host denies constantly as part
+    /// of normal operation, so alerting on every `PolicyDenial` would be unusable — a
+    /// *new* denial shape appearing is the signal. Only shapes that alerted are
+    /// remembered: one shed by the alert cap is not. No
     /// startup-baseline seeding (unlike listeners, there's no enumerable
     /// "current state" of past denials to snapshot at agent start) — the
     /// first run is cold by design. LRU-bounded like every other stateful
     /// rule.
     ///
     /// The key is per mechanism ([`policy_denial_key`]). `SELinux`'s
-    /// `scontext`/`tcontext` give each denial a rich, domain-specific triple.
+    /// `scontext`/`tcontext` give each denial a rich, domain-specific triple, and it
+    /// includes the requested permission (`action`, #813, recovered by
+    /// `sensor-linux-audit`'s AVC parser): without it, a routine `getattr` denial on a
+    /// subject/object/class triple would silence a later, more interesting
+    /// `read`/`write`/`open` denial on that exact same triple. The set is normalised in
+    /// the key ([`normalized_permissions`]: sorted, deduplicated), so only a different
+    /// set is a new shape, not a different order.
+    ///
     /// AppLocker/WDAC denials carry no such contexts, so a key without the file
     /// would collapse to `object_class` alone (5 values for `AppLocker`, 2 for
     /// WDAC): the first blocked `.exe` would alert and every other one after it,
-    /// for the whole run, would not. Their key is the file instead (#796).
+    /// for the whole run, would not. Their key is the file instead, plus whether the
+    /// policy blocked it (#796).
     known_policy_denials: BoundedMap<PolicyDenialKey, ()>,
-    /// New-shape alerts `check_policy_denial_drift` has raised, against
+    /// New-shape alerts `check_policy_denial_drift` has raised in the current budget
+    /// window, per budget ([`POLICY_DENIAL_BUDGET_NAMES`]), each against
     /// [`POLICY_DENIAL_ALERT_CAP`] (#812): `known_policy_denials` bounds what the rule
     /// remembers, not what it alerts, so a flood of distinct shapes (varying the
     /// subject/object type faster than a real host ever would) could otherwise emit one
-    /// alert per shape, unbounded.
-    policy_denial_alerts: u64,
-    /// New shapes shed by [`POLICY_DENIAL_ALERT_CAP`] once it was reached — counted
-    /// instead of silent (#812).
-    policy_denial_alerts_shed: u64,
+    /// alert per shape, unbounded. Reset when a new shape arrives
+    /// [`crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS`] after `policy_denial_window_start_ns`.
+    policy_denial_alerts: [u64; 3],
+    /// Event time (`meta.timestamp_ns`) at which the current alert-budget window began;
+    /// 0 until the first new shape.
+    policy_denial_window_start_ns: u64,
+    /// New-shape events shed by [`POLICY_DENIAL_ALERT_CAP`] over the whole run, per budget
+    /// — counted instead of silent (#812). A shed shape is *not* remembered in
+    /// `known_policy_denials`, so it is still new when it comes back: it can alert in a
+    /// later budget window, and every event for it while the budget is spent counts
+    /// again (this counts events, not distinct shapes).
+    policy_denial_alerts_shed: [u64; 3],
     /// `known_policy_denials.evicted()` last reported, so each rise is logged once
     /// (#812): otherwise `known_policy_denials` evicting its oldest eighth at
     /// `COUNTER_CAP` (never a full clear — only the evicted entries can re-alert) and a
@@ -336,8 +385,9 @@ impl RuleState {
             scan_spread: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
             known_policy_denials: BoundedMap::new(COUNTER_CAP),
-            policy_denial_alerts: 0,
-            policy_denial_alerts_shed: 0,
+            policy_denial_alerts: [0; 3],
+            policy_denial_window_start_ns: 0,
+            policy_denial_alerts_shed: [0; 3],
             policy_denial_evictions_reported: 0,
             auth_failures: BoundedMap::new(COUNTER_CAP),
             rdp_success: RdpSuccessAfterFailures::new(),
@@ -1007,84 +1057,54 @@ impl RuleState {
     /// rather than on every denial, and [`policy_denial_key`] for what a shape is
     /// per mechanism.
     ///
-    /// `SELinux` only fires at Medium for [`PolicyDenialEvent::enforced`] either way
+    /// `SELinux` fires at Medium for [`PolicyDenialEvent::enforced`] either way
     /// (permissive logs the same fact a managed Enforcing host would act on).
     /// AppLocker/WDAC split it (#796): Medium when the policy blocked the action,
     /// Low in audit mode, where a fresh rollout logs every unlisted binary once
-    /// as routine. Any other mechanism has no key yet and never alerts.
+    /// as routine; `enforced` is part of their key, so a file first seen in audit
+    /// mode alerts again, at Medium, once the policy starts blocking it. Any other
+    /// mechanism has no key yet and never alerts.
     ///
     /// Inert while the eBPF sensor is selected (#780): `SELinux` AVC denials
     /// only reach the agent through the audit sensor, so silence here does not
     /// mean no denials happened.
     ///
-    /// The requested permission is not part of the key (#813): the audit
-    /// sensor does not parse it yet, so a routine `getattr` denial silences a
-    /// later, more interesting `read`/`write`/`open` on the same subject,
-    /// object and class.
-    ///
-    /// Capped at [`POLICY_DENIAL_ALERT_CAP`] distinct-shape alerts (#812): a flood of
-    /// shapes past the cap is counted (`policy_denial_alerts_shed`) rather than
-    /// alerted. `known_policy_denials` keeps deduplicating regardless — the cap bounds
-    /// alert volume, not the rule's memory of what it has already seen.
+    /// Capped at [`POLICY_DENIAL_ALERT_CAP`] new-shape alerts per budget (`SELinux`,
+    /// enforced Windows, audit-mode Windows: [`POLICY_DENIAL_BUDGET_NAMES`]) per
+    /// [`crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS`] (#812): a flood of shapes
+    /// past a cap is counted (`policy_denial_alerts_shed`) rather than alerted, and a
+    /// shed shape is not recorded in `known_policy_denials`, so it is still new — it
+    /// can alert once the budget refills in a later window instead of being silenced
+    /// for the rest of the run. The budgets are separate so an audit-mode rollout cannot
+    /// use up the one a real block needs. `known_policy_denials` keeps deduplicating the
+    /// shapes that did alert.
     fn check_policy_denial_drift(&mut self, event: &PolicyDenialEvent) -> Option<Alert> {
         let key = policy_denial_key(event)?;
-        let seen_before = self.known_policy_denials.get(&key).is_some();
-        if !seen_before {
-            self.known_policy_denials.insert(key, ());
-        }
-        self.report_policy_denial_evictions();
-        if seen_before {
+        if self.known_policy_denials.get(&key).is_some() {
             return None;
         }
-        if self.policy_denial_alerts >= POLICY_DENIAL_ALERT_CAP {
-            if self.policy_denial_alerts_shed == 0 {
+        let now = event.meta.timestamp_ns;
+        let window_age = now.saturating_sub(self.policy_denial_window_start_ns);
+        if window_age >= crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS {
+            self.policy_denial_window_start_ns = now;
+            self.policy_denial_alerts = [0; 3];
+        }
+        let budget = policy_denial_budget(event);
+        if self.policy_denial_alerts[budget] >= POLICY_DENIAL_ALERT_CAP {
+            if self.policy_denial_alerts_shed[budget] == 0 {
                 tracing::warn!(
                     cap = POLICY_DENIAL_ALERT_CAP,
-                    "policy-denial-drift: alert cap reached, further new shapes are counted but not alerted"
+                    budget = POLICY_DENIAL_BUDGET_NAMES[budget],
+                    "policy-denial-drift: alert cap reached, further new shapes are counted but not alerted until the budget refills"
                 );
             }
-            self.policy_denial_alerts_shed += 1;
+            self.policy_denial_alerts_shed[budget] += 1;
             return None;
         }
-        self.policy_denial_alerts += 1;
-        if event.mechanism == POLICY_MECHANISM_SELINUX {
-            return Some(Alert {
-                technique: "T1562",
-                severity: Severity::Medium,
-                message: format!(
-                    "comm={} mechanism={} subject={} object={} class={} path={} enforced={} — new denial shape, not seen this run",
-                    event.meta.comm,
-                    event.mechanism,
-                    event.subject_context.as_deref().unwrap_or("-"),
-                    event.object_context.as_deref().unwrap_or("-"),
-                    event.object_class.as_deref().unwrap_or("-"),
-                    event.object_path.as_deref().unwrap_or("-"),
-                    event.enforced,
-                ),
-            });
-        }
-        Some(Alert {
-            technique: "T1562",
-            severity: if event.enforced {
-                Severity::Medium
-            } else {
-                Severity::Low
-            },
-            message: format!(
-                "pid={} mechanism={} action={} path={} class={} process={} — {}, first time this run",
-                event.meta.pid,
-                event.mechanism,
-                event.action.as_deref().unwrap_or("-"),
-                event.object_path.as_deref().unwrap_or("-"),
-                event.object_class.as_deref().unwrap_or("-"),
-                event.subject_context.as_deref().unwrap_or("-"),
-                if event.enforced {
-                    "blocked by policy"
-                } else {
-                    "would be blocked (audit mode)"
-                },
-            ),
-        })
+        self.known_policy_denials.insert(key, ());
+        self.report_policy_denial_evictions();
+        self.policy_denial_alerts[budget] += 1;
+        Some(policy_denial_alert(event))
     }
 
     /// Logs once per rise in `known_policy_denials`'s eviction count (#812): otherwise
@@ -1100,7 +1120,7 @@ impl RuleState {
         if evicted > self.policy_denial_evictions_reported {
             tracing::warn!(
                 evicted,
-                alerts_shed = self.policy_denial_alerts_shed,
+                alerts_shed = self.policy_denial_alerts_shed.iter().sum::<u64>(),
                 "policy-denial-drift: tracked denial shapes shed (oldest first)"
             );
             self.policy_denial_evictions_reported = evicted;
@@ -1966,39 +1986,101 @@ fn is_all_digits(s: &str) -> bool {
 /// What makes two denials "the same shape" for POLICY-DENIAL-DRIFT, per
 /// mechanism; `None` for a mechanism without one (no alert).
 ///
-/// - `SELinux`: (scontext, tcontext, tclass), as #774 defined it.
-/// - `AppLocker`: (rule collection, file). The file is the only thing that tells
-///   two denials apart: the event has no subject or object context.
-/// - WDAC: (loading process, file, signing scenario).
+/// - `SELinux`: (scontext, tcontext, tclass, permission set), as #774 and #813 defined
+///   it; the contexts are cut to `user:role:type` and the permissions sorted.
+/// - `AppLocker`: (rule collection, file, enforced). The file is the only thing that
+///   tells two denials apart: the event has no subject or object context.
+/// - WDAC: (loading process, file, signing scenario, enforced).
 ///
 /// Windows paths are lowercased: they are case-insensitive, and `AppLocker`
 /// reports the same file as `C:\Users\x\EVIL.EXE` from `FullFilePath` and
-/// `C:\USERS\X\EVIL.EXE` from an expanded `FilePath` (#796).
+/// `C:\USERS\X\EVIL.EXE` from an expanded `FilePath` (#796). An absent path and an
+/// empty one are the same value: both sensors always report the file, so such an event
+/// is degenerate, and it shares one shape per (process, class) rather than alerting on
+/// every repeat.
 fn policy_denial_key(event: &PolicyDenialEvent) -> Option<PolicyDenialKey> {
-    let lower = |text: &Option<String>| text.as_deref().map(str::to_lowercase);
+    let file = || {
+        event
+            .object_path
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .map(str::to_lowercase)
+    };
     match event.mechanism.as_str() {
         POLICY_MECHANISM_SELINUX => Some((
             event.mechanism.clone(),
             RuleState::selinux_type_triple(event.subject_context.as_deref()),
             RuleState::selinux_type_triple(event.object_context.as_deref()),
             event.object_class.clone(),
-            None,
+            event.action.as_deref().map(normalized_permissions),
+            false,
         )),
         POLICY_MECHANISM_APPLOCKER => Some((
             event.mechanism.clone(),
             None,
             None,
             event.object_class.clone(),
-            lower(&event.object_path),
+            file(),
+            event.enforced,
         )),
         POLICY_MECHANISM_WDAC => Some((
             event.mechanism.clone(),
-            lower(&event.subject_context),
+            event.subject_context.as_deref().map(str::to_lowercase),
             None,
             event.object_class.clone(),
-            lower(&event.object_path),
+            file(),
+            event.enforced,
         )),
         _ => None,
+    }
+}
+
+/// The alert for a new denial shape: `SELinux` at Medium, AppLocker/WDAC at Medium when
+/// the policy blocked the action and Low in audit mode (#796).
+fn policy_denial_alert(event: &PolicyDenialEvent) -> Alert {
+    if event.mechanism == POLICY_MECHANISM_SELINUX {
+        return Alert {
+            technique: "T1562",
+            severity: Severity::Medium,
+            message: format!(
+                "comm={} mechanism={} subject={} object={} class={} action={} path={} enforced={} — new denial shape, not seen this run",
+                event.meta.comm,
+                event.mechanism,
+                event.subject_context.as_deref().unwrap_or("-"),
+                event.object_context.as_deref().unwrap_or("-"),
+                event.object_class.as_deref().unwrap_or("-"),
+                event.action.as_deref().unwrap_or("-"),
+                event.object_path.as_deref().unwrap_or("-"),
+                event.enforced,
+            ),
+        };
+    }
+    let sid = match &event.meta.user {
+        User::Windows { sid, .. } => sid.as_str(),
+        User::Unix { .. } | User::Unknown => "-",
+    };
+    Alert {
+        technique: "T1562",
+        severity: if event.enforced {
+            Severity::Medium
+        } else {
+            Severity::Low
+        },
+        message: format!(
+            "comm={} sid={} mechanism={} action={} path={} class={} process={} — {}, first time this run",
+            event.meta.comm,
+            sid,
+            event.mechanism,
+            event.action.as_deref().unwrap_or("-"),
+            event.object_path.as_deref().unwrap_or("-"),
+            event.object_class.as_deref().unwrap_or("-"),
+            event.subject_context.as_deref().unwrap_or("-"),
+            if event.enforced {
+                "blocked by policy"
+            } else {
+                "would be blocked (audit mode)"
+            },
+        ),
     }
 }
 
