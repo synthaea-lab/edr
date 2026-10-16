@@ -510,6 +510,43 @@ mod tests {
     }
 
     #[test]
+    fn classify_wire_avc_record_recovers_the_requested_permission_set() {
+        // Same shape as `classify_avc_record`, but through the real wire parser
+        // (#813 review): the hand-built `AuditRecord` above assumes `parse_fields`
+        // folds the `avc:  denied  { read write } for  pid` preamble into one
+        // corrupted key, which is exactly what `avc_action`'s fix depends on.
+        // This pins that assumption against the parser itself, not against a
+        // test author's mental model of it.
+        let event = classify_wire(
+            AUDIT_AVC,
+            r#"avc:  denied  { read write } for  pid=1234 comm="httpd" name="id_rsa" scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:user_home_t:s0 tclass=file permissive=0"#,
+        );
+
+        let AuditEvent::PolicyDenial {
+            comm,
+            scontext,
+            tcontext,
+            tclass,
+            action,
+            permissive,
+            object_path,
+        } = event
+        else {
+            panic!("expected PolicyDenial event");
+        };
+        assert_eq!(comm.as_deref(), Some("httpd"));
+        assert_eq!(scontext.as_deref(), Some("system_u:system_r:httpd_t:s0"));
+        assert_eq!(
+            tcontext.as_deref(),
+            Some("system_u:object_r:user_home_t:s0")
+        );
+        assert_eq!(tclass.as_deref(), Some("file"));
+        assert_eq!(action.as_deref(), Some("read write"));
+        assert!(!permissive);
+        assert_eq!(object_path.as_deref(), Some("id_rsa"));
+    }
+
+    #[test]
     fn classify_avc_prefers_path_over_name() {
         // `path=` (a fully resolved path) is rarer than `name=` (often a bare
         // filename) but more useful when present — issue #427.

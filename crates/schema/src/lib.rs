@@ -1869,13 +1869,12 @@ pub const POLICY_MECHANISM_WDAC: &str = "wdac";
 /// [`AuthKind`] stays coarse rather than growing a variant per OS event ID.
 ///
 /// First emitted by `sensor-linux-audit` from `SELinux` AVC records
-/// (`type=AVC`). `action` is `None` for now: the kernel's AVC message body
-/// (`avc: denied { read } for pid=...`) is text, not `key=value`, before the
-/// first real field, so the shared audit parser's byte scan doesn't yet
-/// recover the requested permission set — see
-/// `sensor_linux_audit::classify::AuditEvent::PolicyDenial`'s doc. Tracked
-/// separately; this event ships without it rather than block the schema on
-/// that parser fix.
+/// (`type=AVC`). The kernel's AVC message body (`avc: denied { read } for
+/// pid=...`) is text, not `key=value`, before the first real field; the
+/// shared audit parser's byte scan folds that preamble into its first
+/// `key=value` pair and recovers the requested permission set from it (#813)
+/// — see `sensor_linux_audit::classify::AuditEvent::PolicyDenial`'s doc.
+/// `action` is still `None` for an AVC variant the parser doesn't recognize.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDenialEvent {
     pub meta: EventMeta,

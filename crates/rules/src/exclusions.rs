@@ -424,7 +424,12 @@ pub(crate) const BROWSERS: &[&str] = &[
 /// Distinct-shape alerts POLICY-DENIAL-DRIFT raises before it stops (#812):
 /// `known_policy_denials` bounds the rule's memory of what it has seen, not its alert
 /// volume, so a flood of distinct shapes (varying the subject/object type faster than a
-/// real host ever would) could otherwise emit one alert per shape, unbounded. Generous:
-/// a real host has at most a few hundred distinct (type, type, class) triples over its
-/// lifetime; anything past this is a flood, not more coverage.
-pub(crate) const POLICY_DENIAL_ALERT_CAP: u64 = 512;
+/// real host ever would) could otherwise emit one alert per shape, unbounded. The key is
+/// (mechanism, subject context, object context, object class, action); since #813 added
+/// the requested permission set to it, one (type, type, class) triple now produces one
+/// shape per permission set the kernel denies for it, not one shape overall — a real
+/// `SELinux`-enforcing host retries with a few different access patterns per triple (a
+/// workload hitting `read`, then `open`, then `execute` on the same object class as it
+/// retries). Sized for a few hundred distinct triples times a handful of permission sets
+/// each; anything past this is a flood, not more coverage.
+pub(crate) const POLICY_DENIAL_ALERT_CAP: u64 = 2048;
