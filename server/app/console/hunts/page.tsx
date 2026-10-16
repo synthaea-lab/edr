@@ -52,20 +52,26 @@ export default async function HuntsPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">Hunts</h2>
-        <p className="mt-1 text-sm text-gray-600">
-          Saved searches over the detection store, run by hand or on a schedule. A run counts the
-          detections that match in its window, and how many of them arrived since the previous run.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Hunts</h2>
+          <p className="mt-1 text-sm text-gray-600">
+            Saved searches over the detection store, run by hand or on a schedule. A run counts the
+            detections that match in its window, and how many of them arrived since the previous run.
+          </p>
+        </div>
+        <a
+          href="/console/hunts/new"
+          className="shrink-0 px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+        >
+          New hunt
+        </a>
       </div>
 
       {hunts.length === 0 ? (
         <div className="rounded-lg bg-gray-50 p-8 text-center">
           <p className="text-gray-600">No hunts yet</p>
-          <p className="mt-1 text-sm text-gray-500">
-            Hunts are created through the API (<code>POST /api/hunts</code>) for now.
-          </p>
+          <p className="mt-1 text-sm text-gray-500">Use “New hunt” to save your first search.</p>
         </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
