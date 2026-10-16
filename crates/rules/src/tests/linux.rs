@@ -1169,6 +1169,48 @@ fn a_different_requested_permission_on_the_same_triple_is_a_new_shape() {
 }
 
 #[test]
+fn the_alert_message_names_the_requested_permission() {
+    // #813 recovered `action` into the key so a getattr and a later read/write/open
+    // are told apart (the test above); the message itself must also say which
+    // permission was denied, not just dedup on it silently (review of #872).
+    let mut state = RuleState::new();
+    let alerts = state.on_policy_denial(&policy_denial_event_with_action(
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        Some("read write"),
+    ));
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        alerts[0].message.contains("action=read write"),
+        "message does not name the requested permission: {}",
+        alerts[0].message
+    );
+}
+
+#[test]
+fn the_alert_message_says_dash_for_a_denial_with_no_recovered_action() {
+    // The AppLocker/WDAC side and an AVC variant the parser doesn't recognize both
+    // leave `action: None` (`policy_denial_event_full`'s default) — the message's
+    // own `-` placeholder for "no permission recovered" must still show up, not an
+    // empty field or a panic.
+    let mut state = RuleState::new();
+    let alerts = state.on_policy_denial(&policy_denial_event_full(
+        "selinux",
+        Some("httpd_t"),
+        Some("shadow_t"),
+        Some("file"),
+        true,
+    ));
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        alerts[0].message.contains("action=-"),
+        "message does not fall back to '-' for a denial with no recovered action: {}",
+        alerts[0].message
+    );
+}
+
+#[test]
 fn a_repeated_denial_with_the_same_permission_is_still_the_same_shape() {
     // The dedup itself must still work once `action` joins the key: the exact same
     // denial seen twice is one alert, not two.
@@ -1375,7 +1417,7 @@ fn policy_denial_alert_cap_reached_is_logged_exactly_once() {
 
     tracing::subscriber::with_default(subscriber, || {
         let mut state = RuleState::new();
-        // Well past POLICY_DENIAL_ALERT_CAP (512): enough further shapes that a
+        // Well past POLICY_DENIAL_ALERT_CAP (2048): enough further shapes that a
         // once-per-shed bug would produce many lines, not just a second one.
         for i in 0..POLICY_DENIAL_ALERT_CAP * 3 {
             let subject = format!("unconfined_u:unconfined_r:cap_{i}_t:s0");
