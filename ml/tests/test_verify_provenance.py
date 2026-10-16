@@ -75,7 +75,7 @@ def _make_model_dir_with_record(
 
 def _write_scenario_yaml(scenarios_root: Path, name: str, contents: str) -> str:
     scenarios_root.mkdir(parents=True, exist_ok=True)
-    (scenarios_root / f"{name}.yaml").write_text(contents, encoding="utf-8")
+    (scenarios_root / f"{name}.yaml").write_bytes(contents.encode("utf-8"))
     return hashlib.sha256(contents.encode("utf-8")).hexdigest()
 
 
