@@ -25,7 +25,6 @@ from synthaea_ml.data.aggregate_correlation import flatten_wire_event
 from synthaea_ml.data.canonical import ml_cmdline_from_record
 from synthaea_ml.evaluation.mutations.base import Mutator
 from synthaea_ml.evaluation.mutations.cmdline import ALL_T0_MUTATORS
-from synthaea_ml.evaluation.mutations.lineage import ALL_LINEAGE_MUTATORS
 from synthaea_ml.evaluation.mutations.prng import LCG
 from synthaea_ml.evaluation.scenario_replay import _sha256_file, load_expected_detections
 from synthaea_ml.features import correlation, t1
@@ -57,22 +56,22 @@ T1_FEATURE_COUNT = t1.FEATURE_COUNT
 
 
 def _t1_features(record: dict[str, Any]) -> list[float]:
-    """The 23-feature T1 vector for one exec record (see `synthaea_ml.features.t1`)."""
+    """The 17-feature T1 vector for one exec record (see `synthaea_ml.features.t1`)."""
     return t1.extract_features(record)
 
 
 def _score_record(model: Any, record: dict[str, Any], tier: str) -> float:
     """Anomaly score of one record at `tier` (negative = more anomalous).
 
-    T0 scores the command line alone; T1 also scores correlation context and lineage,
-    which is what lets the lineage mutators move the score at all (#617).
+    T0 scores the command line alone; T1 also scores the correlation context. The lineage
+    is not in the T1 vector (ADR-0034), so no lineage mutator runs against it.
     """
     if tier == "T1":
         expected = getattr(model, "n_features_in_", T1_FEATURE_COUNT)
         if expected != T1_FEATURE_COUNT:
             raise ValueError(
                 f"T1 robustness needs a model trained on {T1_FEATURE_COUNT} features "
-                f"(cmdline + correlation + lineage); this model expects {expected}"
+                f"(cmdline + correlation); this model expects {expected}"
             )
         return float(model.decision_function([_t1_features(record)])[0])
     return _score_cmdline(model, ml_cmdline_from_record(record), 0.0)
@@ -93,9 +92,10 @@ def _select_mutators_for_tier(tier: str) -> list[Mutator]:
     if tier == "T0":
         return ALL_T0_MUTATORS
     if tier == "T1":
-        # The command-line mutators still apply (the cmdline block is part of the T1
-        # vector); the lineage mutators are what T1 adds.
-        return [*ALL_T0_MUTATORS, *ALL_LINEAGE_MUTATORS]
+        # The command-line mutators apply (the cmdline block is part of the T1 vector). The
+        # lineage mutators do not: the parent is not scored by the model (ADR-0034), so an
+        # escape rate over them would be a flattering zero.
+        return ALL_T0_MUTATORS
     if tier == "T2":
         raise NotImplementedError("T2 mutators not yet implemented")
     raise ValueError(f"invalid tier: {tier}")

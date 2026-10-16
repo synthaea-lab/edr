@@ -1,9 +1,11 @@
 # lab/ml-capture: the real capture behind the T1 retrain (#617)
 
-The T1 behavior model scores one process on its command line (9 features), its correlation
-context (8) and its parents (6). #617 asks whether the 23 features detect more than the same
-vector without the parents, at the same false-positive budget. That can only be answered from a
-**real** capture, with these constraints:
+The T1 behavior model scores one process on its command line (9 features) and its correlation
+context (8). #617 asked whether adding the parents (6 more features) detects more at the same
+false-positive budget; the measurement said no in aggregate, so the shipped vector has 17
+features and the parent is judged by rules (ADR-0034). This directory holds the capture that
+measurement came from, and what to re-run it with. It can only be answered from a **real**
+capture, with these constraints:
 
 - the benign part must **vary in its lineage**. An Isolation Forest never splits on a feature
   that is constant in training, so a benign capture whose processes all hang under one shell
@@ -72,7 +74,8 @@ All commands run on the VM as root unless noted; the agent is built from `main`
    ```
 
    (Several benign captures can be passed to `--dataset`; give each its manifest.)
-4. **Train** the shipped model, with the T1 robustness card on the malicious capture:
+4. **Train** the shipped 17-feature model, with the T1 robustness card on the malicious capture
+   (command-line mutators only: the parent is not scored, ADR-0034):
 
    ```
    python -m synthaea_ml.training.train_behavior \
@@ -85,7 +88,7 @@ All commands run on the VM as root unless noted; the agent is built from `main`
    ```
 
    `train_behavior.py` refuses fewer than 20 distinct benign vectors: capture longer.
-5. **Measure the gain** (what #617 is for):
+5. **Re-measure the lineage** (what justified ADR-0034; re-run it before changing that decision):
 
    ```
    python -m synthaea_ml.evaluation.t1_lineage_gain \
@@ -95,7 +98,8 @@ All commands run on the VM as root unless noted; the agent is built from `main`
        --output ml/registry/behavior-iforest-linux/0.1.0/t1_lineage_gain.json
    ```
 
-   It fits the 17-feature and the 23-feature model on 20 random splits of the distinct benign
+   It builds its own 23-column vector (the T1 vector plus the lineage block) and fits the 17-feature
+   and the 23-feature model on 20 random splits of the distinct benign
    vectors (same hyperparameters, same FP budget as the trainer) and reports detection rate,
    false-positive rate on a held-out benign part and ROC AUC, with the paired per-seed gain
    and the number of splits where the lineage is not worse.

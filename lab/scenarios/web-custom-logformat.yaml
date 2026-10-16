@@ -17,3 +17,8 @@ notes: >
   Validated 2026-10-07 on Debian 13 (6.12.107), Apache 2.4: `LOG-SOURCE log source
   /var/log/apache2/custom-format.log (AccessCombined): 21 of 21 lines in the last minute do not
   match the declared kind`.
+  Validated 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68: `LOG-SOURCE ... 22 of 22 lines in the last minute
+  do not match the declared kind`. SELinux does not let httpd listen on 8081 (not in
+  `http_port_t`; `Listen 8081` fails with `make_sock: could not bind`), so use a port the policy
+  allows, such as 8008, and pass it: `web-custom-logformat.sh http://127.0.0.1:8008`. The log goes
+  to /var/log/httpd/custom-format.log.

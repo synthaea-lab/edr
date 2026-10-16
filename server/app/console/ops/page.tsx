@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { loadFleet, type FleetAgent } from "@/lib/fleet";
 import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
 import type { FleetStatus } from "@/lib/fleet-health";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,7 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
 };
 
 export default async function FleetHealthPage() {
-  const session = await auth.api.getSession();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/login");
 
   const tenantId = session.session.activeOrganizationId;
@@ -61,9 +62,14 @@ export default async function FleetHealthPage() {
                 <th className="px-4 py-2">Ring</th>
                 <th className="px-4 py-2">Last heartbeat</th>
                 <th className="px-4 py-2">Silent sensors</th>
+                <th className="px-4 py-2">Telemetry loss</th>
                 <th className="px-4 py-2 text-right">Spool dropped</th>
                 <th className="px-4 py-2 text-right">Enrich dropped</th>
                 <th className="px-4 py-2 text-right">Spool backlog</th>
+                <th className="px-4 py-2">Rarity evidence</th>
+                <th className="px-4 py-2 text-right">Watchdog restarts</th>
+                <th className="px-4 py-2 text-right">Tamper events</th>
+                <th className="px-4 py-2">Parent images evicted</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -93,10 +99,29 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
       <td className="px-4 py-2 text-gray-700">
         {agent.status === "silent" || !agent.health ? "—" : silentSensors.join(", ") || "none"}
       </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.status === "silent" || !agent.health
+          ? "—"
+          : agent.health.recentLoss
+            ? "Lost telemetry in the last 10 min"
+            : "none recent"}
+      </td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.spoolDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.enrichDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">
         {agent.health ? `${agent.health.spoolBytes} B` : "—"}
+      </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.health
+          ? `${agent.health.rarityApplied} applied, ${agent.health.rarityWithheld} withheld, ${agent.health.rarityUnapplied} lost`
+          : "—"}
+      </td>
+      <td className="px-4 py-2 text-right tabular-nums">{agent.health?.watchdogRestarts ?? "—"}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{agent.health?.tamperEvents ?? "—"}</td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.health
+          ? `${agent.health.parentImageEvictedLive} live, ${agent.health.parentImageEvictedDead} exited`
+          : "—"}
       </td>
     </tr>
   );
