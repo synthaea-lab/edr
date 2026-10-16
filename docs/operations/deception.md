@@ -94,6 +94,17 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   its four files) and raised no detection **with and without** `allow_exe`: it reads directory
   entries and does not open the files, so there was no touch to allow. The list is for tools that
   open the files (backup agents, content indexers); this run did not exercise it.
+- **A touch can wait up to half a second for the process's `exec`.** The sensor stamps an `exec`
+  before the open that follows it, but the events reach the agent merged, and the open of a
+  short-lived process (a `tar` started by cron, `bash -c "tar ..."`) can arrive first, after
+  which `/proc` has nothing to say. With an allow list, a touch whose process is not allowed by
+  what the agent knows and whose `/proc` entry names no executable is held for up to 500 ms of
+  event time: an `exec` of an allowed image (the last of several: `bash`, then `tar`) drops it,
+  anything else raises it when the time is up. A process `/proc` shows running another image is
+  raised at once, and so is every touch when `allow_exe` is empty. At most 256 touches are held;
+  beyond that they are raised at once. The ransomware reflex sees such a touch up to 500 ms
+  later. Measured 2026-10-16 on the Fedora VM: a `tar` started by a real `crond` raised 12 alerts
+  in 3 processes before this, none after, with `allow_exe = ["/usr/bin/tar"]`.
 - **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
   `env`, ...): allowing one allows every script it runs.
 - **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be

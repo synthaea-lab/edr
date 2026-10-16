@@ -237,6 +237,13 @@ impl CanaryAllow {
         (self.resolve)(pid).is_some_and(|exe| self.exes.contains(&exe))
     }
 
+    /// Whether `/proc` names an executable for `pid`: false for a process that already exited, a
+    /// container's or another user's the agent may not read. Lets the sink tell "not allowed"
+    /// from "nothing known yet".
+    pub(crate) fn proc_names_an_exe(&self, pid: u32) -> bool {
+        (self.resolve)(pid).is_some()
+    }
+
     /// An absolute image equal to an entry, resolved or as written. A relative exec
     /// (`./updatedb`) names nothing and never matches.
     fn matches_image(&self, image: &str) -> bool {
