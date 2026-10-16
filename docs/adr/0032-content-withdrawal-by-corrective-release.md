@@ -63,10 +63,11 @@ carries the earlier content.
 
 - A corrective release over a modified path is a two-step operation (restore the bytes, then
   publish); the tool says which paths and the server refuses a publish that skips it.
-- Known and not changed here: the release and rollback routes check a session and a tenant but
-  not an administrator role although their docstrings say so (it predates this ADR and matters
-  more now); and after an agent was pointed at another ring the "stays on release N" message can
-  be wrong, because the agent's applied-entries state is one map for all rings (#666).
+- Known and not changed here: after an agent was pointed at another ring the "stays on release N"
+  message can be wrong, because the agent's applied-entries state is one map for all rings (#666).
+  (The release, rollback and halt routes checking a session and a tenant but not an administrator
+  role, noted here as predating this ADR, is fixed by #803/#831: all three now require an `owner`
+  or `admin` member of the tenant.)
 - No new trust primitive, no change to what an attacker who can replay old manifests can do, and
   no new thing to verify, rotate or revoke.
 - Withdrawing content takes a signing step. With the custody of the production keys still open
