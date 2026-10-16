@@ -1,12 +1,15 @@
 title: Remote service created with a command-shell binary path
 description: >
-  Detects sc.exe creating a service on another host (a `\` argument, normally the
-  `\host` target) whose binary path invokes cmd, PowerShell or %COMSPEC%, including
-  a quoted full sc.exe path. The `\` test is positional-free, so a local create whose
-  binary path itself contains a UNC path also matches. The local form of the same
-  persistence is covered by `service_created_with_shell_binpath`, so a remote create
-  raises both. The rule observes submitted commands, not whether the service starts
-  or execution succeeds. Other shell launchers are outside this rule.
+  Detects sc.exe creating a service on another host (a UNC `\\host` argument) whose
+  binary path invokes cmd, PowerShell or %COMSPEC%, including a quoted full sc.exe
+  path. The UNC test is the two-character string `\\` anywhere in the command line, not
+  an argument position, so a local create whose binary path itself contains a UNC path
+  (`\\share\x.cmd`) also matches; a local create with a drive path (`C:\x.cmd`) has a
+  single backslash and does not. The local form of the same persistence is covered by
+  `service_created_with_shell_binpath`, so a remote create raises both. Covered launchers:
+  `cmd` with /c or /k (with or without `.exe`), `powershell.exe`, `pwsh.exe` and %COMSPEC%.
+  The rule observes submitted commands, not whether the service starts or execution
+  succeeds. Other shell launchers are outside this rule.
 tags:
   - attack.persistence
   - attack.lateral_movement
@@ -26,6 +29,9 @@ detection:
     CommandLine|contains:
       - 'cmd.exe /c'
       - 'cmd.exe /k'
+      - 'cmd /c'
+      - 'cmd /k'
       - 'powershell.exe'
+      - 'pwsh.exe'
       - '%comspec%'
   condition: selection
