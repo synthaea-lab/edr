@@ -111,8 +111,9 @@ the agent holds the port" becomes "unload while the agent holds the port
 ## Wire format
 
 One message per record, all integers little-endian, packed, versioned by the
-existing connection-context protocol version (2c bumps it to **2**; a v1
-client is refused at connect, never fed a format it can't read).
+existing connection-context protocol version, now **3**: 2 was the first 2c layout, and 3
+added the fourth counter after the low-resources lab run of #857. A client at another
+version is refused at connect, never fed a format it can't read. The header is **72 bytes**.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -125,12 +126,15 @@ client is refused at connect, never fed a format it can't read).
 | `dropped_send_failed` | u64 | cumulative, since load |
 | `not_connected` | u64 | cumulative, since load |
 | `old_path_len`, `new_path_len` | u16 ×2 | in UTF-16 code units; `new_path_len = 0` for a delete |
-| paths | UTF-16 | `old_path` then `new_path`, not NUL-terminated |
+| `dropped_capture_failed` | u64 | cumulative, since load: an operation of a reported kind that succeeded but whose names or record could not be obtained (v3, byte 64) |
+| paths | UTF-16 | `old_path` then `new_path`, not NUL-terminated, from byte 72 |
 
 Carrying the counters in **every** message means the agent always has the
 current loss figures without a second request path (there is still no
 `MessageNotify`: user mode never sends to the driver). A gap in `seq` plus a
-counter increase tells the agent exactly how many events it lost and why.
+counter increase tells the agent exactly how many events it lost and why. A record is
+numbered when the sender takes it off the queue, so a failed send shows both as a gap and in
+`dropped_send_failed`; the agent counts it once (`ChannelStats::total_lost`).
 
 **Idle heartbeat:** when the queue has been empty for 5 s, the sender emits a
 `kind = 0` message (header only). It feeds the agent's silence monitor, so a
