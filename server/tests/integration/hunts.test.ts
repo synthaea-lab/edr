@@ -242,6 +242,66 @@ describe("saved hunts (real database)", () => {
     expect((await runHuntRoute(req(`/api/hunts/${theirs.id}/run`, other.id, "POST"), ctx(theirs.id))).status).toBe(200);
   });
 
+  it("bounds parallel manual runs too: simultaneous requests start exactly the allowance and 429 the rest", async () => {
+    // The limit used to count finished rows, and a run's row was written when it ended, so
+    // N requests sent together all saw the count before any finished and all ran.
+    const tenant = await createTestTenant();
+    const hunt = await create(tenant.id);
+    const parallel = MAX_RUNS_PER_TENANT_PER_MINUTE + 10;
+
+    const responses = await Promise.all(
+      Array.from({ length: parallel }, () =>
+        runHuntRoute(req(`/api/hunts/${hunt.id}/run`, tenant.id, "POST"), ctx(hunt.id))
+      )
+    );
+    const statuses = responses.map((r) => r.status);
+
+    expect(statuses.filter((s) => s === 200)).toHaveLength(MAX_RUNS_PER_TENANT_PER_MINUTE);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(10);
+    expect(await prisma.huntRun.count({ where: { tenantId: tenant.id } })).toBe(MAX_RUNS_PER_TENANT_PER_MINUTE);
+  }, 30_000);
+
+  it("writes a run's row when it starts, so a run in flight is counted and visible, and finishes it afterwards", async () => {
+    const tenant = await createTestTenant();
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "slow", query } });
+
+    const running = runHunt(prisma, hunt, "manual", new Date(), {
+      beforeQuery: (tx) => tx.$executeRaw(Prisma.sql`SELECT pg_sleep(1)`),
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const inFlight = await prisma.huntRun.findMany({ where: { huntId: hunt.id } });
+    expect(inFlight).toHaveLength(1);
+    expect(inFlight[0].finishedAt).toBeNull();
+    expect(inFlight[0].error).toBeNull();
+
+    const done = await running;
+    expect(done.id).toBe(inFlight[0].id);
+    expect(done.finishedAt).not.toBeNull();
+    expect(await prisma.huntRun.count({ where: { huntId: hunt.id } })).toBe(1);
+  }, 15_000);
+
+  it("does not take a run that never finished (the server died mid-run) for the previous run", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestAgent(tenant.id);
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "h", query } });
+    const pause = () => new Promise((r) => setTimeout(r, 25));
+
+    await createTestDetection(tenant.id, a.id, { technique: "T1059.001" });
+    await pause();
+    expect(await runHunt(prisma, hunt, "manual")).toMatchObject({ matchCount: 1, newMatchCount: 1 });
+    await pause();
+    await createTestDetection(tenant.id, a.id, { technique: "T1059.004" });
+    await pause();
+    // A run that started after that detection and was killed before it stored anything.
+    await prisma.huntRun.create({
+      data: { huntId: hunt.id, tenantId: tenant.id, queryVersion: 1, query, sampleDetectionIds: [], trigger: "manual" },
+    });
+    await pause();
+
+    // The baseline is the last run that produced a result, so the second detection is new.
+    expect(await runHunt(prisma, hunt, "manual")).toMatchObject({ matchCount: 2, newMatchCount: 1 });
+  });
+
   it("the cron runs only due scheduled hunts, and prunes history", async () => {
     const tenant = await createTestTenant();
     const never = await create(tenant.id, { scheduleMinutes: 60 });
