@@ -42,7 +42,14 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     ],
     "spool_bytes": 1024,
     "spool_dropped": 0,
-    "enrich_dropped": 3
+    "enrich_dropped": 3,
+    "rarity_applied": 7,
+    "rarity_withheld": 11,
+    "rarity_unapplied": 2,
+    "watchdog_restarts": 3,
+    "tamper_events": 5,
+    "parent_image_evicted_live": 13,
+    "parent_image_evicted_dead": 209000
   }
 }
 ```
@@ -55,9 +62,24 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
 | `spool_dropped` | cumulative records shed by the spool's byte cap |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
+| `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
+| `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
+| `rarity_unapplied` | cumulative rare images whose evidence found no belief to land on (evicted or never created): the loss, counted. Zero if the agent predates the field. |
+| `watchdog_restarts` | how many times the watchdog has restarted the agent since the watchdog started (it tells the agent at spawn). Zero without a watchdog, and if the agent predates the field. |
+| `tamper_events` | cumulative tamper-class alerts: the agent's own monitors (a sensor confirmed silent, a shipped binary or its signed manifest that no longer verifies) since the agent started, plus the watchdog's self-protection events (service definition drift, a binary that no longer matches its pinned hash). A rule detecting tampering with a protected resource is an ordinary detection and is not counted; a `SIGKILL` of the agent shows as one more `watchdog_restarts`. Zero if the agent predates the field. |
+| `parent_image_evicted_live` | cumulative Linux parent-image cache entries the cap dropped while their process was still alive: the loss (a later child of that process carries no `parent_image_path`, #783). Zero on other platforms and for an older agent. |
+| `parent_image_evicted_dead` | cumulative entries the cap dropped whose process had exited: nothing lost, it shows how full the cache runs. Zero on other platforms and for an older agent. |
 
-`transport`'s `heartbeat_body_is_the_documented_wire_shape` test pins this exact
-shape. A change that breaks it is a change to this contract.
+The three `rarity_*` fields and the four fields after them (#863) are additive: the server stores a
+beacon without them (an older agent) as zeros, and an older server ignores them. The ops fleet
+table shows the rarity ones in one "Rarity evidence" column ("N applied, N withheld, N lost") and
+the others in "Watchdog restarts", "Tamper events" and "Parent images evicted" ("N live, N
+exited"). **None of the four makes a host `degraded`**: they are information about the agent's
+self-protection and a cache, not lost telemetry, and the live evictions lose one field of one
+event, not an event. Making a rising tamper count or a restart loop a status of its own is a
+separate decision (#863). `transport`'s
+`heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it
+is a change to this contract.
 
 ### Fleet status and telemetry loss
 
@@ -83,6 +105,17 @@ recent loss is told from one beacon to the next:
 
 What this does not see: loss the beacon does not carry, such as the kernel ring buffer
 overflowing (`ring buffer full, dropping open event` is logged but not counted).
+
+The other cause of `degraded` is a silent sensor. The eBPF sensor pulses when it handles events and
+has a 120 s deadline; the journal sensor pulses on every line `journalctl` delivers and the agent
+writes a canary line into journald every 30 s, so an idle host no longer shows `linux-journal`
+silent, while a stopped journald still does (151 s after the stop in the lab, 22 s to recover).
+The ops table shows the two causes in separate columns ("Silent sensors", "Telemetry loss"), so an
+operator can tell them apart. Checked 2026-10-14 with a real agent, before the canary: after an
+outage the host went `Degraded` with "Lost telemetry in the last 10 min" (spool dropped 2048,
+enrich dropped 7443), the window followed the last rise of a counter and closed 10 minutes after
+it, and the host stayed `Degraded` about a minute longer for the journal sensor on the idle VM,
+which only auth and unit records pulsed then.
 
 ### Response
 

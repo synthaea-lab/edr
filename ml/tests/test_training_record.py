@@ -74,7 +74,7 @@ def _write_scenario_yaml(scenarios_root: Path, name: str, contents: str) -> tupl
     """
     scenarios_root.mkdir(parents=True, exist_ok=True)
     path = scenarios_root / f"{name}.yaml"
-    path.write_text(contents, encoding="utf-8")
+    path.write_bytes(contents.encode("utf-8"))
     return path, hashlib.sha256(contents.encode("utf-8")).hexdigest()
 
 

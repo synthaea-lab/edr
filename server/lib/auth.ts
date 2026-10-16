@@ -15,6 +15,12 @@ export const auth = betterAuth({
     organization({
       // Organization = Tenant
       allowUserToCreateOrganization: false, // Admin-only tenant creation
+      // An Organization pairs 1:1 with a Tenant by shared id (#821); better-auth's own
+      // delete API has no notion of that pairing and would remove the Organization/Member
+      // rows while leaving the Tenant and all its data orphaned, reachable by no one
+      // (review of #829). Nothing in this product needs organization deletion as a
+      // feature, so it is disabled outright rather than hooked.
+      disableOrganizationDeletion: true,
     }),
   ],
   trustedOrigins: [

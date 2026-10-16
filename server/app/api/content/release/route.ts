@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getTenantId, getUserId } from "@/lib/tenant";
+import { getTenantId } from "@/lib/tenant";
+import { requireTenantAdmin } from "@/lib/admin-auth";
 import { z } from "zod";
 import { validatePublishable } from "@/lib/content-publish";
 
@@ -9,14 +10,19 @@ const CreateReleaseSchema = z.object({
   manifestUrl: z.string().url(),
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
   releasedAt: z.string().datetime().optional(),
+  // The release this one restores, when it is a corrective release answering a rollback's
+  // advice (ADR-0032): recorded in the audit entry, never checked against anything — the
+  // server has no independent way to tell a corrective release from an ordinary one, and the
+  // caller is already admin-authenticated by the time this is read.
+  restoresVersion: z.number().int().positive().optional(),
 });
 
 /**
  * POST /api/content/release
  * Admin endpoint: Create new content release for a ring
  *
- * Authentication: better-auth session (admin only)
- * Request body: { ring, manifestUrl, manifestSha256, releasedAt? }
+ * Authentication: better-auth session, `owner` or `admin` member of the tenant (#803)
+ * Request body: { ring, manifestUrl, manifestSha256, releasedAt?, restoresVersion? }
  * Response: { release: ContentRelease }
  *
  * The release is numbered one above the ring's highest (rolled-back releases included) and
@@ -26,8 +32,9 @@ const CreateReleaseSchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    const tenantId = await getTenantId(req);
-    const userId = await getUserId(req);
+    const authed = await requireTenantAdmin(req);
+    if ("response" in authed) return authed.response;
+    const { tenantId, userId } = authed;
 
     // Parse request body
     const body = await req.json();
@@ -40,7 +47,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { ring, manifestUrl, manifestSha256, releasedAt } = validation.data;
+    const { ring, manifestUrl, manifestSha256, releasedAt, restoresVersion } = validation.data;
 
     // Find highest release version for this tenant + ring
     const latestRelease = await prisma.contentRelease.findFirst({
@@ -100,6 +107,8 @@ export async function POST(req: NextRequest) {
           releaseVersion: nextVersion,
           manifestUrl,
           entries: publishable.manifest.entries.length,
+          corrective: restoresVersion !== undefined,
+          restoresVersion: restoresVersion ?? null,
         },
       },
     });
@@ -119,7 +128,8 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/content/release
- * Admin endpoint: List content releases for tenant
+ * Lists content releases for the caller's tenant — any signed-in member, not admin-only: a
+ * read of release history carries none of POST's fleet-wide write risk (#803).
  *
  * Query params:
  * - ring: Filter by ring (optional)

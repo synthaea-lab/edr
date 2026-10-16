@@ -26,6 +26,10 @@ in the ADR, see the last section).
 
 ## Open questions that block the slices (need an owner's answer)
 
+Questions 1 to 3 are framed for decision, with a recommendation and the alternatives, in
+ADR-0033 (proposed). Question 4 was answered by slice 4 (the enrichment worker feeds the
+correlator after the fact).
+
 1. **Who signs a per-tenant snapshot, and how often?** ADR-0027 puts the content key
    offline with two approvals; a snapshot rebuilt per tenant every cadence cannot be
    signed by hand. Options: (a) amend ADR-0027 with a narrower, separately held
@@ -93,20 +97,30 @@ can start when the reader merges.
 the contract both sides test against, so splitting them would have shipped a fixture with one
 reader. The format is specified in `common-set-snapshot-format.md`. That PR also settles two
 details this plan left open: the filter is read by `crates/ml` (`ml::features::common_set`),
-and the builder refuses to exceed its byte cap instead of truncating. Slice 3 (the agent loader and hot
-reload) is its own PR: the snapshot is read from `snapshots/common-set.bin` under the content
-directory, with the rule directories' posture. It deliberately leaves the IPC `ReloadContent`
-response alone: that struct is `deny_unknown_fields`, so a new field would make an older client
-refuse a newer agent's answer, and "serde defaults" (this plan's first wording) only protect the
-other direction; the load is reported in the agent log. Slice 4 (the correlator evidence)
-is a stacked PR on that one. It takes the "worker feeds the correlator afterwards" answer to
+and the builder refuses to exceed its byte cap instead of truncating. Slices 3 and 4 are merged too (#814, #815), so slices 1 to 4 are on `main`.
+
+Slice 3, the agent loader and hot reload: the snapshot is read from `snapshots/common-set.bin`
+under the content directory, with the rule directories' posture (absent unloads it, a broken file
+keeps the previous one, a file over 64 MiB is refused unread). It deliberately leaves the IPC
+`ReloadContent` response alone: that struct is `deny_unknown_fields`, so a new field would make an
+older client refuse a newer agent's answer, and "serde defaults" (this plan's first wording) only
+protect the other direction; the load is reported in the agent log.
+
+Slice 4, the correlator evidence, took the "worker feeds the correlator afterwards" answer to
 question 4: the enrichment worker, which learns the hash after the capture thread correlated the
 exec, looks the hash up and adds a weak, **capped** log-odds term to the process's belief
 (`CorrelationEngine::apply_rarity_evidence`). The cap is the safety property: the contribution is
 at most 1.0 log-odds at a time (decaying with the belief), so with the prior it stays ~7 under
 the alert threshold and rarity alone can never be a verdict, even on a build host running
 thousands of freshly compiled binaries. The weight (0.35) and the minimum coverage (10 hosts)
-are provisional until slice 6. Slices 5 and 6 wait on the signing and ring questions.
+are provisional until slice 6. The judgements are counted, not only logged (ADR-0020, CLAUDE.md's
+"counted shedding"): `rarity_applied`, `rarity_withheld` (no basis to judge) and `rarity_unapplied`
+(rare, but no belief to land on) ride the health beacon and show in the ops fleet table, so a thin
+snapshot or an evicted belief is visible on the fleet rather than silent
+(`docs/architecture/control-plane.md`).
+
+Slices 5 and 6 have not started: they wait on the signing and ring questions above (a proposal
+that frames them for a decision is open as #819).
 
 ## Not in this plan
 
