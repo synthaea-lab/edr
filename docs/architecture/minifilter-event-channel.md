@@ -1,8 +1,13 @@
 # Minifilter event channel (milestone 2c, #136)
 
 Status: **being implemented**. The user-mode side is in place (the receive loop, the
-decoder, the event mapping and the agent wiring); the kernel side follows in its own PR,
-reviewed against this document. Design of the first milestone where `SynthaeaFilter`
+decoder, the event mapping and the agent wiring); the kernel side is its own PR (#857),
+reviewed against this document. **Landing order: #857 first, then #853.** The driver and the
+client must agree on the protocol version (3), and #857 carries the client's version
+constant, so each step on `main` is consistent: #857 alone is a v3 driver with a v3 connect
+client that does not read its events yet (the queue fills and the loss is counted); #853
+then adds the receiver. #853 alone would be a v3 client against the v1 driver on `main`,
+which refuses it at connect. Design of the first milestone where `SynthaeaFilter`
 sends events to the agent. Builds on #508 (skeleton), #750 (port, agent-only) and #765
 (user-mode client). The binding rules are
 [ADR-0012](../adr/0012-windows-driver-framework-language-choice.md)'s
@@ -26,9 +31,13 @@ filtering or detection in the kernel (guardrail 1).
 
 | Operation | Callback | Emitted when |
 |---|---|---|
-| Delete via `FileDispositionInformation(Ex)` with `DeleteFile`/`FILE_DISPOSITION_DELETE` | `IRP_MJ_SET_INFORMATION` pre + post | post-op, `NT_SUCCESS` |
-| Delete via `FILE_DELETE_ON_CLOSE` at open | `IRP_MJ_CREATE` post | post-op, `NT_SUCCESS` |
-| Rename via `FileRenameInformation(Ex)` | `IRP_MJ_SET_INFORMATION` pre + post | post-op, `NT_SUCCESS` |
+| Delete via `FileDispositionInformation(Ex)` with `DeleteFile`/`FILE_DISPOSITION_DELETE` | `IRP_MJ_SET_INFORMATION` pre + post | post-op, success status other than `STATUS_REPARSE` |
+| Delete via `FILE_DELETE_ON_CLOSE` at open | `IRP_MJ_CREATE` pre + post | post-op, success status other than `STATUS_REPARSE` (a reparsed create is re-issued on the resolved path and reported once, there) |
+| Rename via `FileRenameInformation(Ex)` and the `...BypassAccessCheck` classes (kernel callers such as the SMB server) | `IRP_MJ_SET_INFORMATION` pre + post | post-op, success status other than `STATUS_REPARSE` |
+
+Not reported: hard links (`FileLinkInformation` and its `Ex`/`BypassAccessCheck` classes).
+Creating a name is neither a delete nor a rename, and removing the original name is reported
+through its own disposition. No counter moves for them either: they are out of scope, not lost.
 
 Semantics to state honestly in the event: a successful disposition or
 delete-on-close means the delete was *requested and accepted*; the file goes
@@ -134,7 +143,12 @@ current loss figures without a second request path (there is still no
 `MessageNotify`: user mode never sends to the driver). A gap in `seq` plus a
 counter increase tells the agent exactly how many events it lost and why. A record is
 numbered when the sender takes it off the queue, so a failed send shows both as a gap and in
-`dropped_send_failed`; the agent counts it once (`ChannelStats::total_lost`).
+`dropped_send_failed`; the agent counts it once (`ChannelStats::total_lost`). A heartbeat the
+sender cannot send is not a lost record: the sender takes its number back, so a quiet period
+with no read pending leaves no gap and moves no counter. `dropped_capture_failed` counts an
+operation that succeeded but whose names could not be obtained; it is only counted once the
+operation's own status is known, and not while the instance is draining or the driver is
+unloading.
 
 **Idle heartbeat:** when the queue has been empty for 5 s, the sender emits a
 `kind = 0` message (header only). It feeds the agent's silence monitor, so a
@@ -160,12 +174,28 @@ other sensor (#71), instead of looking like a quiet machine.
   see open question 5.
 - The crate then depends on `schema`, which the sensor rule of
   `tools/check-deps.py` allows (guardrail 8).
-- **Agent wiring:** `agent::commands::windows` owns the connection:
-  connect at start, reconnect with capped backoff after `NotLoaded` or a
-  disconnect (driver reload), a `windows-minifilter` heartbeat registered in
-  the silence monitor and pulsed by every message including idle ones, and
-  the three counters exported in the health beacon next to `spool_dropped`
-  and `enrich_dropped`.
+- **Agent wiring:** `agent::commands::windows` starts the receive thread, and
+  `channel::run` owns the connection from then on:
+  - A host where the driver is **not loaded** (`NotLoaded` at start) runs no thread and
+    registers no heartbeat: that is the normal case today and not a silence alert. A
+    driver loaded later is picked up at the next agent start.
+  - Any **other** connect failure at start (the single slot still held by the previous agent
+    process, access denied, a protocol mismatch) does not disable the channel: the thread
+    starts, retries with capped backoff (1 s doubling to 30 s), and the
+    `windows-minifilter` heartbeat is registered, so a driver that is loaded but never
+    reachable becomes a silence alert after 30 s.
+  - The backoff is reset by the first message of a connection, not by the connect, so a driver
+    that accepts the connection and then fails every read is retried at the capped rate.
+  - The heartbeat is pulsed by every message including idle ones.
+  - **Loss is reported in the log**, not (yet) in the health beacon: at most once a minute,
+    and only when the figures rose, one warning carries the driver's four counters, the
+    sequence gaps and the decode errors. Exporting them in the `HealthBeacon` next to
+    `spool_dropped` and `enrich_dropped` needs an additive schema field set (the `serde`
+    default keeps old beacons readable), the server's beacon parser and database columns, and
+    the fleet page: the same set of files as #863, and not part of this change.
+  - `comm`, `ppid` and `user` of the forwarded events are empty, 0 and unknown: no step in the
+    agent fills them in for these events (the enrichment queue only handles exec images), so
+    rules must key on the pid. Resolving them from the process table is a follow-up.
 
 ## Test plan
 
