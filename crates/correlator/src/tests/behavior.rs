@@ -287,6 +287,56 @@ fn update_belief_with_ml_before_any_belief_state_is_silent_err() {
     assert!(engine.update_belief_with_ml(9999, None, Some(1.0)).is_err());
 }
 
+// ── Service main process provenance (issue #652) ───────────────────────────
+
+#[test]
+fn a_package_binary_started_by_init_is_a_service_main_process() {
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(exec_with_meta(
+        meta_full(800, 1, "NetworkManager", 0),
+        "/usr/sbin/NetworkManager",
+    ));
+    assert!(engine.is_service_main_process(800, None));
+}
+
+#[test]
+fn only_the_services_own_process_counts_not_what_it_spawns() {
+    // A shell spawned by a compromised daemon runs a trusted binary too, but its
+    // parent is the daemon, not init: it stays killable.
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(exec_with_meta(meta_full(801, 800, "sh", 0), "/usr/bin/sh"));
+    assert!(!engine.is_service_main_process(801, None));
+}
+
+#[test]
+fn an_untrusted_path_or_an_unknown_one_is_never_a_service_main_process() {
+    let mut engine = CorrelationEngine::new();
+    // A payload renamed after a service, started by init from /tmp.
+    engine.on_event(exec_with_meta(
+        meta_full(802, 1, "NetworkManager", 0),
+        "/tmp/NetworkManager",
+    ));
+    // The sensor did not report an image path: not evidence of a service.
+    engine.on_event(exec_with_meta(meta_full(803, 1, "chronyd", 0), ""));
+    assert!(!engine.is_service_main_process(802, None));
+    assert!(!engine.is_service_main_process(803, None));
+    assert!(
+        !engine.is_service_main_process(804, None),
+        "a pid whose exec was never seen is not a service main process"
+    );
+}
+
+#[test]
+fn a_recycled_pid_does_not_inherit_the_service_provenance() {
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(stamped(
+        exec_with_meta(meta_full(805, 1, "crond", 0), "/usr/sbin/crond"),
+        1,
+    ));
+    assert!(engine.is_service_main_process(805, Some(1)));
+    assert!(!engine.is_service_main_process(805, Some(2)));
+}
+
 // ── BAYES_NAME_EXCLUSIONS (issue #212) ──────────────────────────────────────
 
 #[test]
