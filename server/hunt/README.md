@@ -12,11 +12,14 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   `POST /api/hunts/[id]/run`.
 - **Scheduler**: `GET /api/cron/run-hunts` (CRON_SECRET) runs the due scheduled hunts and
   prunes history.
+- **Console** (`/console/hunts`): the list, a hunt's run history with Run now, and a create
+  and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
+  into the API body with `lib/hunt-form.ts`, which runs the same validation as the API.
 - The query is **not SQL**: `lastHours`, `techniques`, `severities`, `agentIds`, `text`.
 
 ## Not built yet
 
-- The console UI for hunts and their history.
+- Deleting a hunt from the console (the API has `DELETE`).
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - The raw event archive as a second source (needs `server/datalake`, #77).
 - Graduation of a hunt into a Sigma rule or IOC set (#618).

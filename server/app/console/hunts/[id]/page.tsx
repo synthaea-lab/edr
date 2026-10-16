@@ -64,7 +64,15 @@ export default async function HuntPage({ params }: { params: { id: string } }) {
           <h2 className="text-2xl font-bold text-gray-900">{hunt.name}</h2>
           {hunt.description && <p className="mt-1 text-sm text-gray-600">{hunt.description}</p>}
         </div>
-        <RunHuntButton huntId={hunt.id} />
+        <div className="flex shrink-0 items-start gap-3">
+          <a
+            href={`/console/hunts/${hunt.id}/edit`}
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+          >
+            Edit
+          </a>
+          <RunHuntButton huntId={hunt.id} />
+        </div>
       </div>
 
       <dl className="mb-6 grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-white p-4 text-sm sm:grid-cols-2">
