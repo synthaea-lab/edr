@@ -33,7 +33,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1136.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.002 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/persistence.yml` |
-| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml` |
+| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml`, `sigma:rules/sigma/windows/service_created_with_shell_binpath.yml` |
 | T1546.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1547.015 | 3 | `rules:crates/rules/src/stateless.rs` |
 
