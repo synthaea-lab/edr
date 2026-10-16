@@ -32,4 +32,5 @@ mod syscall;
 pub use ebpf::{RAW_TRACEPOINTS, load_ebpf, load_program};
 #[cfg(target_os = "linux")]
 pub use parent_image::ParentImageEvictions;
+#[cfg(target_os = "linux")]
 pub use sensor::LinuxSensor;
