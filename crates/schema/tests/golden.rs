@@ -1592,6 +1592,36 @@ fn policy_denial_golden() {
 }
 
 #[test]
+fn policy_denial_with_action_golden() {
+    // The #813 shape: the AVC parser recovered the requested permission set, which is
+    // carried as written (space-joined, `{ read write }` -> "read write"). The
+    // `policy_denial` fixture above stays action-less, as v23 produced it; this one pins
+    // the field the SELinux denial-drift rule's dedup key now depends on.
+    assert_golden(
+        &Event::PolicyDenial(PolicyDenialEvent {
+            meta: EventMeta {
+                pid: 4242,
+                ppid: 1337,
+                user: User::Unix { uid: 48, gid: 48 },
+                timestamp_ns: 1_756_900_100_000_000_000,
+                comm: "httpd".into(),
+                container: None,
+                process_generation: None,
+                parent_process_generation: None,
+            },
+            mechanism: POLICY_MECHANISM_SELINUX.into(),
+            subject_context: Some("system_u:system_r:httpd_t:s0".into()),
+            object_context: Some("system_u:object_r:user_home_t:s0".into()),
+            object_class: Some("file".into()),
+            action: Some("read write".into()),
+            enforced: true,
+            object_path: Some("/home/alice/.ssh/id_rsa".into()),
+        }),
+        "policy_denial_with_action",
+    );
+}
+
+#[test]
 fn kernel_module_golden() {
     // v24 (#264): `delete_module(2)` unloading a module by name — the classic
     // rootkit-installation/removal primitive. `fd`/`image_len` are omitted

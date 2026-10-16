@@ -190,12 +190,19 @@ fn classify_avc(record: &AuditRecord) -> Option<AuditEvent> {
 /// `{ ... }` pair rather than assuming which field it landed on, since the corruption
 /// is defined by text position, not a fixed key name. `{ read write }` becomes
 /// `"read write"`, trimmed as written; an empty `{ }` (never seen on a real kernel, but
-/// not reachable code to assume otherwise) is treated as absent.
+/// not reachable code to assume otherwise) is treated as absent. `fields` is a `HashMap`
+/// with a per-process hash seed, so when more than one key carries a `{ ... }` pair the
+/// smallest candidate wins: the result is the same on every run and restart, which
+/// matters because the permission set is part of the rule's dedup key.
 fn avc_action(record: &AuditRecord) -> Option<String> {
-    record.fields.keys().find_map(|key| {
-        let permissions = key.split_once('{')?.1.split_once('}')?.0.trim();
-        (!permissions.is_empty()).then(|| permissions.to_string())
-    })
+    record
+        .fields
+        .keys()
+        .filter_map(|key| {
+            let permissions = key.split_once('{')?.1.split_once('}')?.0.trim();
+            (!permissions.is_empty()).then(|| permissions.to_string())
+        })
+        .min()
 }
 
 /// Reads a field and decodes it only if the kernel actually emitted it
@@ -544,6 +551,35 @@ mod tests {
         assert_eq!(action.as_deref(), Some("read write"));
         assert!(!permissive);
         assert_eq!(object_path.as_deref(), Some("id_rsa"));
+    }
+
+    #[test]
+    fn classify_avc_action_is_the_same_whichever_key_the_map_yields_first() {
+        // `fields` is a HashMap: with two keys carrying a `{ ... }` pair, "the first match"
+        // would depend on its per-process hash seed. Fresh maps get fresh seeds, so many
+        // of them would flip a first-match implementation at least once.
+        for _ in 0..64 {
+            let mut fields = std::collections::HashMap::new();
+            fields.insert(
+                "avc:  denied  { write } for  pid".to_string(),
+                "1234".to_string(),
+            );
+            fields.insert("comm { read } x".to_string(), "httpd".to_string());
+            fields.insert("scontext".to_string(), "httpd_t".to_string());
+            fields.insert("tclass".to_string(), "file".to_string());
+            let record = AuditRecord {
+                record_type: AUDIT_AVC,
+                timestamp_sec: 0,
+                timestamp_ms: 0,
+                seq: 0,
+                fields,
+                unquoted_fields: std::collections::HashSet::new(),
+            };
+            let AuditEvent::PolicyDenial { action, .. } = classify(&record).unwrap() else {
+                panic!("expected PolicyDenial event");
+            };
+            assert_eq!(action.as_deref(), Some("read"));
+        }
     }
 
     #[test]

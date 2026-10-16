@@ -1281,39 +1281,82 @@ fn a_denial_missing_subject_or_object_context_still_alerts_once() {
 }
 
 #[test]
-fn policy_denial_alert_cap_sheds_further_shapes_but_keeps_deduplicating() {
+fn policy_denial_alert_cap_sheds_further_shapes_and_refills_in_the_next_window() {
     // `known_policy_denials` bounds the rule's memory, not its alert volume (#812): past
-    // POLICY_DENIAL_ALERT_CAP distinct shapes, further new ones must stop alerting
-    // without breaking the dedup itself.
+    // POLICY_DENIAL_ALERT_CAP new shapes in a window, further new ones must stop alerting.
+    // A shed shape is not remembered, so it alerts once the budget refills, and the shapes
+    // that did alert stay deduplicated.
+    let t0 = meta().timestamp_ns;
+    let at = |subject: &str, timestamp_ns: u64| PolicyDenialEvent {
+        meta: schema::EventMeta {
+            timestamp_ns,
+            ..meta()
+        },
+        ..policy_denial_event_full(
+            "selinux",
+            Some(subject),
+            Some("user_home_t"),
+            Some("file"),
+            true,
+        )
+    };
     let mut state = RuleState::new();
     let mut alerted = 0usize;
     for i in 0..=POLICY_DENIAL_ALERT_CAP {
         let subject = format!("unconfined_u:unconfined_r:type_{i}_t:s0");
-        let alerts = state.on_policy_denial(&policy_denial_event_full(
-            "selinux",
-            Some(&subject),
-            Some("user_home_t"),
-            Some("file"),
-            true,
-        ));
-        alerted += alerts.len();
+        alerted += state.on_policy_denial(&at(&subject, t0)).len();
     }
     assert_eq!(
         alerted, POLICY_DENIAL_ALERT_CAP as usize,
         "the (cap + 1)th distinct shape must be shed, not alerted"
     );
 
-    // The shed shape is still remembered: seeing it again still does not alert (dedup
-    // did not stop working once the cap was reached).
-    let last_subject = format!("unconfined_u:unconfined_r:type_{POLICY_DENIAL_ALERT_CAP}_t:s0");
-    let repeat = state.on_policy_denial(&policy_denial_event_full(
-        "selinux",
-        Some(&last_subject),
-        Some("user_home_t"),
-        Some("file"),
-        true,
-    ));
-    assert!(repeat.is_empty(), "dedup still works past the alert cap");
+    // Same window: the shed shape is still new, and still shed.
+    let shed_subject = format!("unconfined_u:unconfined_r:type_{POLICY_DENIAL_ALERT_CAP}_t:s0");
+    assert!(
+        state.on_policy_denial(&at(&shed_subject, t0)).is_empty(),
+        "the budget is spent for this window"
+    );
+    // A shape that did alert stays deduplicated, now and in the next window.
+    let first_subject = "unconfined_u:unconfined_r:type_0_t:s0";
+    let next_window = t0 + crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS;
+    assert!(
+        state
+            .on_policy_denial(&at(first_subject, next_window))
+            .is_empty(),
+        "dedup keeps working across windows"
+    );
+    // Next window: the budget refilled, so the shed shape alerts.
+    assert_eq!(
+        state.on_policy_denial(&at(&shed_subject, next_window)).len(),
+        1,
+        "a shape shed in one window alerts when the budget refills"
+    );
+}
+
+#[test]
+fn policy_denial_permission_order_does_not_make_a_new_shape() {
+    // The permission set is normalised in the dedup key: the kernel emits the bits in a
+    // fixed order, but a differently ordered or spaced set is the same denial, not a new one.
+    let mut state = RuleState::new();
+    let alerts = |state: &mut RuleState, action: &str| {
+        state
+            .on_policy_denial(&policy_denial_event_with_action(
+                Some("system_u:system_r:httpd_t:s0"),
+                Some("system_u:object_r:user_home_t:s0"),
+                Some("file"),
+                Some(action),
+            ))
+            .len()
+    };
+    assert_eq!(alerts(&mut state, "read write"), 1);
+    assert_eq!(alerts(&mut state, "write read"), 0, "same set, other order");
+    assert_eq!(alerts(&mut state, "read  write"), 0, "same set, doubled space");
+    assert_eq!(
+        alerts(&mut state, "read write open"),
+        1,
+        "a different set is a new shape"
+    );
 }
 
 #[test]
