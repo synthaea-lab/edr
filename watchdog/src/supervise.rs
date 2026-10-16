@@ -881,8 +881,9 @@ mod tests {
             std::env::temp_dir().join(format!("spawn-count-{}.ndjson", std::process::id()));
         let spawns = AtomicU64::new(0);
 
-        // `true` ignores its arguments and exits 0: a stand-in for an agent that starts.
-        let mut child = spawn_counted(Path::new("/bin/true"), &alerts, &spawns).expect("spawns");
+        // `true` ignores its arguments and exits 0: a stand-in for an agent that starts. Found on
+        // PATH, not as `/bin/true`: macOS has it at `/usr/bin/true`.
+        let mut child = spawn_counted(Path::new("true"), &alerts, &spawns).expect("spawns");
         child.wait().unwrap();
         assert_eq!(spawns.load(Ordering::Relaxed), 1);
 
@@ -893,7 +894,7 @@ mod tests {
             "a spawn that failed is retried by the loop and is not a restart"
         );
 
-        let mut again = spawn_counted(Path::new("/bin/true"), &alerts, &spawns).expect("spawns");
+        let mut again = spawn_counted(Path::new("true"), &alerts, &spawns).expect("spawns");
         again.wait().unwrap();
         assert_eq!(spawns.load(Ordering::Relaxed), 2);
     }
