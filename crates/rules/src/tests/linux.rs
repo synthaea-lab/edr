@@ -1328,7 +1328,9 @@ fn policy_denial_alert_cap_sheds_further_shapes_and_refills_in_the_next_window()
     );
     // Next window: the budget refilled, so the shed shape alerts.
     assert_eq!(
-        state.on_policy_denial(&at(&shed_subject, next_window)).len(),
+        state
+            .on_policy_denial(&at(&shed_subject, next_window))
+            .len(),
         1,
         "a shape shed in one window alerts when the budget refills"
     );
@@ -1351,7 +1353,11 @@ fn policy_denial_permission_order_does_not_make_a_new_shape() {
     };
     assert_eq!(alerts(&mut state, "read write"), 1);
     assert_eq!(alerts(&mut state, "write read"), 0, "same set, other order");
-    assert_eq!(alerts(&mut state, "read  write"), 0, "same set, doubled space");
+    assert_eq!(
+        alerts(&mut state, "read  write"),
+        0,
+        "same set, doubled space"
+    );
     assert_eq!(
         alerts(&mut state, "read write open"),
         1,
@@ -1392,15 +1398,26 @@ fn policy_denial_cache_eviction_is_logged() {
 
     tracing::subscriber::with_default(subscriber, || {
         let mut state = RuleState::new();
+        let t0 = meta().timestamp_ns;
         for i in 0..=COUNTER_CAP {
             let subject = format!("unconfined_u:unconfined_r:evict_{i}_t:s0");
-            state.on_policy_denial(&policy_denial_event_full(
-                "selinux",
-                Some(&subject),
-                Some("user_home_t"),
-                Some("file"),
-                true,
-            ));
+            // The alert budget is per window and a shape shed by it is not remembered: step
+            // the clock one window per POLICY_DENIAL_ALERT_CAP shapes so every shape is
+            // remembered and the cache fills.
+            let window = u64::try_from(i).expect("fits") / POLICY_DENIAL_ALERT_CAP;
+            state.on_policy_denial(&PolicyDenialEvent {
+                meta: schema::EventMeta {
+                    timestamp_ns: t0 + window * crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS,
+                    ..meta()
+                },
+                ..policy_denial_event_full(
+                    "selinux",
+                    Some(&subject),
+                    Some("user_home_t"),
+                    Some("file"),
+                    true,
+                )
+            });
         }
     });
 
