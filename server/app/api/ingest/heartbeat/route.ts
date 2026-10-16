@@ -106,6 +106,10 @@ async function storeBeacon(
       rarityApplied: BigInt(beacon.rarity_applied),
       rarityWithheld: BigInt(beacon.rarity_withheld),
       rarityUnapplied: BigInt(beacon.rarity_unapplied),
+      watchdogRestarts: BigInt(beacon.watchdog_restarts),
+      tamperEvents: BigInt(beacon.tamper_events),
+      parentImageEvictedLive: BigInt(beacon.parent_image_evicted_live),
+      parentImageEvictedDead: BigInt(beacon.parent_image_evicted_dead),
       sensors: beacon.sensors,
     };
     await prisma.agentHealth.upsert({
