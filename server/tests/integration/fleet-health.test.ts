@@ -36,7 +36,14 @@ const getFleet = async (tenantId: string) =>
   ).agents as {
     id: string;
     status: string;
-    health: { spoolDropped: number; lossObservedAt: string | null; sensors: unknown[] } | null;
+    health: {
+      spoolDropped: number;
+      lossObservedAt: string | null;
+      rarityApplied: number;
+      rarityWithheld: number;
+      rarityUnapplied: number;
+      sensors: unknown[];
+    } | null;
   }[];
 
 describe("fleet health against a real database (issue #83)", () => {
@@ -140,6 +147,26 @@ describe("fleet health against a real database (issue #83)", () => {
       await beat("agent-l6", { beacon: at(90, { spool_dropped: 50 }) });
       expect((await getFleet(tenant.id))[0].status).toBe("healthy"); // no false loss from the late one
     });
+  });
+
+  it("stores the rarity evidence counters and shows them in the fleet view (ADR-0020, #76)", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h5");
+    await beat("agent-h5", {
+      beacon: beacon({ rarity_applied: 7, rarity_withheld: 11, rarity_unapplied: 2 }),
+    });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({ rarityApplied: 7, rarityWithheld: 11, rarityUnapplied: 2 });
+  });
+
+  it("stores the beacon of an agent that predates the rarity counters, with zeros", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h6");
+    await beat("agent-h6", { beacon: beacon() });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({ rarityApplied: 0, rarityWithheld: 0, rarityUnapplied: 0 });
   });
 
   it("shows an agent whose sensor went silent as degraded", async () => {

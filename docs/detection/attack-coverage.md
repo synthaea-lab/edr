@@ -113,6 +113,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1087.002 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml`, `sigma:rules/sigma/windows/powershell_add_sid_to_local_group.yml` |
+| T1187 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |
@@ -120,6 +121,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
 | T1548.003 | 3 | `rules:crates/rules/src/sudo.rs`, `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1557 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |

@@ -25,6 +25,17 @@ describe("parseHeartbeatBody", () => {
     expect(parsed && beaconTime(parsed).toISOString()).toBe("2026-09-21T14:13:20.000Z");
   });
 
+  it("reads the rarity evidence counters, and counts them as zero for an agent that predates them", () => {
+    const withCounters = parseHeartbeatBody({
+      beacon: beacon({ rarity_applied: 7, rarity_withheld: 11, rarity_unapplied: 2 }),
+    });
+    expect([withCounters?.rarity_applied, withCounters?.rarity_withheld, withCounters?.rarity_unapplied]).toEqual([7, 11, 2]);
+
+    // `beacon()` carries none: an older agent's beacon must still be stored, as zeros.
+    const old = parseHeartbeatBody({ beacon: beacon() });
+    expect([old?.rarity_applied, old?.rarity_withheld, old?.rarity_unapplied]).toEqual([0, 0, 0]);
+  });
+
   it("returns null for a body with no usable beacon instead of throwing", () => {
     for (const body of [null, "x", 7, {}, { beacon: null }, { beacon: { timestamp_ns: 1 } }]) {
       expect(parseHeartbeatBody(body)).toBeNull();
@@ -36,6 +47,9 @@ describe("parseHeartbeatBody", () => {
     expect(parseHeartbeatBody({ beacon: beacon({ sensors: many }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ spool_bytes: -1 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ enrich_dropped: 1.5 }) })).toBeNull();
+    expect(parseHeartbeatBody({ beacon: beacon({ rarity_applied: -1 }) })).toBeNull();
+    expect(parseHeartbeatBody({ beacon: beacon({ rarity_withheld: 0.5 }) })).toBeNull();
+    expect(parseHeartbeatBody({ beacon: beacon({ rarity_unapplied: "3" }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ agent_version: "v".repeat(129) }) })).toBeNull();
   });
 });

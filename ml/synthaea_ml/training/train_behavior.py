@@ -1,9 +1,9 @@
-"""Trains the T1 behavior Isolation Forest on the 23 lineage-aware features (issue #617).
+"""Trains the T1 behavior Isolation Forest on the 17 cmdline + correlation features (issue #617).
 
-T1 scores one process incarnation at a time on cmdline (9) + correlation (8) + lineage (6)
-features (`synthaea_ml.features.t1`). Unlike the T0 trainers it cannot learn from a
-`baseline.jsonl` of command lines: the correlation and lineage blocks need pids, process
-generations and parents, so its input is a raw agent capture of normal activity.
+T1 scores one process incarnation at a time on cmdline (9) + correlation (8) features
+(`synthaea_ml.features.t1`; the lineage is judged by rules, ADR-0034). Unlike the T0
+trainers it cannot learn from a `baseline.jsonl` of command lines: the correlation block
+needs pids and process generations, so its input is a raw agent capture of normal activity.
 
 Input contract: a dataset directory (`--dataset`) containing
 
@@ -15,10 +15,9 @@ Input contract: a dataset directory (`--dataset`) containing
 Output (`--output-dir`, a registry version directory): `model.onnx`,
 `model_metadata.json` (conformal threshold + feature bounds) and `model_record.json`.
 
-What this does **not** do: ship a model. The Rust combined scorer that builds the same 23
-features on-device does not exist yet, and the benign corpus must be a real capture; the
-existing `argv`-only baselines carry no lineage and cannot show a lineage gain. Run
-`--robustness-scenarios` to record the T1 robustness card (lineage mutators included).
+What this does **not** do: ship a model. The agent does not load `ml::BehaviorScorer` yet,
+and the benign corpus must be a real capture. Run `--robustness-scenarios` to record the
+T1 robustness card (command-line mutators; the parent is not scored, so no lineage mutator).
 
 Usage:
     python -m synthaea_ml.training.train_behavior \\
@@ -72,7 +71,7 @@ threshold; refuse rather than emit a model whose boundary is noise."""
 
 
 def load_matrix(dataset_dirs: list[Path]) -> np.ndarray:
-    """The deduplicated 23-feature matrix of every dataset's capture.
+    """The deduplicated 17-feature matrix of every dataset's capture.
 
     Deduplicated by feature vector: an identical process behavior seen 10 000 times adds
     one sample, so the boundary is not dragged toward the most repeated activity.
