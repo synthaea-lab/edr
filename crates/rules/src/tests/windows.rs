@@ -800,8 +800,7 @@ fn a_file_first_seen_in_audit_mode_alerts_again_when_the_policy_blocks_it() {
     let audited_again =
         state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", false));
     let blocked = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
-    let blocked_again =
-        state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let blocked_again = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
     assert_eq!(audited[0].severity, schema::detection::Severity::Low);
     assert!(audited_again.is_empty(), "{audited_again:?}");
     assert_eq!(blocked.len(), 1);

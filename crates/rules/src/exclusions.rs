@@ -428,7 +428,7 @@ pub(crate) const BROWSERS: &[&str] = &[
 /// real host ever would) could otherwise emit one alert per shape, unbounded. The key is
 /// (mechanism, subject context, object context, object class, action); since #813 added
 /// the requested permission set to it, one (type, type, class) triple produces one shape
-/// per permission set the kernel denies for it, not one shape overall. AppLocker and WDAC key
+/// per permission set the kernel denies for it, not one shape overall. `AppLocker` and WDAC key
 /// on the file (#796), so their shape count is the number of distinct blocked files: a fresh
 /// audit-mode rollout, or a build directory full of unsigned DLLs, produces hundreds at once,
 /// which is why those denials have budgets of their own instead of drawing on the `SELinux` one.
