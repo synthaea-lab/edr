@@ -144,20 +144,14 @@ fn report_change(change: &roll_forward::Change, current_version: u64) {
             "  brought back   {path} (its bytes must be in the artifact store under their hash)"
         );
     }
-    if !change.restored_bytes.is_empty() {
+    if !change.different_bytes.is_empty() {
         eprintln!(
-            "{} path(s) hold different bytes in the release being withdrawn. The artifact store \
-             is keyed by content hash (#804): if the earlier release's bytes were uploaded under \
-             their own hash and never pruned, nothing needs restoring. Two cases where that does \
-             NOT hold, and the publish below will be refused (422, \"not in the store\") until \
-             fixed — re-stage the earlier bytes under their own hash from that release's build \
-             artifacts, not from the live server (docs/operations/content.md): the server \
-             predates #804 and was never migrated off the old path-keyed layout; or the path was \
-             overwritten again after the release you are rolling back to, which discarded its \
-             bytes under the old layout before the migration ever ran (same doc).",
-            change.restored_bytes.len()
+            "{} path(s) hold different bytes in the release being withdrawn — nothing to \
+             restore (artifacts are hash-keyed, #804); if publishing below is refused (422, \
+             \"not in the store\"), see docs/operations/content.md.",
+            change.different_bytes.len()
         );
-        for path in &change.restored_bytes {
+        for path in &change.different_bytes {
             eprintln!("  different      {path}");
         }
     }
