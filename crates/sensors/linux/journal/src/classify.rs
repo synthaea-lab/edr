@@ -18,6 +18,12 @@
 //! this dev sandbox has no `sshd`, and `su` here requires interactive auth this
 //! non-interactive session can't provide. Flagged as a lab-validation follow-up
 //! (see the crate doc's Status section), same as issue #91's kernel-dependent paths.
+//!
+//! `classify_pam` only matches the `pam_unix(` prefix: a host authenticating
+//! `sudo`/`su` through sssd/LDAP or `pam_faillock` instead of (or alongside)
+//! `pam_unix` produces no [`JournalEvent::PamAuthFailure`], and the T1548.003
+//! burst-then-success join (`crates/rules/src/sudo.rs`) never fires there —
+//! not live-validated against such a host either (#838 review).
 
 use crate::JournalRecord;
 
@@ -162,7 +168,25 @@ fn classify_sshd(message: &str) -> Option<JournalEvent> {
     None
 }
 
+/// Substrings `sudo` logs on the same `COMMAND=` line when the attempt did
+/// **not** succeed (wrong password, an account not in `sudoers`, a `sudoers`
+/// rule that names the command but refuses it, no password available to try) —
+/// checked before treating a `COMMAND=` line as a privilege-escalation success
+/// (#838 review: a failed attempt logs `COMMAND=` too, same line shape).
+const SUDO_COMMAND_FAILURE_MARKERS: &[&str] = &[
+    "incorrect password attempt",
+    "NOT in sudoers",
+    "command not allowed",
+    "a password is required",
+];
+
 fn classify_sudo_command(message: &str) -> Option<JournalEvent> {
+    if SUDO_COMMAND_FAILURE_MARKERS
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        return None;
+    }
     let command_idx = message.find("COMMAND=")?;
     let command = Some(message[command_idx + "COMMAND=".len()..].trim().to_string());
     // Real format: "     lab : TTY=pts/0 ; PWD=... ; USER=root ; COMMAND=...".
@@ -442,6 +466,29 @@ mod tests {
                 command: Some("/bin/echo hi".into()),
             })
         );
+    }
+
+    #[test]
+    fn sudo_command_line_is_not_classified_as_success_on_a_failed_attempt() {
+        // Documented sudo log line shapes for a failed attempt: each still logs
+        // `COMMAND=` on the same line as a successful one, so the line shape
+        // alone cannot tell success from failure apart (#838 review).
+        for message in [
+            "     lab : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/lab ; \
+             USER=root ; COMMAND=/bin/echo hi",
+            "     lab : user NOT in sudoers ; TTY=pts/0 ; PWD=/home/lab ; USER=root ; \
+             COMMAND=/bin/echo hi",
+            "     lab : command not allowed ; TTY=pts/0 ; PWD=/home/lab ; USER=root ; \
+             COMMAND=/bin/echo hi",
+            "     lab : a password is required ; TTY=pts/0 ; COMMAND=/bin/echo hi",
+        ] {
+            let r = record_with(&[("SYSLOG_IDENTIFIER", "sudo"), ("MESSAGE", message)]);
+            assert_eq!(
+                classify(&r),
+                None,
+                "classified a failure as a success: {message}"
+            );
+        }
     }
 
     // --- PAM sessions (real capture format for the "sudo" service) -------------

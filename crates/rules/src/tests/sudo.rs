@@ -10,10 +10,21 @@ use crate::exclusions::{
 const SEC: u64 = 1_000_000_000;
 const THRESHOLD: u64 = SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD as u64;
 
+/// `comm` defaults to `"sudo"`: `RuleState::on_auth` only joins a failure or a
+/// `PrivilegedSession`/`ExplicitCredentials` success into the sudo/su burst
+/// when the reporting process is `sudo` or `su` (#838 review) — every test in
+/// this file that means to exercise the join needs that, same as a real
+/// journal record would carry it (`AuthEvent::meta.comm` is the syslog
+/// identifier, `sensor-linux-journal::auth::reporter_meta`).
 fn failure(target_user: &str, ts: u64) -> AuthEvent {
+    failure_from("sudo", target_user, ts)
+}
+
+fn failure_from(comm: &str, target_user: &str, ts: u64) -> AuthEvent {
     AuthEvent {
         meta: EventMeta {
             timestamp_ns: ts,
+            comm: comm.to_string(),
             ..meta()
         },
         outcome: AuthOutcome::Failure,
@@ -27,6 +38,7 @@ fn success(target_user: &str, kind: AuthKind, ts: u64) -> AuthEvent {
     AuthEvent {
         meta: EventMeta {
             timestamp_ns: ts,
+            comm: "sudo".to_string(),
             ..meta()
         },
         outcome: AuthOutcome::Success,
@@ -47,7 +59,7 @@ fn privileged_session_after_five_failures_alerts_once_per_window() {
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].technique, "T1548.003");
     assert_eq!(alerts[0].severity, schema::detection::Severity::Medium);
-    assert!(alerts[0].message.contains("target=root"));
+    assert!(alerts[0].message.contains("account=root (sudo)"));
     assert!(alerts[0].message.contains("5 failed authentications"));
     assert!(
         state
@@ -177,6 +189,52 @@ fn success_delivered_before_the_last_failure_still_alerts() {
         .filter(|a| a.technique == "T1548.003")
         .collect();
     assert_eq!(sudo.len(), 1, "the late failure completes the join");
+}
+
+#[test]
+fn sshd_failures_do_not_feed_the_sudo_su_join() {
+    // sshd's own PAM auth failure maps to `SshFailed`/`LogonFailure` too, and
+    // both it and a sudo/su failure carry `User::Unix` — only `meta.comm`
+    // (the reporting process) tells them apart (#838 review). Five sshd
+    // failures for "root", then a real sudo success for "root", must not
+    // alert: the join has nothing genuine behind it.
+    let mut state = RuleState::new();
+    for i in 0..THRESHOLD {
+        state.on_auth(&failure_from("sshd", "root", i * SEC));
+    }
+    assert!(
+        state
+            .on_auth(&success("root", AuthKind::PrivilegedSession, 10 * SEC))
+            .is_empty(),
+        "sshd failures must not complete the sudo/su join"
+    );
+}
+
+#[test]
+fn an_attacker_controlled_sshd_username_cannot_evict_real_sudo_history() {
+    // Before the comm filter, a flood of distinct sshd usernames (attacker-
+    // controlled, unlike a local sudo/su invoker) could evict a real sudo
+    // target's bounded history out of `SudoSuccessAfterFailures` before its
+    // success arrived (#838 review, sudo.rs's `TARGETS_CAP`). With sshd kept
+    // out of the join entirely, this many distinct sshd "failures" must do
+    // nothing to root's own, unrelated sudo failures.
+    let mut state = RuleState::new();
+    for i in 0..THRESHOLD {
+        state.on_auth(&failure("root", i * SEC));
+    }
+    for i in 0..10_000u64 {
+        state.on_auth(&failure_from(
+            "sshd",
+            &format!("attacker{i}"),
+            (THRESHOLD + i) * SEC,
+        ));
+    }
+    let alerts = state.on_auth(&success("root", AuthKind::PrivilegedSession, 10 * SEC));
+    assert_eq!(
+        alerts.len(),
+        1,
+        "root's real sudo failures must still be there"
+    );
 }
 
 #[test]

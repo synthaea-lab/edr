@@ -9,18 +9,22 @@
 //! time the same way, for the same reason: counting only what already arrived
 //! would make the alert depend on delivery order.
 //!
-//! Keyed by `AuthEvent::target_user` alone, not by an external address — a local
-//! privilege elevation has no remote origin to key on, and
+//! Keyed by `(service, AuthEvent::target_user)`, not by an external address — a
+//! local privilege elevation has no remote origin to key on, and
 //! `AuthEvent::source_address` is always `None` for it (see
-//! `sensor-linux-journal::auth`'s module doc). That field is `su`'s real target
-//! (`root`, or whoever `su` names) but `sudo`'s *invoker* — `sensor-linux-journal`
-//! puts the one value there that a sudo failure and the success after it share,
-//! since PAM authenticates the invoker for `sudo` and never learns the `-u`
-//! target on a failed attempt (#838). This rule only ever sees that one string
-//! per side and joins on it; it has no opinion on what it represents for either
-//! service. History is bounded by the caps below and the least-recently-seen
-//! account, never by time, for the same future-timestamp-pruning reason as
-//! [`crate::rdp`].
+//! `sensor-linux-journal::auth`'s module doc). `target_user` is `su`'s real
+//! target (`root`, or whoever `su` names) but `sudo`'s *invoker* —
+//! `sensor-linux-journal` puts the one value there that a sudo failure and the
+//! success after it share, since PAM authenticates the invoker for `sudo` and
+//! never learns the `-u` target on a failed attempt (#838). This rule only ever
+//! sees that one string per side and joins on it; it has no opinion on what it
+//! represents for either service. `service` (`"sudo"` or `"su"`,
+//! `RuleState::on_auth` passes `AuthEvent::meta.comm`) is part of the key so a
+//! `su` failure naming `root` as its real target and a later `sudo` success by
+//! an invoker literally named `root` — two different accounts' histories —
+//! never share one bucket (#838 review). History is bounded by the caps below
+//! and the least-recently-seen `(service, account)` pair, never by time, for
+//! the same future-timestamp-pruning reason as [`crate::rdp`].
 
 use std::collections::VecDeque;
 
@@ -32,13 +36,14 @@ use crate::{
     exclusions::{SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD, SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS},
 };
 
-/// Distinct target accounts tracked; the least recently seen goes first.
+/// Distinct `(service, account)` pairs tracked; the least recently seen goes first.
 const TARGETS_CAP: usize = 4_096;
-/// Failure timestamps kept per target account.
+/// Failure timestamps kept per `(service, account)` pair.
 const FAILURES_PER_TARGET_CAP: usize = 256;
-/// Successes kept per target account until a failure can still complete their join.
+/// Successes kept per `(service, account)` pair until a failure can still
+/// complete their join.
 const SUCCESSES_PER_TARGET_CAP: usize = 8;
-/// Alerted windows remembered per target account.
+/// Alerted windows remembered per `(service, account)` pair.
 const ALERTED_WINDOWS_CAP: usize = 16;
 
 struct Success {
@@ -58,10 +63,10 @@ struct Target {
     alerted_windows: VecDeque<u64>,
 }
 
-/// Per-target-account history that joins a privilege-escalation success to the
-/// authentication failures before it.
+/// Per-`(service, account)` history that joins a privilege-escalation success
+/// to the authentication failures before it.
 pub(crate) struct SudoSuccessAfterFailures {
-    targets: BoundedMap<String, Target>,
+    targets: BoundedMap<(String, String), Target>,
 }
 
 impl SudoSuccessAfterFailures {
@@ -71,21 +76,35 @@ impl SudoSuccessAfterFailures {
         }
     }
 
-    /// An authentication failure for `target_user` at `timestamp_ns`. May
-    /// complete the join of successes already seen, one per window.
-    pub(crate) fn on_failure(&mut self, target_user: &str, timestamp_ns: u64) -> Vec<Alert> {
-        let target = self
-            .targets
-            .get_or_insert_with(target_user.to_string(), Target::default);
+    /// An authentication failure for `target_user` on `service` (`"sudo"` or
+    /// `"su"`) at `timestamp_ns`. May complete the join of successes already
+    /// seen, one per window.
+    pub(crate) fn on_failure(
+        &mut self,
+        service: &str,
+        target_user: &str,
+        timestamp_ns: u64,
+    ) -> Vec<Alert> {
+        let target = self.targets.get_or_insert_with(
+            (service.to_string(), target_user.to_string()),
+            Target::default,
+        );
         insert_sorted(&mut target.failures, timestamp_ns, FAILURES_PER_TARGET_CAP);
-        target.join(target_user)
+        target.join(service, target_user)
     }
 
-    /// A privilege-escalation success for `target_user` at `timestamp_ns`.
-    pub(crate) fn on_success(&mut self, target_user: &str, timestamp_ns: u64) -> Vec<Alert> {
-        let target = self
-            .targets
-            .get_or_insert_with(target_user.to_string(), Target::default);
+    /// A privilege-escalation success for `target_user` on `service` at
+    /// `timestamp_ns`.
+    pub(crate) fn on_success(
+        &mut self,
+        service: &str,
+        target_user: &str,
+        timestamp_ns: u64,
+    ) -> Vec<Alert> {
+        let target = self.targets.get_or_insert_with(
+            (service.to_string(), target_user.to_string()),
+            Target::default,
+        );
         let at = target
             .successes
             .partition_point(|s| s.timestamp_ns <= timestamp_ns);
@@ -99,7 +118,7 @@ impl SudoSuccessAfterFailures {
         if target.successes.len() > SUCCESSES_PER_TARGET_CAP {
             target.successes.pop_front();
         }
-        target.join(target_user)
+        target.join(service, target_user)
     }
 }
 
@@ -116,7 +135,7 @@ impl Target {
     /// Every remembered success that now has enough failures in the window
     /// ending at it, once per window — see [`crate::rdp::Source::join`]'s doc,
     /// this is the same join, keyed differently.
-    fn join(&mut self, target_user: &str) -> Vec<Alert> {
+    fn join(&mut self, service: &str, target_user: &str) -> Vec<Alert> {
         let mut alerts = Vec::new();
         for success in &mut self.successes {
             if success.alerted {
@@ -142,7 +161,7 @@ impl Target {
                     technique: "T1548.003",
                     severity: Severity::Medium,
                     message: format!(
-                        "target={target_user}: a local privilege escalation (sudo/su) \
+                        "account={target_user} ({service}): a local privilege escalation \
                          succeeded after {count} failed authentications for that account \
                          in {}s: guessed or sprayed credentials worked, or a shared \
                          account under sustained attempts",
@@ -168,6 +187,7 @@ mod tests {
     const EXPECTED_FAILURES_CAP: usize = 256;
     const EXPECTED_SUCCESSES_CAP: usize = 8;
     const TARGET: &str = "root";
+    const SERVICE: &str = "sudo";
 
     fn fixed_game(order: [usize; 6]) -> usize {
         let events = [
@@ -184,9 +204,9 @@ mod tests {
             .flat_map(|index| {
                 let (success, timestamp) = events[index];
                 if success {
-                    state.on_success(TARGET, timestamp)
+                    state.on_success(SERVICE, TARGET, timestamp)
                 } else {
-                    state.on_failure(TARGET, timestamp)
+                    state.on_failure(SERVICE, TARGET, timestamp)
                 }
             })
             .count()
@@ -221,9 +241,9 @@ mod tests {
                 .flat_map(|index| {
                     let (success, timestamp) = events[index];
                     if success {
-                        state.on_success(TARGET, timestamp)
+                        state.on_success(SERVICE, TARGET, timestamp)
                     } else {
-                        state.on_failure(TARGET, timestamp)
+                        state.on_failure(SERVICE, TARGET, timestamp)
                     }
                 })
                 .count();
@@ -244,9 +264,9 @@ mod tests {
         ) {
             let mut state = SudoSuccessAfterFailures::new();
             for timestamp in timestamps {
-                prop_assert!(state.on_failure(TARGET, timestamp).is_empty());
+                prop_assert!(state.on_failure(SERVICE, TARGET, timestamp).is_empty());
             }
-            prop_assert!(state.on_success(TARGET, success_at).is_empty());
+            prop_assert!(state.on_success(SERVICE, TARGET, success_at).is_empty());
         }
     }
 
@@ -254,11 +274,29 @@ mod tests {
     fn distinct_target_accounts_do_not_share_history() {
         let mut state = SudoSuccessAfterFailures::new();
         for second in 0..EXPECTED_THRESHOLD as u64 {
-            state.on_failure("root", second * SECOND);
+            state.on_failure(SERVICE, "root", second * SECOND);
         }
         // "alice" never had a failure: her success must not borrow root's.
-        assert!(state.on_success("alice", 10 * SECOND).is_empty());
-        assert!(!state.on_success("root", 10 * SECOND).is_empty());
+        assert!(state.on_success(SERVICE, "alice", 10 * SECOND).is_empty());
+        assert!(!state.on_success(SERVICE, "root", 10 * SECOND).is_empty());
+    }
+
+    #[test]
+    fn su_target_root_and_sudo_invoker_root_do_not_share_history() {
+        // A `su` failure whose real target is "root" and a later `sudo` success
+        // by an invoker literally named "root" are two different accounts'
+        // histories, even though both land in `AuthEvent::target_user` as the
+        // same string "root" (#838 review) — only the key `(service, account)`
+        // tells them apart.
+        let mut state = SudoSuccessAfterFailures::new();
+        for second in 0..EXPECTED_THRESHOLD as u64 {
+            state.on_failure("su", "root", second * SECOND);
+        }
+        assert!(
+            state.on_success("sudo", "root", 10 * SECOND).is_empty(),
+            "sudo's own root-invoker success must not borrow su's root-target failures"
+        );
+        assert!(!state.on_success("su", "root", 10 * SECOND).is_empty());
     }
 
     #[test]
@@ -280,11 +318,11 @@ mod tests {
         ] {
             let mut state = SudoSuccessAfterFailures::new();
             for timestamp in before {
-                state.on_failure(TARGET, timestamp);
+                state.on_failure(SERVICE, TARGET, timestamp);
             }
-            state.on_failure(TARGET, boundary);
+            state.on_failure(SERVICE, TARGET, boundary);
             assert_eq!(
-                !state.on_success(TARGET, success).is_empty(),
+                !state.on_success(SERVICE, TARGET, success).is_empty(),
                 expected,
                 "boundary timestamp {boundary}"
             );
@@ -295,25 +333,25 @@ mod tests {
     fn failure_cap_evicts_oldest_and_keeps_a_valid_alert() {
         let mut state = SudoSuccessAfterFailures::new();
         for second in 0..=EXPECTED_FAILURES_CAP as u64 {
-            state.on_failure(TARGET, second * SECOND);
+            state.on_failure(SERVICE, TARGET, second * SECOND);
         }
         let target = state.targets.iter().next().unwrap().1;
         assert_eq!(target.failures.len(), EXPECTED_FAILURES_CAP);
         assert_eq!(target.failures.front(), Some(&SECOND));
-        assert!(!state.on_success(TARGET, 300 * SECOND).is_empty());
+        assert!(!state.on_success(SERVICE, TARGET, 300 * SECOND).is_empty());
     }
 
     #[test]
     fn ninth_success_evicts_oldest_but_newer_success_can_still_alert() {
         let mut state = SudoSuccessAfterFailures::new();
         for second in 100..109 {
-            state.on_success(TARGET, second * SECOND);
+            state.on_success(SERVICE, TARGET, second * SECOND);
         }
         let target = state.targets.iter().next().unwrap().1;
         assert_eq!(target.successes.len(), EXPECTED_SUCCESSES_CAP);
         assert_eq!(target.successes.front().unwrap().timestamp_ns, 101 * SECOND);
         for second in 100..105 {
-            state.on_failure(TARGET, second * SECOND);
+            state.on_failure(SERVICE, TARGET, second * SECOND);
         }
         assert!(
             state
@@ -331,9 +369,9 @@ mod tests {
     #[test]
     fn out_of_order_timestamps_join_by_event_time() {
         let mut state = SudoSuccessAfterFailures::new();
-        state.on_success(TARGET, 10 * SECOND);
+        state.on_success(SERVICE, TARGET, 10 * SECOND);
         for second in [9, 2, 8, 1, 7] {
-            let alert = state.on_failure(TARGET, second * SECOND);
+            let alert = state.on_failure(SERVICE, TARGET, second * SECOND);
             if second != 7 {
                 assert!(alert.is_empty());
             } else {
@@ -349,9 +387,9 @@ mod tests {
         for window in 0..=ALERTED_WINDOWS_CAP as u64 {
             let start = window * SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS;
             for offset in 0..SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD as u64 {
-                assert!(state.on_failure(TARGET, start + offset).is_empty());
+                assert!(state.on_failure(SERVICE, TARGET, start + offset).is_empty());
             }
-            alerts += state.on_success(TARGET, start + 10).len();
+            alerts += state.on_success(SERVICE, TARGET, start + 10).len();
         }
 
         let target = state.targets.iter().next().unwrap().1;
@@ -368,15 +406,15 @@ mod tests {
     fn zero_and_u64_max_timestamps_do_not_overflow() {
         let mut at_zero = SudoSuccessAfterFailures::new();
         for _ in 0..EXPECTED_THRESHOLD {
-            at_zero.on_failure(TARGET, 0);
+            at_zero.on_failure(SERVICE, TARGET, 0);
         }
-        assert!(!at_zero.on_success(TARGET, 0).is_empty());
+        assert!(!at_zero.on_success(SERVICE, TARGET, 0).is_empty());
 
         let mut at_max = SudoSuccessAfterFailures::new();
         for _ in 0..EXPECTED_THRESHOLD {
-            at_max.on_failure(TARGET, u64::MAX);
+            at_max.on_failure(SERVICE, TARGET, u64::MAX);
         }
-        assert!(!at_max.on_success(TARGET, u64::MAX).is_empty());
+        assert!(!at_max.on_success(SERVICE, TARGET, u64::MAX).is_empty());
     }
 
     #[test]
@@ -390,9 +428,9 @@ mod tests {
             let target = format!("user{}", (random >> 16) % (EXPECTED_TARGETS_CAP as u64 * 2));
             let timestamp = random.rotate_left(23);
             if random & 1 == 0 {
-                state.on_failure(&target, timestamp);
+                state.on_failure(SERVICE, &target, timestamp);
             } else {
-                state.on_success(&target, timestamp);
+                state.on_success(SERVICE, &target, timestamp);
             }
             if index % 256 == 255 || index == 99_999 {
                 assert!(state.targets.len() <= EXPECTED_TARGETS_CAP);

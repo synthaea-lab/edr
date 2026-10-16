@@ -340,15 +340,20 @@ mod tests {
             ("_UID", "1001"),
             ("_GID", "1001"),
         ]);
+        // `pam_unix(sudo:auth)` authenticates the invoker's own password, so a
+        // real failure's `" user="` field (`target_user` here) names the
+        // invoker, never the `-u` target (#838) — `target_user: Some("root")`
+        // with a different `invoking_user` is not a line `classify_pam` ever
+        // actually produces for `sudo`.
         let event = JournalEvent::PamAuthFailure {
             service: "sudo".into(),
             invoking_user: Some("lab".into()),
-            target_user: Some("root".into()),
+            target_user: Some("lab".into()),
         };
         let auth = to_auth_event(&record, &event).expect("should map");
         assert_eq!(auth.outcome, AuthOutcome::Failure);
         assert_eq!(auth.kind, AuthKind::LogonFailure);
-        assert_eq!(auth.target_user, "root");
+        assert_eq!(auth.target_user, "lab");
         assert_eq!(auth.source_address, None);
     }
 

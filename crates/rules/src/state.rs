@@ -1080,13 +1080,20 @@ impl RuleState {
             // Only a local (Unix) privilege-escalation success joins the sudo/su
             // burst history — a Windows logon success is [`Self::rdp_success`]'s
             // job, fed from the Terminal Services session event instead, not
-            // this one (see that field's doc).
+            // this one (see that field's doc). `PrivilegedSession`/
+            // `ExplicitCredentials` are only ever produced for `sudo`/`su`
+            // (`auth::to_auth_event`), so `event.meta.comm` is already one of
+            // the two here; the explicit match is defense in depth, not a new
+            // restriction.
             return if matches!(event.meta.user, User::Unix { .. })
                 && matches!(
                     event.kind,
                     AuthKind::PrivilegedSession | AuthKind::ExplicitCredentials
-                ) {
-                self.sudo_success.on_success(&event.target_user, ts)
+                )
+                && matches!(event.meta.comm.as_str(), "sudo" | "su")
+            {
+                self.sudo_success
+                    .on_success(&event.meta.comm, &event.target_user, ts)
             } else {
                 Vec::new()
             };
@@ -1112,9 +1119,20 @@ impl RuleState {
             .unwrap_or_default();
         // The sudo/su join has no such cross-channel concern (one journal
         // stream feeds both sides of it), but still joins by event time, not
-        // arrival order — see the `sudo` module's doc.
-        if matches!(event.meta.user, User::Unix { .. }) {
-            alerts.extend(self.sudo_success.on_failure(&event.target_user, ts));
+        // arrival order — see the `sudo` module's doc. Gated on `comm`, not
+        // just `User::Unix`: an sshd failure (`LogonFailure` from `SshFailed`)
+        // is also a Unix identity, and an attacker-controlled sshd username
+        // must never reach this join at all (#838 review) — it would pollute
+        // another account's sudo/su history, or, at volume, evict real sudo/su
+        // history out of the bounded per-account cache before the matching
+        // success arrives.
+        if matches!(event.meta.user, User::Unix { .. })
+            && matches!(event.meta.comm.as_str(), "sudo" | "su")
+        {
+            alerts.extend(
+                self.sudo_success
+                    .on_failure(&event.meta.comm, &event.target_user, ts),
+            );
         }
         let entry = self
             .auth_failures
