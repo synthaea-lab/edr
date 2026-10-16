@@ -173,7 +173,10 @@ packaged service is what exercises it (below). What to know:
      the updater relabel a staged release before promoting it.
   3. The unprivileged `synthaea` user had no capabilities, so it could not load eBPF:
      #559 (ambient `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE`, `CAP_DAC_READ_SEARCH`,
-     `CAP_NET_ADMIN`, `CAP_KILL`; ADR-0014).
+     `CAP_NET_ADMIN`, `CAP_KILL`; ADR-0014). The set has since grown
+     `CAP_AUDIT_READ` (#780, so the always-on AVC reader can open its own
+     `NETLINK_AUDIT` socket when eBPF is primary) — see the shipped unit file
+     for the current list, this one is a point-in-time record of #559.
   4. The watchdog's working directory was root-owned, so the agent's default relative
      `events.jsonl` failed: #559.
 

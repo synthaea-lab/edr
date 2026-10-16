@@ -195,3 +195,36 @@ carries the uid with the request and refuses what the user could not read themse
 SELinux Enforcing and the agent as `synthaea`: with both changes, a payload another user
 drops in `/tmp` or `/home` is scanned, and a denied open of a root-only file, by name or
 through a symlink they planted, is not.
+
+### Amendment 2026-10-15 (#780): `CAP_AUDIT_READ` for the AVC fallback reader
+
+`AvcReader` (`sensor-linux-audit::avc`) keeps SELinux AVC denials reaching the rules
+engine on a host where eBPF is the primary sensor — without it, `AuditSensor` (the only
+other source of `PolicyDenial`) never runs, so `AuditSocket::open`'s `bind` to the
+`NETLINK_AUDIT` multicast group is the one thing standing between the packaged unit and a
+silent AVC blind spot on exactly the hardened, up-to-date hosts this ADR is about.
+
+**Measured on Fedora 43 (kernel 7.2.10, SELinux Enforcing)**, an unprivileged user with
+none of this unit's capabilities, then the same user with only `CAP_AUDIT_READ` as an
+ambient capability (`setpriv --ambient-caps=+audit_read`, the same mechanism
+`AmbientCapabilities=` uses):
+
+| Capabilities | `bind()` to `AUDIT_NLGRP_READLOG` |
+|---|---|
+| none | `EPERM` |
+| `CAP_AUDIT_READ` only | succeeds |
+
+The agent binary itself, run as that unprivileged user with this unit's full capability
+set (`setpriv --ambient-caps=+bpf,+perfmon,+sys_resource,+dac_read_search,+net_admin,+kill,+audit_read`),
+starts and loads the eBPF probes normally — the addition does not interact with the
+other six.
+
+**Decision: add `CAP_AUDIT_READ` to both `CapabilityBoundingSet` and
+`AmbientCapabilities`.** It is the narrowest capability that makes the bind succeed (no
+broader `CAP_AUDIT_CONTROL`/`CAP_AUDIT_WRITE` is needed — the reader only ever reads), it
+is read-only multicast (the reader never sends `AUDIT_SET` or any rule-changing command,
+so it cannot be used to tamper with auditd's own configuration), and the feature it
+unblocks is squarely inside this ADR's stated gap (attribution + fleet visibility, not
+concealment). Until this lands on a host, `AvcReader::open()` failing is not a crash or a
+false alert (#780's own fix: the heartbeat is registered only once `open()` succeeds), it
+is simply this one source staying off, logged once.
