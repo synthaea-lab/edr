@@ -16,14 +16,17 @@ echo "Version: $VERSION"
 
 # Build binaries
 echo "Building release binaries..."
-cargo build --release --workspace --bins --exclude sensor-linux-ebpf
+cargo build --release --bins -p agent -p watchdog -p cli --no-default-features --features agent/dynamic-onnx
+
+# The shipped artifacts: no public test signing key (ADR-0027).
+tools/assert-no-test-key.sh target/release/agent target/release/watchdog target/release/cli
 
 # Create source tarball
 echo "Creating source tarball..."
 tar czf "$RPMBUILD_DIR/SOURCES/synthaea-agent-$VERSION.tar.gz" \
   --transform "s,^,synthaea-agent-$VERSION/," \
   --exclude-vcs --exclude target \
-  agent/ watchdog/ cli/ crates/ Cargo.* rust-toolchain.toml ebpf-toolchain.txt LICENSE README.md \
+  agent/ watchdog/ cli/ release-tool/ crates/ Cargo.* rust-toolchain.toml ebpf-toolchain.txt LICENSE README.md \
   packaging/linux/systemd/
 
 # Copy spec file
@@ -37,7 +40,7 @@ rpmbuild -bb \
   --define "_version $VERSION" \
   "$RPMBUILD_DIR/SPECS/synthaea-agent.spec"
 
-RPM_PATH=$(find "$RPMBUILD_DIR/RPMS" -name "synthaea-agent-*.rpm" -print -quit)
+RPM_PATH=$(find "$RPMBUILD_DIR/RPMS" -name "synthaea-agent-[0-9]*.rpm" -print -quit)
 echo ""
 echo "==> RPM built: $RPM_PATH"
 

@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { CaseList } from "@/components/CaseList";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+// Read per request: the session needs a database, which does not exist at build time.
+export const dynamic = "force-dynamic";
+
 export default async function CasesPage() {
-  const session = await auth.api.getSession();
+  const session = await auth.api.getSession({ headers: await headers() });
 
   if (!session) {
     redirect("/login");

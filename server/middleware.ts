@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { lookupSession } from "@/lib/session-lookup";
 import { buildIdentityHeaders, stripIdentityHeaders } from "@/lib/tenant";
 
 export async function middleware(req: NextRequest) {
@@ -38,9 +38,9 @@ export async function middleware(req: NextRequest) {
   }
 
   // Check session for protected routes
-  const session = await auth.api.getSession({
-    headers: req.headers,
-  });
+  // Not `auth.api.getSession`: this runs on the Edge runtime, where the database adapter
+  // cannot (#810).
+  const session = await lookupSession(req.headers);
 
   // Redirect to login if no session
   if (!session) {

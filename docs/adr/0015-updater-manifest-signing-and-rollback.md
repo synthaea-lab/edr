@@ -272,11 +272,13 @@ needs the Decision 9 fallback at the unit level.
 - `updater` becomes the one process authorized to write `versions/` and flip
   `current` — `docs/architecture/threat-model.md`'s "only `updater` may
   change [installed artifacts]" line gets an actual mechanism behind it.
-  `agent::protected` (issue #71's protected-resource monitor) still has no
-  concept of "this write came from the legitimate updater" (that gap is
-  pre-existing, tracked on #71, unaffected by this ADR) — until it does, an
-  update in progress will trigger protected-resource alerts on its own writes;
-  acceptable for this slice, flagged for whoever wires that allowlist next.
+  `agent::protected` (issue #71's protected-resource monitor) needs no concept
+  of "this write came from the legitimate updater": `apply_release` stages
+  into a fresh `versions/<N>/` directory and only then flips `current`, so it
+  never opens the version directory the running process's own binary already
+  resolves to, nor the config/alerts/events/heartbeat paths `protected`
+  watches. An update in progress does not trigger a protected-resource alert
+  on its own writes — settled by PR #770, not left for an allowlist.
 
 - Windows and macOS binary self-update remain unimplemented after this ADR.
   `updater`'s Linux-specific pieces are `cfg(target_os = "linux")`-gated,

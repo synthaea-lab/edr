@@ -33,6 +33,9 @@ cargo clippy --workspace --exclude sensor-linux-ebpf --all-targets -- -D warning
 step "tests"
 cargo test --workspace --exclude sensor-linux-ebpf
 
+step "updater trust set without the test key (production code path, ADR-0027)"
+cargo test -p updater --no-default-features
+
 step "cargo deny (licenses, advisories, bans, sources)"
 cargo deny check
 
@@ -55,7 +58,7 @@ if [[ $FAST -eq 0 ]]; then
     # Only the Windows-gated crates: a full workspace pass needs a cross C
     # toolchain for ring (transport) that most dev machines lack; CI's native
     # windows-latest job covers the rest.
-    cargo clippy -p sensor-windows -p sensor-windows-eventlog -p sensor-windows-sockets --all-targets \
+    cargo clippy -p sensor-windows -p sensor-windows-eventlog -p sensor-windows-sockets -p sensor-windows-minifilter --all-targets \
         --target x86_64-pc-windows-msvc -- -D warnings
 
     step "docs, -D warnings, Linux view (what CI's lint job builds)"

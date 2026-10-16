@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/bin/bash",
+    "cmdline": "bash -c echo cGF5bG9hZAo= | base64 -d | sh"
+  },
+  "non_matching": {
+    "image": "/bin/bash",
+    "cmdline": "base64 -d payload.b64 > /tmp/out",
+    "note": "Near miss: decodes via base64 -d, the exact command the rule keys on, but does not pipe the result to a shell; the rule's boundary is '| sh'/'| bash' after the decode, not the decode itself."
+  }
+}

@@ -137,7 +137,9 @@ Measure final agent binary size, not just the `ml` crate test binaries.
 
 ## CI Integration
 
-**Not yet implemented.** Options:
+**Windows:** `windows-static-agent.yml`, see the Windows section below. **Linux:**
+`linux-deb-portability.yml` builds the static `.deb` on Alpine/musl. The options below
+were the ones weighed before either existed. Options:
 
 1. **Pre-built static libraries:** Cache onnxruntime static build artifacts in CI, keyed by version + platform
 2. **Build on demand:** Run the full onnxruntime build in CI (adds ~5-10 minutes to build time)
@@ -230,11 +232,14 @@ flags above: 20 minutes, exit 0 (onnxruntime already built).
 The static agent is smaller and imports no DirectML. `agent.exe --help` runs. One host, one
 build; not run under load or as the service.
 
-### Still open for #337
+### In CI
 
-- A `dumpbin`-based or CI check: `tools/check-pe-imports.py` reads the import tables
-  without Visual Studio, but nothing runs it in CI because CI does not build a static
-  Windows binary yet (the build takes about an hour).
+`.github/workflows/windows-static-agent.yml` (#746) runs the steps above on `windows-2022`.
+It builds onnxruntime with `build-onnxruntime-static.ps1`, copies the `.lib` files out of
+the build tree and caches them on the script's hash (a version bump rebuilds them). It then
+links the agent with `--no-default-features`, and fails if `tools/check-pe-imports.py` finds
+`onnxruntime.dll`, `directml.dll` or `d3d12.dll` among its imports. It runs on `main` and on
+changes that can break the link, not on every PR.
 
 ## Platform Support
 
@@ -244,10 +249,10 @@ build; not run under load or as the service.
 - ✅ Windows 11 (MSVC, CPU only) - `cargo test -p ml` passes, no `onnxruntime.dll`, no
   `directml.dll`, no `d3d12.dll` (see above)
 
-**TODO:**
-- ⏳ macOS (similar `.a` workflow, but untested)
-
-macOS is an ADR-0002 target platform that has not been attempted yet.
+- ✅ macOS on Apple Silicon and Intel (hosted runners `macos-15` and `macos-15-intel`, 2026-10-12, issue #338): onnxruntime from
+  source in 20 minutes, `cargo test -p ml` and the agent linked statically, no
+  `libonnxruntime.dylib` (`tools/check-macho-imports.py`, same list as `otool -L`); see
+  `onnxruntime-static-build-macos.md`.
 
 ## References
 

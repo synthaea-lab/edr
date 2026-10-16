@@ -1,0 +1,25 @@
+title: IIS worker spawned a command interpreter
+description: >
+  Detects an IIS worker process directly starting a command interpreter, a strong
+  process-lineage signal for a possible exploit of a public-facing application (T1190).
+  It does not claim that the process pair alone proves exploitation.
+tags:
+  - attack.initial_access
+  - attack.t1190
+  - attack.execution
+  - attack.t1059.001
+  - synthaea.coverage.initial_access_user_execution
+level: medium
+falsepositives:
+  - A locally hosted application or deployment script can deliberately invoke a shell;
+    this is most likely on development and staging IIS hosts.
+detection:
+  selection:
+    ParentImage|endswith: '\w3wp.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection

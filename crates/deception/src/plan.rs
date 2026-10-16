@@ -225,6 +225,8 @@ pub struct Canary {
     pub kind: Kind,
     /// Its inert, machine-generated content.
     pub content: String,
+    /// Seed-derived value used to choose a plausible modification time at planting.
+    pub mtime_seed: u64,
 }
 
 /// The header every canary starts with, so an operator who opens one knows what it is.
@@ -238,6 +240,7 @@ pub fn plan(seed: &Seed, placements: &[Placement]) -> Vec<Canary> {
     for (p, placement) in placements.iter().enumerate() {
         for (k, kind) in placement.kinds.iter().enumerate() {
             let index = p * Kind::ALL.len() + k;
+            let mtime = seed.derive("mtime", index);
             let path = placement
                 .dir
                 .join(canary_name(*kind, &seed.derive("name", index)));
@@ -245,10 +248,27 @@ pub fn plan(seed: &Seed, placements: &[Placement]) -> Vec<Canary> {
                 path,
                 kind: *kind,
                 content: content(seed, index, *kind),
+                mtime_seed: u64::from_le_bytes([
+                    mtime[0], mtime[1], mtime[2], mtime[3], mtime[4], mtime[5], mtime[6], mtime[7],
+                ]),
             });
         }
     }
     canaries
+}
+
+/// What every decoy token starts with. The control plane (`server/lib/decoy.ts`) looks up only
+/// bearer tokens that start with it, so the two must agree.
+pub const DECOY_TOKEN_PREFIX: &str = "syn_dk_";
+
+/// The decoy token of the canary at `index`: [`DECOY_TOKEN_PREFIX`] and 32 hex digits derived
+/// from the install's seed. Different per install and per canary, and it opens nothing: the
+/// control plane recognises it and raises an alarm naming this host.
+fn decoy_token(seed: &Seed, index: usize) -> String {
+    format!(
+        "{DECOY_TOKEN_PREFIX}{}",
+        hex(&seed.derive("decoy-token", index)[..16])
+    )
 }
 
 fn content(seed: &Seed, index: usize, kind: Kind) -> String {
@@ -264,7 +284,33 @@ fn content(seed: &Seed, index: usize, kind: Kind) -> String {
         };
         text.push_str(&line);
     }
+    // The decoy credential, in the shape of what an intruder goes looking for: a service token
+    // in a logins list, a secret in an infrastructure config. Finance and notes carry none.
+    match kind {
+        Kind::Credentials => {
+            text.push_str(&format!("api-token : {}\n", decoy_token(seed, index)));
+        }
+        Kind::Config => {
+            text.push_str(&format!("cron_secret = {}\n", decoy_token(seed, index)));
+        }
+        Kind::Finance | Kind::Notes => {}
+    }
     text
+}
+
+/// The decoy tokens in `canaries`, in order, found by their prefix. Used to register their
+/// hashes with the control plane; the tokens themselves are never sent.
+#[must_use]
+pub fn decoy_tokens(canaries: &[Canary]) -> Vec<String> {
+    canaries
+        .iter()
+        .flat_map(|c| c.content.split_whitespace())
+        .filter(|word| {
+            word.strip_prefix(DECOY_TOKEN_PREFIX)
+                .is_some_and(|rest| rest.len() == 32 && rest.bytes().all(|b| b.is_ascii_hexdigit()))
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -291,7 +337,10 @@ mod tests {
     #[test]
     fn the_same_seed_gives_the_same_plan() {
         let seed = Seed::from_bytes([7; 32]);
-        assert_eq!(plan(&seed, &placements()), plan(&seed, &placements()));
+        let first = plan(&seed, &placements());
+        let second = plan(&seed, &placements());
+        assert_eq!(first, second);
+        assert_ne!(first[0].mtime_seed, first[1].mtime_seed);
     }
 
     #[test]
@@ -448,5 +497,81 @@ mod tests {
         for v in [0u32, 1, 35, 36, 1_295, u32::MAX] {
             assert_eq!(u32::from_str_radix(&base36(v), 36).unwrap(), v);
         }
+    }
+
+    fn planned(seed: u8) -> Vec<Canary> {
+        plan(&Seed::from_bytes([seed; 32]), &placements())
+    }
+
+    #[test]
+    fn credentials_and_config_canaries_carry_one_decoy_token_and_the_others_none() {
+        for canary in planned(5) {
+            let tokens = decoy_tokens(std::slice::from_ref(&canary));
+            match canary.kind {
+                Kind::Credentials | Kind::Config => {
+                    assert_eq!(tokens.len(), 1, "{:?}", canary.kind);
+                }
+                Kind::Finance | Kind::Notes => assert!(tokens.is_empty(), "{:?}", canary.kind),
+            }
+        }
+    }
+
+    #[test]
+    fn decoy_tokens_differ_across_installs_and_across_canaries() {
+        let a = decoy_tokens(&planned(1));
+        let b = decoy_tokens(&planned(2));
+        assert_eq!(a.len(), b.len());
+        assert!(
+            a.iter().all(|t| !b.contains(t)),
+            "a token learned on one host is not another's"
+        );
+        let mut unique = a.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), a.len(), "one token per canary, none shared");
+    }
+
+    #[test]
+    fn decoy_tokens_are_stable_for_a_seed() {
+        assert_eq!(decoy_tokens(&planned(9)), decoy_tokens(&planned(9)));
+    }
+
+    #[test]
+    fn a_decoy_token_has_the_shape_the_control_plane_looks_up() {
+        for token in decoy_tokens(&planned(3)) {
+            assert!(token.starts_with("syn_dk_"));
+            assert_eq!(token.len(), "syn_dk_".len() + 32);
+            assert!(
+                token["syn_dk_".len()..]
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_well_formed_token_is_picked_out_of_the_content() {
+        let canary = Canary {
+            path: PathBuf::from("/x"),
+            kind: Kind::Notes,
+            content: "syn_dk_short syn_dk_ZZZZ0123456789abcdef0123456789ab \
+                      syn_dk_0123456789abcdef0123456789abcdef x"
+                .into(),
+            mtime_seed: 0,
+        };
+        assert_eq!(
+            decoy_tokens(&[canary]),
+            vec!["syn_dk_0123456789abcdef0123456789abcdef".to_string()]
+        );
+    }
+
+    /// The contract with `server/lib/decoy.ts` (`hashToken`): SHA-256, lowercase hex, of the
+    /// token's UTF-8 bytes. The same constant is asserted on the server side.
+    #[test]
+    fn a_decoy_token_hashes_to_the_value_the_control_plane_computes() {
+        assert_eq!(
+            crate::sha256_hex(b"syn_dk_0123456789abcdef0123456789abcdef"),
+            "a4f205745e0254733ec14acd490bab0ec51dfcb67eede6fce2c02397f4064f87"
+        );
     }
 }

@@ -74,7 +74,7 @@ def _write_scenario_yaml(scenarios_root: Path, name: str, contents: str) -> tupl
     """
     scenarios_root.mkdir(parents=True, exist_ok=True)
     path = scenarios_root / f"{name}.yaml"
-    path.write_text(contents, encoding="utf-8")
+    path.write_bytes(contents.encode("utf-8"))
     return path, hashlib.sha256(contents.encode("utf-8")).hexdigest()
 
 
@@ -195,7 +195,7 @@ def test_write_training_record_naive_datetime_raises(tmp_path: Path) -> None:
     model_dir = tmp_path / "m"
     model_dir.mkdir()
 
-    naive = datetime(2026, 9, 11, 12, 0, 0)  # noqa: DTZ001 — must be rejected
+    naive = datetime.fromisoformat("2026-09-11T12:00:00")
     with pytest.raises(ValueError, match="trained_at must be timezone-aware"):
         write_training_record(
             model_dir,

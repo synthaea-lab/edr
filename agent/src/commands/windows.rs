@@ -404,6 +404,7 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
         content_dir,
         log_sources: _,
         deception,
+        config_path: _,
     } = opts;
     let pipeline = super::common::wire_run_pipeline(
         seeded_rule_state(),
@@ -414,7 +415,12 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
         content_dir,
         storage,
     )?;
-    super::common::plant_canaries(&pipeline.sink, deception, storage);
+    super::common::plant_canaries(
+        &pipeline.sink,
+        deception,
+        storage,
+        pipeline.transport.as_ref(),
+    );
 
     // Sensor-silence detection (#71/#388): the same monitor feeds T1562
     // alerts, `cli health` and the health beacon. Heartbeats are registered
@@ -426,7 +432,15 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     // Health beacon (#134/#317): without it the control plane never hears from
     // a Windows agent, and its silent-agent detection flags every one of them.
     // No shutdown hook yet: the thread ends with the process.
-    let health = super::common::health_collector(&pipeline, Arc::clone(&silence_monitor));
+    let health = super::common::health_collector(
+        &pipeline,
+        Arc::clone(&silence_monitor),
+        Arc::new(crate::host_counters::AgentHostCounters::new(
+            Arc::clone(&pipeline.sink),
+            crate::host_counters::WatchdogReport::from_env(),
+            None,
+        )),
+    );
     let (_health_handle, _health_stop) = health.spawn();
 
     run_windows_sensors(Box::new(SharedSink(pipeline.sink)), Some(&silence_monitor))

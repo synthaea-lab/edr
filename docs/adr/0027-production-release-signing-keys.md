@@ -3,6 +3,23 @@
 - **Status**: proposed
 - **Date**: 2026-10-06
 
+ADR-0033 (proposed) would add a fourth key to this trust set, `snapshot`, with one job: signing
+the per-tenant common-set snapshot manifest, held in a signing-only key service rather than in
+offline custody. It does not change the three keys decided here.
+
+## Implementation status
+
+Decision items 3 and 4 are implemented (#753): `crates/updater/keys/{release,content,recovery}.pub`
+(`unprovisioned` until the ceremony), the `test-key` feature on `updater`, `agent` and
+`release-tool` (default on for development and the lab), `SYNTHAEA_UPDATER_TEST_KEY` derived from
+it, `--allow-test-key` only in a `test-key` build and now also required by
+`apply-content-manifest`, a build without the feature or a key refusing with a clear error, and
+`tools/check-no-test-key.sh` in CI. Not implemented: the `recovery` verification and the rotation
+release (a separate PR with golden fixtures), `release-tool` custody backends, the custody and
+holder decisions below, the runbook and the lab drills. Windows and macOS packaging still build
+with the default features, so they carry the test set until they get the same `--no-default-features`
+treatment.
+
 ## Context
 
 Every build today verifies releases and content against one Ed25519 public key derived from a

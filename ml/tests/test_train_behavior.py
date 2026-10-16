@@ -1,7 +1,7 @@
 """T1 behavior dataset builder and trainer (issue #617).
 
 Synthetic wire-format captures only: they prove the pipeline (capture -> per-incarnation
-records -> 23 features -> model -> record) holds together and fails closed. They say
+records -> 17 features -> model -> record) holds together and fails closed. They say
 nothing about detection quality; that needs a real capture of normal activity.
 """
 
@@ -75,7 +75,9 @@ def _capture(n: int = 40) -> list[dict]:
     return events
 
 
-def _write_dataset(root: Path, events: list[dict], name: str = "linux__dev__abc__2026-10-02") -> Path:
+def _write_dataset(
+    root: Path, events: list[dict], name: str = "linux__dev__abc__2026-10-02"
+) -> Path:
     d = root / name
     d.mkdir(parents=True)
     (d / BEHAVIOR_CAPTURE_FILENAME).write_text(
@@ -103,7 +105,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, dataset: Path, out: Path, *extra: str)
 # --- the dataset builder --------------------------------------------------------------
 
 
-def test_one_record_per_incarnation_with_lineage_and_correlation_context(tmp_path: Path) -> None:
+def test_one_record_per_incarnation_and_correlation_context(tmp_path: Path) -> None:
     d = _write_dataset(tmp_path, _capture(6))
     records = load_records(d / BEHAVIOR_CAPTURE_FILENAME)
     assert len(records) == 6
@@ -112,7 +114,7 @@ def test_one_record_per_incarnation_with_lineage_and_correlation_context(tmp_pat
     assert first["argv"][0] == "/usr/bin/tool0"
     assert len(first["correlation_features"]) == 8
     assert first["correlation_features"][1] == 1.0, "tool0 connected out (i % 3 == 0)"
-    assert len(t1.extract_features(first)) == t1.FEATURE_COUNT == 23
+    assert len(t1.extract_features(first)) == t1.FEATURE_COUNT == 17
 
 
 def test_a_recycled_pid_yields_two_records_and_the_first_life_does_not_leak(
@@ -129,6 +131,58 @@ def test_a_recycled_pid_yields_two_records_and_the_first_life_does_not_leak(
     assert first["parent_comm"] == "nginx" and second["parent_comm"] == "bash"
     assert first["correlation_features"][1] == 1.0
     assert second["correlation_features"][1] == 0.0, "the old life's connect must not leak"
+
+
+def test_the_per_pid_window_gives_the_same_records_as_scanning_the_whole_capture() -> None:
+    """The builder takes each window from the pid's own events (a million-event capture made
+    the full scan quadratic); this is the full scan, kept here as the reference."""
+    import random
+
+    from synthaea_ml.features import correlation
+
+    def reference(events: list[dict], window_ns: int) -> list[dict]:
+        incarnations: dict[tuple[int, int | None], list[dict]] = {}
+        for e in events:
+            incarnations.setdefault((e["pid"], e.get("process_generation")), []).append(e)
+        out = []
+        for (pid, generation), own in sorted(
+            incarnations.items(), key=lambda kv: (kv[0][0], kv[0][1] is None, kv[0][1] or 0)
+        ):
+            execs = [e for e in own if e["type"] == "exec"]
+            if not execs:
+                continue
+            cutoff = max(e["ts_ns"] for e in own) - window_ns
+            window = [e for e in events if e["ts_ns"] >= cutoff]
+            features = correlation.extract_features(window, pid, generation)
+            if features[-1] < 1:
+                continue
+            exec_event = max(execs, key=lambda e: e["ts_ns"])
+            record = {k: v for k, v in exec_event.items() if k not in ("type", "ts_ns")}
+            record["correlation_features"] = features
+            out.append(record)
+        return out
+
+    rng = random.Random(7)
+    events: list[dict] = []
+    for i in range(300):
+        pid = rng.choice([10, 11, 12, 13, 14])  # few pids: recycling and interleaving
+        generation = rng.choice([None, 1, 2, 3])  # unstamped and stamped incarnations mixed
+        ts = i * 7 * S + rng.randrange(S)
+        kind = rng.choice(["exec", "connect", "fileopen", "exec"])
+        event = {"type": kind, "pid": pid, "ts_ns": ts}
+        if generation is not None:
+            event["process_generation"] = generation
+        if kind == "exec":
+            event.update(argv=[f"/usr/bin/t{i % 9}"], parent_comm="bash")
+        elif kind == "connect":
+            event.update(daddr_v4=["10.0.0.1"], dport=443 + i % 4)
+        else:
+            event.update(flags=1)
+        events.append(event)
+    events.sort(key=lambda e: e["ts_ns"])
+
+    for window_ns in (5 * S, 60 * S, 10_000 * S):
+        assert records_from_events(events, window_ns) == reference(events, window_ns)
 
 
 def test_a_process_with_no_exec_yields_no_record() -> None:
@@ -160,7 +214,7 @@ def test_train_behavior_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert (out / "model.onnx").exists()
     metadata = json.loads((out / "model_metadata.json").read_text(encoding="utf-8"))
     assert metadata["feature_bounds"]["feature_names"] == t1.FEATURE_NAMES
-    assert len(metadata["feature_bounds"]["min_values"]) == 23
+    assert len(metadata["feature_bounds"]["min_values"]) == 17
 
     record = load_training_record(out)
     assert record.training_script == "synthaea_ml/training/train_behavior.py"
@@ -172,7 +226,7 @@ def test_train_behavior_end_to_end(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
     graph_input = onnx.load(str(out / "model.onnx")).graph.input[0]
     width = graph_input.type.tensor_type.shape.dim[1].dim_value
-    assert width == 23, "the exported model takes the 23-feature T1 vector"
+    assert width == 17, "the exported model takes the 17-feature T1 vector"
 
 
 def test_train_behavior_refuses_a_capture_too_small_to_calibrate(
@@ -257,6 +311,6 @@ def test_train_behavior_runs_the_t1_robustness_tier_and_records_the_card(
     (call,) = calls
     assert call["tier"] == "T1"
     assert call["events_source"] == malicious
-    assert call["model"].n_features_in_ == 23
+    assert call["model"].n_features_in_ == 17
     (card,) = load_training_record(out).robustness_cards
     assert card.scenario_name == "beacon"

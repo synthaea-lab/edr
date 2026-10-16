@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { provisionTenant } from "@/lib/tenant-provisioning";
 
 const prisma = new PrismaClient();
 
@@ -20,20 +21,28 @@ export async function cleanDatabase() {
   await prisma.contentRelease.deleteMany();
   await prisma.binaryRelease.deleteMany();
   await prisma.agentHealth.deleteMany();
+  await prisma.decoyToken.deleteMany();
   await prisma.agent.deleteMany();
   await prisma.tenant.deleteMany();
+  // Console authentication (#810): users cascade to sessions, accounts and memberships.
+  await prisma.verification.deleteMany();
+  await prisma.invitation.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.organization.deleteMany();
 }
 
 /**
- * Creates a test tenant with a unique name.
+ * Creates a test tenant with a unique name, through the same `provisionTenant` production
+ * code creates one with (#821) — so a test exercises the real pairing (a matching
+ * `Organization` row, and `owner` as its `Member`) instead of a bare `Tenant` row a real
+ * sign-in's `setActiveOrganization` would refuse.
  */
-export async function createTestTenant(name?: string) {
-  return prisma.tenant.create({
-    data: {
-      // Not `Date.now()`: two tenants made in the same millisecond must differ.
-      name: name || `Test Tenant ${randomUUID()}`,
-    },
-  });
+export async function createTestTenant(
+  name?: string,
+  owner?: { userId: string; role?: string }
+) {
+  // Not `Date.now()`: two tenants made in the same millisecond must differ.
+  return provisionTenant(prisma, name || `Test Tenant ${randomUUID()}`, owner);
 }
 
 /**

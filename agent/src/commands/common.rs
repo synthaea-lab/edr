@@ -10,8 +10,8 @@ use tamper::heartbeat::SilenceMonitor;
 
 use crate::{
     health::{
-        DroppedCounter, HealthCollector, HealthCollectorConfig, NoopSpoolStats, SensorHealthSource,
-        SpoolStatsSource,
+        DroppedCounter, HealthCollector, HealthCollectorConfig, HostCountersSource, NoopSpoolStats,
+        RarityStatsSource, SensorHealthSource, SpoolStatsSource,
     },
     ipc_handler::{AgentHandler, SensorHealthSlot},
     silence::SilenceHealthSource,
@@ -36,15 +36,32 @@ pub(crate) struct RunPipeline {
 
 /// Plants the configured canary files and hands the sink the tripwires over them (#81).
 /// Called before the sensors start, so the first touch of a canary is already matched.
+///
+/// The decoy tokens in those canaries are registered, as hashes, with the control plane when
+/// there is one (`transport`); standalone, or with the upload disabled, they are planted and
+/// never recognised anywhere.
 pub(crate) fn plant_canaries(
     sink: &DetectionSink,
     deception: &config::DeceptionConfig,
     storage: &config::StorageConfig,
+    transport: Option<&crate::upload::TransportHandle>,
 ) {
-    if let Some(tripwires) = crate::deception::start(deception, &storage.state_dir) {
+    let (tripwires, decoys) = crate::deception::start_with_decoys(deception, &storage.state_dir);
+    if let Some(tripwires) = tripwires {
         sink.set_tripwires(tripwires);
         sink.set_canary_allow(crate::deception::CanaryAllow::new(deception));
         crate::deception::spawn_refresh(deception.clone(), storage.state_dir.clone());
+    }
+    match transport {
+        Some(handle) => crate::deception::register_decoys_in_background(
+            std::sync::Arc::clone(&handle.client),
+            decoys,
+        ),
+        None if !decoys.is_empty() => tracing::info!(
+            count = decoys.len(),
+            "deception: no control plane, decoy credentials are planted but nothing will recognise them"
+        ),
+        None => {}
     }
 }
 
@@ -84,6 +101,7 @@ pub(crate) fn wire_run_pipeline(
         content_dir,
         &crate::sink::model_root(&storage.state_dir),
     )?);
+    sink.start_correlator_ticker()?;
 
     // Said where the operator reads it (the journal) and in the alert log, where `cli` and
     // the console look: detection runs, upload does not (`offline_fallback`).
@@ -144,6 +162,7 @@ pub(crate) fn wire_run_pipeline(
 pub(crate) fn health_collector(
     pipeline: &RunPipeline,
     silence_monitor: Arc<Mutex<SilenceMonitor>>,
+    host_counters: Arc<dyn HostCountersSource>,
 ) -> HealthCollector {
     let spool_stats: Arc<dyn SpoolStatsSource> = match &pipeline.transport {
         Some(t) => Arc::new(crate::upload::SpoolHealth {
@@ -161,11 +180,20 @@ pub(crate) fn health_collector(
         silence_health,
         spool_stats,
         Arc::new(pipeline.sink.enrich_queue().clone()) as Arc<dyn DroppedCounter>,
+        pipeline.sink.rarity_stats() as Arc<dyn RarityStatsSource>,
+        host_counters,
         move |beacon| {
             tracing::info!(
                 sensors = beacon.sensors.len(),
                 spool_bytes = beacon.spool_bytes,
                 enrich_dropped = beacon.enrich_dropped,
+                rarity_applied = beacon.rarity_applied,
+                rarity_withheld = beacon.rarity_withheld,
+                rarity_unapplied = beacon.rarity_unapplied,
+                watchdog_restarts = beacon.watchdog_restarts,
+                tamper_events = beacon.tamper_events,
+                parent_image_evicted_live = beacon.parent_image_evicted_live,
+                parent_image_evicted_dead = beacon.parent_image_evicted_dead,
                 "health beacon"
             );
             // #24/#134: the dedicated health channel — best-effort, an
@@ -214,7 +242,15 @@ mod tests {
         };
         let monitor = Arc::new(Mutex::new(SilenceMonitor::new()));
 
-        let _collector = health_collector(&pipeline, Arc::clone(&monitor));
+        let _collector = health_collector(
+            &pipeline,
+            Arc::clone(&monitor),
+            Arc::new(crate::host_counters::AgentHostCounters::new(
+                Arc::clone(&pipeline.sink),
+                crate::host_counters::WatchdogReport::default(),
+                None,
+            )),
+        );
         monitor
             .lock()
             .unwrap()

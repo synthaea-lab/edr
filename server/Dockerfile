@@ -1,6 +1,10 @@
 # Synthaea Server - Next.js Control Plane
 FROM node:20-alpine AS base
 
+# Prisma's query engine links against OpenSSL, which node:20-alpine does not ship; without
+# it `prisma generate` guesses libssl 1.1 and the engine fails to load (#743).
+RUN apk add --no-cache openssl
+
 # Install dependencies only when needed
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
@@ -63,5 +67,9 @@ EXPOSE 3000
 
 ENV PORT 3000
 ENV HOSTNAME "0.0.0.0"
+# Next's own SIGTERM handler exits once the HTTP server has closed, possibly before the decoy
+# alarms still being written (ADR-0030 item 6). With this set, instrumentation-node.ts owns
+# shutdown: it flushes them (at most 5 s) and then exits.
+ENV NEXT_MANUAL_SIG_HANDLE true
 
 CMD ["node", "server.js"]

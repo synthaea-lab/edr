@@ -26,3 +26,29 @@ migration; agent identity stays the mTLS enrollment PKI — the two never mix.
 
 All three are facets of the single Next.js app until scale forces a split (the ADR
 records the escape hatch). Postgres schema and migrations live here once scaffolded.
+
+## Console authentication (#810)
+
+better-auth reads and writes its tables (`auth_user`, `auth_session`, `auth_account`,
+`auth_verification`, `auth_organization`, `auth_member`, `auth_invitation`) through the Prisma
+client (`prismaAdapter` in `lib/auth.ts`), so `prisma db push` creates them with the rest of the
+schema. Two constraints follow, both found by running a real login:
+
+- **`middleware.ts` must not import `@/lib/auth`.** It runs in Next's Edge runtime, where Prisma
+  cannot run; it asks the Node route `/api/auth/get-session` over the loopback
+  (`lib/session-lookup.ts`, which fails closed). Server components and route handlers run on Node
+  and call `auth.api.getSession({ headers: await headers() })`; better-auth refuses a call without
+  the headers.
+- **A session's `activeOrganizationId` is the tenant id**, so an organization's id must equal its
+  tenant's. `lib/tenant-provisioning.ts`'s `provisionTenant` creates the pair (#821), called from
+  `POST /api/admin/tenants` with `{ name }`; the caller becomes the tenant's owning member. The
+  route is gated by `PLATFORM_OPERATOR_USER_IDS` (`lib/platform-operator.ts`), a comma-separated
+  allow-list of `auth_user.id` values, not a session role — the caller has no tenant yet at this
+  point, so a role *within* a tenant (`requireTenantAdmin`, #803) cannot gate it. To sign in
+  against the new tenant afterward, call better-auth's own `POST /api/auth/organization/set-active`
+  with `{ organizationId: <the returned tenant id> }`. Organization deletion is disabled
+  (`disableOrganizationDeletion` in `lib/auth.ts`): better-auth's own delete API has no notion of
+  the Tenant/Organization pairing and would orphan the Tenant row.
+
+A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
+if a required one is missing from `prisma/schema.prisma`.
