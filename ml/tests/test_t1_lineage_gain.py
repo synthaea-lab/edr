@@ -17,7 +17,7 @@ from synthaea_ml.evaluation import t1_lineage_gain as gain
 from synthaea_ml.features import t1
 
 S = 1_000_000_000
-LINEAGE_COLUMNS = slice(gain.BASELINE_FEATURE_COUNT, t1.FEATURE_COUNT)
+LINEAGE_COLUMNS = slice(gain.BASELINE_FEATURE_COUNT, gain.MEASURED_FEATURE_COUNT)
 
 
 # has_parent, parent_is_shell, parent_is_webserver, parent_is_office, parent_in_system_path,
@@ -40,7 +40,7 @@ BENIGN_LINEAGE_WEIGHTS = [0.35, 0.25, 0.1, 0.1, 0.1, 0.1]
 
 def _benign(rng: np.random.Generator, n: int) -> np.ndarray:
     """Varied benign vectors: noisy cmdline and context, one of the ordinary lineages."""
-    matrix = rng.normal(loc=5.0, scale=1.0, size=(n, t1.FEATURE_COUNT))
+    matrix = rng.normal(loc=5.0, scale=1.0, size=(n, gain.MEASURED_FEATURE_COUNT))
     matrix[:, LINEAGE_COLUMNS] = BENIGN_LINEAGES[
         rng.choice(len(BENIGN_LINEAGES), size=n, p=BENIGN_LINEAGE_WEIGHTS)
     ]
@@ -97,7 +97,8 @@ def test_a_malicious_run_that_differs_only_in_its_command_line_gains_nothing_fro
 
 def test_the_baseline_is_the_vector_without_its_lineage_block() -> None:
     assert gain.BASELINE_FEATURE_COUNT == 17
-    assert t1.FEATURE_NAMES[gain.BASELINE_FEATURE_COUNT :][0] == "has_parent_lineage"
+    assert gain.BASELINE_FEATURE_COUNT == t1.FEATURE_COUNT
+    assert gain.measured_features({"argv": ["x"]})[17:] == [0.0] * 6
 
 
 def test_a_benign_set_too_small_to_split_is_refused() -> None:
@@ -116,7 +117,7 @@ def test_identical_benign_vectors_count_once() -> None:
 def test_no_malicious_vector_is_refused_not_reported_as_zero_detection() -> None:
     rng = np.random.default_rng(4)
     with pytest.raises(ValueError, match="no malicious"):
-        gain.measure_gain(_benign(rng, 100), np.empty((0, t1.FEATURE_COUNT)), seeds=2)
+        gain.measure_gain(_benign(rng, 100), np.empty((0, gain.MEASURED_FEATURE_COUNT)), seeds=2)
 
 
 def test_a_matrix_of_the_wrong_width_is_refused() -> None:
@@ -213,4 +214,4 @@ def test_the_malicious_matrix_leaves_the_runner_itself_out(tmp_path: Path) -> No
         ),
     ]
     matrix = gain.malicious_matrix(_capture(tmp_path, events), 100, 5 * S, 20 * S)
-    assert matrix.shape == (1, t1.FEATURE_COUNT)
+    assert matrix.shape == (1, gain.MEASURED_FEATURE_COUNT)

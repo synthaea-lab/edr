@@ -26,6 +26,11 @@ export const HealthBeacon = z.object({
   spool_bytes: counter,
   spool_dropped: counter,
   enrich_dropped: counter,
+  // ADR-0020 / #76. Absent from an agent that predates them: counted as zero, so such an
+  // agent's beacon is still stored.
+  rarity_applied: counter.default(0),
+  rarity_withheld: counter.default(0),
+  rarity_unapplied: counter.default(0),
 });
 export type HealthBeacon = z.infer<typeof HealthBeacon>;
 

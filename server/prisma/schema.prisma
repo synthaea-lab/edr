@@ -60,15 +60,24 @@ model Agent {
 // each beacon: bounded by fleet size, not by uptime. A time series (loss-counter
 // rates, sensor flapping) is a later slice and needs its own retention.
 model AgentHealth {
-  agentId       String   @id @map("agent_id")
-  tenantId      String   @map("tenant_id")
-  beaconAt      DateTime @map("beacon_at") // the agent's own clock
-  receivedAt    DateTime @map("received_at")
-  agentVersion  String   @map("agent_version")
-  spoolBytes    BigInt   @map("spool_bytes")
-  spoolDropped  BigInt   @map("spool_dropped")
-  enrichDropped BigInt   @map("enrich_dropped")
-  sensors       Json // [{ name, pulse_count, silent }]
+  agentId         String    @id @map("agent_id")
+  tenantId        String    @map("tenant_id")
+  beaconAt        DateTime  @map("beacon_at") // the agent's own clock
+  receivedAt      DateTime  @map("received_at")
+  agentVersion    String    @map("agent_version")
+  spoolBytes      BigInt    @map("spool_bytes")
+  spoolDropped    BigInt    @map("spool_dropped")
+  enrichDropped   BigInt    @map("enrich_dropped")
+  // When the control plane last saw a loss counter (spool or enrichment queue) rise between two
+  // beacons, by its own clock (issue #83). The counters are cumulative since the agent started and
+  // only the latest beacon is kept, so "recent loss" has to be remembered, not derived.
+  lossObservedAt  DateTime? @map("loss_observed_at")
+  // The common-set rarity evidence counters (ADR-0020, issue #76); zero for an agent that
+  // predates them.
+  rarityApplied   BigInt    @default(0) @map("rarity_applied")
+  rarityWithheld  BigInt    @default(0) @map("rarity_withheld")
+  rarityUnapplied BigInt    @default(0) @map("rarity_unapplied")
+  sensors         Json // [{ name, pulse_count, silent }]
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
@@ -382,4 +391,130 @@ model HuntRun {
 
   @@index([huntId, startedAt])
   @@map("hunt_runs")
+}
+
+// --- Console authentication (better-auth, ADR-0003, issue #810) ---------------------------
+//
+// The tables better-auth reads and writes through `prismaAdapter` (`lib/auth.ts`), with its
+// own model and field names (`user`, `session`, ...), so `prisma db push` creates them with
+// the rest of the schema. The fields are the ones `getAuthTables` reports for better-auth 1.7
+// with the organization plugin; a better-auth upgrade can add some, so re-check them then
+// (`tests/integration/console-auth.test.ts` fails if a required one is missing).
+//
+// `Organization` is better-auth's tenancy primitive and `Tenant` above is this app's: the
+// middleware uses a session's `activeOrganizationId` as the tenant id, so an organization's
+// id must equal its tenant's id. Nothing creates the pair yet (admin-only tenant creation is
+// configured, not built).
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  sessions    Session[]
+  accounts    Account[]
+  members     Member[]
+  invitations Invitation[]
+
+  @@map("auth_user")
+}
+
+model Session {
+  id                   String   @id
+  expiresAt            DateTime @map("expires_at")
+  token                String   @unique
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at")
+  ipAddress            String?  @map("ip_address")
+  userAgent            String?  @map("user_agent")
+  userId               String   @map("user_id")
+  activeOrganizationId String?  @map("active_organization_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id")
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([identifier])
+  @@map("auth_verification")
+}
+
+model Organization {
+  id        String   @id
+  name      String
+  slug      String   @unique
+  logo      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  metadata  String?
+
+  members     Member[]
+  invitations Invitation[]
+
+  @@map("auth_organization")
+}
+
+model Member {
+  id             String   @id
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  role           String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([userId])
+  @@map("auth_member")
+}
+
+model Invitation {
+  id             String   @id
+  organizationId String   @map("organization_id")
+  email          String
+  role           String?
+  status         String
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  inviterId      String   @map("inviter_id")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter      User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("auth_invitation")
 }
