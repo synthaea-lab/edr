@@ -65,11 +65,11 @@ carries the earlier content.
 - A corrective release over a modified path is a direct publish, no restoring step, since the
   store is hash-keyed (#804). The store only grows: nothing prunes a hash once every release
   that referenced it is gone, which is its own follow-up (#834).
-- The admin-role gap on the release and rollback routes (they checked a session and a tenant but
-  not an administrator role although their docstrings said so, predating this ADR) is fixed by
-  #803/#831, not by this change. After an agent was pointed at another ring the "stays on
-  release N" message can still be wrong, because the agent's applied-entries state is one map
-  for all rings (#666) — not changed here.
+- The admin-role gap on the release, rollback and halt routes (they checked a session and a
+  tenant but not an administrator role although their docstrings said so, predating this ADR)
+  is fixed by #803/#831: all three now require an `owner` or `admin` member of the tenant. After
+  an agent was pointed at another ring the "stays on release N" message can still be wrong,
+  because the agent's applied-entries state is one map for all rings (#666) — not changed here.
 - No new trust primitive, no change to what an attacker who can replay old manifests can do, and
   no new thing to verify, rotate or revoke.
 - Withdrawing content takes a signing step. With the custody of the production keys still open

@@ -26,3 +26,7 @@ notes: >
   signature requests first: the alert paired the shell with an earlier 404 request 11 s away
   instead of this one, which the log line (written after the response) reaches the agent just
   after the shell. Not reproduced when the scenario runs alone.
+  Validated 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68 + PHP-FPM 8.4.26 (workers run as `apache`, the
+  shell answers as `httpd_t`), access log /var/log/httpd/access_log: T1505.003 names the request
+  (GET /uploads/c99.php param=cmd, status 200, 0 s), T1059 reports `executed directly by ...
+  php-fpm (service)`. No change to the stock SELinux policy was needed.

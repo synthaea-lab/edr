@@ -10,6 +10,8 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
 use policy::ResponsePolicy;
@@ -61,6 +63,11 @@ pub(crate) struct DetectionSink {
     /// `reload_content`, like the engines above, so a reader never sees a half-loaded
     /// filter; nothing reads it on the capture path yet (the lookup is the next slice).
     common_set: Arc<Mutex<Option<Arc<ml::features::common_set::CommonSetSnapshot>>>>,
+    /// What became of the rarity judgements, for the health beacon.
+    rarity_stats: Arc<RarityStats>,
+    /// Tamper-class alerts raised since the agent started (a sensor confirmed silent, a shipped
+    /// binary or its manifest that no longer verifies), for the health beacon (#863).
+    tamper_events: AtomicU64,
     /// The single alert funnel (issue #388): alerts.ndjson + stderr + the
     /// in-memory recent-alerts buffer served to `cli detections`. Shared with
     /// the YARA scan worker and quarantine.
@@ -385,6 +392,63 @@ fn locate_model_dir(roots: &[&Path], family: &str) -> std::path::PathBuf {
 }
 
 impl DetectionSink {
+    /// Starts the one-second clock that expires pending web-shell correlations even
+    /// when the sensor has stopped producing events. The worker holds only a `Weak`
+    /// reference while sleeping, and releases the correlator mutex before log I/O.
+    pub(crate) fn start_correlator_ticker(self: &Arc<Self>) -> std::io::Result<()> {
+        let sink = Arc::downgrade(self);
+        thread::Builder::new()
+            .name("correlator-tick".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_secs(1));
+                    let Some(sink) = sink.upgrade() else {
+                        break;
+                    };
+                    sink.advance_correlation_time(schema::time::now_ns());
+                }
+            })?;
+        Ok(())
+    }
+
+    fn advance_correlation_time(&self, now_ns: u64) {
+        let alerts = {
+            let mut correlator = self.correlator.lock().unwrap();
+            correlator.advance_time(now_ns)
+        };
+        self.emit_correlator_alerts(&alerts, None);
+    }
+
+    fn emit_correlator_alerts(
+        &self,
+        alerts: &[correlator::CorrelationAlert],
+        default_event: Option<&Event>,
+    ) {
+        let mut high_confidence_pid = None;
+        for alert in alerts {
+            let Some(event) = alert.trigger_event.as_deref().or(default_event) else {
+                continue;
+            };
+            let entity = entity_key(event.meta());
+            let case_id = correlator_case_id(&entity);
+            let source = schema::detection::DetectionSource::Correlator { case_id };
+            self.record_and_emit(
+                &entity,
+                alert.technique,
+                &alert.message,
+                source,
+                alert.severity,
+                event,
+            );
+            if crosses_kill_gate(alert.technique) {
+                high_confidence_pid = Some(event.meta().pid);
+            }
+        }
+        if let Some(pid) = high_confidence_pid {
+            self.maybe_kill(pid);
+        }
+    }
+
     /// `rule_state` arrives already seeded by the caller (from /proc or the
     /// platform's process list — see `commands`). `spool` is the transport
     /// spool (`run --server`), `None` when the agent runs standalone.
@@ -424,7 +488,9 @@ impl DetectionSink {
         let common_set = Arc::new(Mutex::new(
             load_common_set(&content_root).into_option().map(Arc::new),
         ));
-        let (rarity_correlator, rarity_common_set) = (correlator.clone(), common_set.clone());
+        let rarity_stats = Arc::new(RarityStats::default());
+        let (rarity_correlator, rarity_common_set, worker_rarity_stats) =
+            (correlator.clone(), common_set.clone(), rarity_stats.clone());
         let (gate_verdict, gate_alert_log) = (verdict.clone(), alert_log.clone());
         let (gate_spool, worker_spool) = (detection_spool.clone(), detection_spool.clone());
         let enrich_queue = EnrichQueue::start_with_detections(
@@ -438,7 +504,12 @@ impl DetectionSink {
                     record_rule_alert(&gate_verdict, &gate_alert_log, &event, &alert, persist);
                 }
                 if let Event::Exec(exec) = &event {
-                    note_image_rarity(&rarity_correlator, &rarity_common_set, exec);
+                    note_image_rarity(
+                        &rarity_correlator,
+                        &rarity_common_set,
+                        &worker_rarity_stats,
+                        exec,
+                    );
                 }
                 if let Some(events_log) = &events_log {
                     events_log.write(&event);
@@ -460,6 +531,8 @@ impl DetectionSink {
             ml_scorer: Mutex::new(Self::load_correlation_scorer(model_root)),
             sigma: Mutex::new(load_sigma_rules(&content_root).into_option()),
             common_set,
+            rarity_stats,
+            tamper_events: AtomicU64::new(0),
             yara: Mutex::new(
                 start_yara(
                     &content_root,
@@ -1002,29 +1075,7 @@ impl DetectionSink {
         // condemn every later, unrelated sibling that merely shares the same
         // parent and `comm` (PR #502 review; pinned by
         // `a_siblings_weak_alert_never_triggers_kill_from_anothers_bayes_crossing`).
-        let meta = event.meta();
-        let entity = entity_key(meta);
-        let case_id = correlator_case_id(&entity);
-        let mut is_high_confidence = false;
-        for alert in &alerts {
-            let source = schema::detection::DetectionSource::Correlator {
-                case_id: case_id.clone(),
-            };
-            self.record_and_emit(
-                &entity,
-                alert.technique,
-                &alert.message,
-                source,
-                alert.severity,
-                event,
-            );
-            if crosses_kill_gate(alert.technique) {
-                is_high_confidence = true;
-            }
-        }
-        if is_high_confidence {
-            self.maybe_kill(pid);
-        }
+        self.emit_correlator_alerts(&alerts, Some(event));
     }
 
     /// Issue #25: policy-gates killing the process behind a high-confidence
@@ -1278,6 +1329,19 @@ impl DetectionSink {
         self.alert_log.record(technique, message.to_string());
     }
 
+    /// [`Self::emit`] for an alert that says the agent itself is being impaired or no longer
+    /// matches what was shipped (a silent sensor, a failed integrity or signature check), which
+    /// the health beacon counts so the control plane can show a host where that happened (#863).
+    pub(crate) fn emit_tamper(&self, technique: &str, message: &str) {
+        self.tamper_events.fetch_add(1, Ordering::Relaxed);
+        self.emit(technique, message);
+    }
+
+    /// Tamper-class alerts raised since the agent started, for the health beacon.
+    pub(crate) fn tamper_events(&self) -> u64 {
+        self.tamper_events.load(Ordering::Relaxed)
+    }
+
     /// Issue #613: an operator's request to silence `technique` on the entity
     /// `(ppid, comm)` in the fused verdict. Returns whether the mark is new.
     /// Audited as `VERDICT-SUPPRESS` in the alert log, which itself keeps every
@@ -1351,6 +1415,11 @@ impl DetectionSink {
     #[cfg(test)]
     fn common_set(&self) -> Option<Arc<ml::features::common_set::CommonSetSnapshot>> {
         self.common_set.lock().unwrap().clone()
+    }
+
+    /// The rarity evidence counters, for the health beacon (ADR-0020, #76).
+    pub(crate) fn rarity_stats(&self) -> Arc<RarityStats> {
+        Arc::clone(&self.rarity_stats)
     }
 
     /// Handle to the alert funnel, for the IPC handler's `recent_detections`
@@ -1437,6 +1506,25 @@ fn load_sigma_rules(content_root: &Path) -> Load<sigma::SigmaEngine> {
 /// (slice 6 of `docs/detection/fleet-prevalence-snapshot-plan.md`).
 const RARITY_MIN_HOSTS_COVERED: u64 = 10;
 
+/// What became of the rarity judgements since start, for the health beacon (ADR-0020, #76).
+/// Plain atomics: bumped on the enrichment worker, read by the beacon thread.
+#[derive(Default)]
+pub(crate) struct RarityStats {
+    applied: AtomicU64,
+    withheld: AtomicU64,
+    unapplied: AtomicU64,
+}
+
+impl crate::health::RarityStatsSource for RarityStats {
+    fn rarity_counts(&self) -> crate::health::RarityCounts {
+        crate::health::RarityCounts {
+            applied: self.applied.load(Ordering::Relaxed),
+            withheld: self.withheld.load(Ordering::Relaxed),
+            unapplied: self.unapplied.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// What the fleet's common set says about one executed image.
 #[derive(Debug, PartialEq, Eq)]
 enum Rarity {
@@ -1478,26 +1566,37 @@ fn rarity_evidence(
 fn note_image_rarity(
     correlator: &Mutex<correlator::CorrelationEngine>,
     common_set: &Mutex<Option<Arc<ml::features::common_set::CommonSetSnapshot>>>,
+    stats: &RarityStats,
     exec: &schema::ExecEvent,
 ) {
     let snapshot = common_set.lock().unwrap().clone();
-    if rarity_evidence(
+    match rarity_evidence(
         exec.sha256.as_deref(),
         snapshot.as_deref(),
         RARITY_MIN_HOSTS_COVERED,
-    ) != Rarity::NotInCommonSet
-    {
-        return;
+    ) {
+        Rarity::InCommonSet => {}
+        Rarity::Withheld => {
+            stats.withheld.fetch_add(1, Ordering::Relaxed);
+        }
+        Rarity::NotInCommonSet => {
+            let applied = correlator
+                .lock()
+                .unwrap()
+                .apply_rarity_evidence(exec.meta.pid, exec.meta.process_generation);
+            let counter = if applied {
+                &stats.applied
+            } else {
+                &stats.unapplied
+            };
+            counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(
+                pid = exec.meta.pid,
+                applied,
+                "rarity: image not in the common set"
+            );
+        }
     }
-    let applied = correlator
-        .lock()
-        .unwrap()
-        .apply_rarity_evidence(exec.meta.pid, exec.meta.process_generation);
-    tracing::debug!(
-        pid = exec.meta.pid,
-        applied,
-        "rarity: image not in the common set"
-    );
 }
 
 /// The largest snapshot file the agent reads. The content manifest allows an artifact of up to
@@ -1792,6 +1891,7 @@ impl EventSink for DetectionSink {
                 self.record_rule_alerts(&event, rules::evaluate_defender_event(e));
             }
             Event::LdapSearch(e) => self.detect_ldap_search(&event, e),
+            Event::NtlmAuth(e) => self.record_rule_alerts(&event, rules::evaluate_ntlm_auth(e)),
             Event::PolicyDenial(e) => self.detect_policy_denial(&event, e),
             Event::PackageChange(e) => {
                 self.record_rule_alerts(&event, rules::evaluate_package_change(e));
@@ -1894,7 +1994,11 @@ impl EventSink for BaselineSink {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, atomic::Ordering};
+    use std::{
+        sync::{Arc, Mutex, atomic::Ordering},
+        thread,
+        time::Duration,
+    };
 
     use schema::{ConnectEvent, Event, EventMeta, ExecEvent, User, sensor::EventSink as _};
 
@@ -1944,6 +2048,59 @@ mod tests {
 
     fn alerts_in(dir: &std::path::Path) -> String {
         std::fs::read_to_string(dir.join("alerts.ndjson")).unwrap_or_default()
+    }
+
+    #[test]
+    fn advancing_the_correlator_clock_emits_a_silent_shell_alert() {
+        let dir = tmp("correlator-tick");
+        let sink = sink_in(&dir);
+        let now = schema::time::now_ns();
+        let mut meta = schema::fixtures::meta();
+        meta.pid = 9_031;
+        meta.ppid = 500;
+        meta.comm = "sh".into();
+        meta.timestamp_ns = now.saturating_sub(10_000_000_000);
+        let shell = Event::Exec(ExecEvent {
+            meta,
+            image_path: "/usr/bin/sh".into(),
+            parent_comm: Some("nginx".into()),
+            ..schema::fixtures::exec()
+        });
+
+        sink.on_event(shell);
+        assert!(!alerts_in(&dir).contains("T1505.003"));
+        sink.advance_correlation_time(now);
+        let alerts = alerts_in(&dir);
+        assert!(alerts.contains("T1505.003"), "{alerts}");
+        assert!(alerts.contains("no matching"), "{alerts}");
+    }
+
+    #[test]
+    fn the_correlator_ticker_emits_without_a_following_event() {
+        let dir = tmp("correlator-ticker-thread");
+        let sink = sink_in(&dir);
+        let now = schema::time::now_ns();
+        let mut meta = schema::fixtures::meta();
+        meta.pid = 9_032;
+        meta.ppid = 500;
+        meta.comm = "sh".into();
+        meta.timestamp_ns = now.saturating_sub(10_000_000_000);
+        let shell = Event::Exec(ExecEvent {
+            meta,
+            image_path: "/usr/bin/sh".into(),
+            parent_comm: Some("nginx".into()),
+            ..schema::fixtures::exec()
+        });
+
+        sink.on_event(shell);
+        sink.start_correlator_ticker().unwrap();
+        for _ in 0..30 {
+            if alerts_in(&dir).contains("T1505.003") {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        panic!("the one-second ticker did not emit the idle shell alert");
     }
 
     /// Quarantine hooks + the alert log they audit into, over a real directory
@@ -2794,6 +2951,46 @@ rule response_marker {
             events_log.contains("/bin/ls"),
             "raw event log written off-thread"
         );
+    }
+
+    // --- tamper-class alerts are counted for the health beacon (#863) ---
+
+    fn sink_for_counting(dir: &std::path::Path) -> DetectionSink {
+        DetectionSink::new(
+            rules::RuleState::new(),
+            &dir.join("alerts.ndjson"),
+            None,
+            None,
+            None,
+            &dir.join("content"),
+            &dir.join("ml-registry"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_tamper_alert_is_recorded_like_any_alert_and_counted() {
+        let dir = tmp("tamper-count");
+        let sink = sink_for_counting(&dir);
+        assert_eq!(sink.tamper_events(), 0);
+
+        sink.emit_tamper("T1562", "sensor linux-journal went silent");
+        sink.emit_tamper("T1601", "binary swapped");
+
+        assert_eq!(sink.tamper_events(), 2);
+        let alerts = std::fs::read_to_string(dir.join("alerts.ndjson")).unwrap();
+        assert!(alerts.contains("T1562") && alerts.contains("sensor linux-journal went silent"));
+        assert!(alerts.contains("T1601") && alerts.contains("binary swapped"));
+    }
+
+    #[test]
+    fn an_ordinary_alert_is_not_a_tamper_event() {
+        let dir = tmp("tamper-not-counted");
+        let sink = sink_for_counting(&dir);
+
+        sink.emit("T1059", "command line contains a base64 decode");
+
+        assert_eq!(sink.tamper_events(), 0);
     }
 
     #[test]
@@ -4088,6 +4285,102 @@ rule reload_content_test_marker {
             super::rarity_evidence(Some("not-a-hash"), Some(&wide), 10),
             super::Rarity::Withheld
         );
+    }
+
+    /// An exec whose hash is `sha256`, for [`note_image_rarity`].
+    fn exec_hashed(pid: u32, sha256: Option<&str>) -> ExecEvent {
+        ExecEvent {
+            meta: EventMeta {
+                pid,
+                ..schema::fixtures::meta()
+            },
+            sha256: sha256.map(str::to_owned),
+            ..schema::fixtures::exec()
+        }
+    }
+
+    /// The counts after one exec, against an engine that has (or has not) correlated it.
+    fn rarity_counts_after(
+        case: &str,
+        sha256: Option<String>,
+        correlated: bool,
+    ) -> crate::health::RarityCounts {
+        use ml::features::common_set::CommonSetSnapshot;
+
+        use crate::health::RarityStatsSource as _;
+
+        let snapshot = CommonSetSnapshot::parse(&golden_common_set(case).0).unwrap();
+        let exec = exec_hashed(7_001, sha256.as_deref());
+        let mut engine = correlator::CorrelationEngine::new();
+        if correlated {
+            engine.on_event(Event::Exec(exec.clone()));
+        }
+        let stats = super::RarityStats::default();
+        super::note_image_rarity(
+            &Mutex::new(engine),
+            &Mutex::new(Some(Arc::new(snapshot))),
+            &stats,
+            &exec,
+        );
+        stats.rarity_counts()
+    }
+
+    #[test]
+    fn rarity_counts_an_applied_evidence() {
+        let absent = golden_non_member("fifty_hashes_one_percent");
+        let counts = rarity_counts_after("fifty_hashes_one_percent", Some(absent), true);
+        assert_eq!(
+            (counts.applied, counts.withheld, counts.unapplied),
+            (1, 0, 0)
+        );
+    }
+
+    #[test]
+    fn rarity_counts_evidence_that_found_no_belief_to_land_on() {
+        // The correlator evicted (or never created) the process's belief: the loss is
+        // counted, not silent.
+        let absent = golden_non_member("fifty_hashes_one_percent");
+        let counts = rarity_counts_after("fifty_hashes_one_percent", Some(absent), false);
+        assert_eq!(
+            (counts.applied, counts.withheld, counts.unapplied),
+            (0, 0, 1)
+        );
+    }
+
+    #[test]
+    fn rarity_counts_a_withheld_judgement_whatever_the_reason() {
+        let absent = golden_non_member("fifty_hashes_one_percent");
+        // A snapshot too thin to judge by, then an exec with no hash.
+        let thin = rarity_counts_after("one_hash", Some(absent), true);
+        let no_hash = rarity_counts_after("fifty_hashes_one_percent", None, true);
+        assert_eq!((thin.applied, thin.withheld, thin.unapplied), (0, 1, 0));
+        assert_eq!(
+            (no_hash.applied, no_hash.withheld, no_hash.unapplied),
+            (0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn rarity_counts_nothing_for_an_image_the_fleet_knows() {
+        let member = golden_common_set("fifty_hashes_one_percent").1[0].clone();
+        let counts = rarity_counts_after("fifty_hashes_one_percent", Some(member), true);
+        assert_eq!(
+            (counts.applied, counts.withheld, counts.unapplied),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn rarity_counts_withheld_with_no_snapshot_at_all() {
+        use crate::health::RarityStatsSource as _;
+        let stats = super::RarityStats::default();
+        super::note_image_rarity(
+            &Mutex::new(correlator::CorrelationEngine::new()),
+            &Mutex::new(None),
+            &stats,
+            &exec_hashed(7_002, Some(&"ab".repeat(32))),
+        );
+        assert_eq!(stats.rarity_counts().withheld, 1);
     }
 
     /// A version-1 snapshot built here (the layout in

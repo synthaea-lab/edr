@@ -60,19 +60,31 @@ model Agent {
 // each beacon: bounded by fleet size, not by uptime. A time series (loss-counter
 // rates, sensor flapping) is a later slice and needs its own retention.
 model AgentHealth {
-  agentId        String    @id @map("agent_id")
-  tenantId       String    @map("tenant_id")
-  beaconAt       DateTime  @map("beacon_at") // the agent's own clock
-  receivedAt     DateTime  @map("received_at")
-  agentVersion   String    @map("agent_version")
-  spoolBytes     BigInt    @map("spool_bytes")
-  spoolDropped   BigInt    @map("spool_dropped")
-  enrichDropped  BigInt    @map("enrich_dropped")
+  agentId                String    @id @map("agent_id")
+  tenantId               String    @map("tenant_id")
+  beaconAt               DateTime  @map("beacon_at") // the agent's own clock
+  receivedAt             DateTime  @map("received_at")
+  agentVersion           String    @map("agent_version")
+  spoolBytes             BigInt    @map("spool_bytes")
+  spoolDropped           BigInt    @map("spool_dropped")
+  enrichDropped          BigInt    @map("enrich_dropped")
   // When the control plane last saw a loss counter (spool or enrichment queue) rise between two
   // beacons, by its own clock (issue #83). The counters are cumulative since the agent started and
   // only the latest beacon is kept, so "recent loss" has to be remembered, not derived.
-  lossObservedAt DateTime? @map("loss_observed_at")
-  sensors        Json // [{ name, pulse_count, silent }]
+  lossObservedAt         DateTime? @map("loss_observed_at")
+  // The common-set rarity evidence counters (ADR-0020, issue #76); zero for an agent that
+  // predates them.
+  rarityApplied          BigInt    @default(0) @map("rarity_applied")
+  rarityWithheld         BigInt    @default(0) @map("rarity_withheld")
+  rarityUnapplied        BigInt    @default(0) @map("rarity_unapplied")
+  // Self-protection and cache counters (issue #863); zero for an agent that predates them.
+  // Cumulative since the agent started, except `watchdogRestarts`, which is the watchdog's own
+  // count since it started. Shown on the fleet page; none of them makes a host degraded.
+  watchdogRestarts       BigInt    @default(0) @map("watchdog_restarts")
+  tamperEvents           BigInt    @default(0) @map("tamper_events")
+  parentImageEvictedLive BigInt    @default(0) @map("parent_image_evicted_live")
+  parentImageEvictedDead BigInt    @default(0) @map("parent_image_evicted_dead")
+  sensors                Json // [{ name, pulse_count, silent }]
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 

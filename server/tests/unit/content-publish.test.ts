@@ -8,11 +8,13 @@ import { join } from "path";
 const db = vi.hoisted(() => ({
   contentRelease: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   auditLog: { create: vi.fn() },
+  member: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST as publish } from "@/app/api/content/release/route";
 import { POST as rollback } from "@/app/api/content/rollback/route";
+import { POST as halt } from "@/app/api/content/halt/route";
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
 
@@ -82,6 +84,9 @@ beforeEach(() => {
   db.contentRelease.findFirst.mockResolvedValue({ releaseVersion: 4, status: "rolled_back" });
   db.contentRelease.create.mockImplementation(async ({ data }) => ({ id: "r5", ...data }));
   db.auditLog.create.mockResolvedValue({});
+  // The caller is the tenant's owner by default (#803); tests of the admin check itself
+  // override this.
+  db.member.findFirst.mockResolvedValue({ role: "owner" });
 });
 
 afterEach(() => {
@@ -266,5 +271,156 @@ describe("POST /api/content/rollback: it says what it does not do (#665)", () =>
       orderBy: { releaseVersion: "desc" },
       select: { releaseVersion: true },
     });
+  });
+});
+
+describe("content/release, content/rollback and content/halt require the admin role (#803)", () => {
+  function rollbackReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
+    return new NextRequest("http://localhost/api/content/rollback", {
+      method: "POST",
+      headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function haltReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
+    return new NextRequest("http://localhost/api/content/halt", {
+      method: "POST",
+      headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("refuses a plain member on all three routes, before any of them reads its body", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+
+    const publishRes = await publish(post(publishBody(manifest)));
+    expect(publishRes.status).toBe(403);
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+
+    const rollbackRes = await rollback(rollbackReq());
+    expect(rollbackRes.status).toBe(403);
+    expect(db.contentRelease.update).not.toHaveBeenCalled();
+
+    const haltRes = await halt(haltReq());
+    expect(haltRes.status).toBe(403);
+    expect(db.contentRelease.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller with no membership row at all", async () => {
+    db.member.findFirst.mockResolvedValue(null);
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(403);
+  });
+
+  it("accepts an admin member, not only an owner", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "admin" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+  });
+
+  it("accepts a member whose role is a comma-separated list including admin or owner", async () => {
+    // better-auth stores several roles as one comma-separated string (`updateMemberRole`
+    // takes an array); a caller given two roles must not be refused because the whole
+    // string never equals "admin" or "owner".
+    db.member.findFirst.mockResolvedValue({ role: "admin,member" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+  });
+
+  it("looks the membership up by the caller's own tenant and user id", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest)));
+    expect(db.member.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: "t1", userId: "u1" },
+      select: { role: true },
+    });
+  });
+
+  it("refuses a member with an invalid body with 403, not the schema's 400 (review of #831)", async () => {
+    // Pins the gate running before the body is parsed: if a route were reordered to
+    // validate the body first, a member sending garbage would get 400 instead of 403.
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await publish(post({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid rollback body with 403, not the schema's 400", async () => {
+    // The first such test (above) only exercised /release; the gate runs identically before
+    // the body is read on every one of the three routes, not just that one (review of #831).
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await rollback(rollbackReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid halt body with 403, not the schema's 400", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await halt(haltReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("accepts a comma-separated role including admin or owner on a route other than release", async () => {
+    // The release-only version of this test (above) could pass even if another route's own
+    // split/compare had a bug of its own; this pins the same behavior on rollback too
+    // (review of #831).
+    db.contentRelease.findFirst
+      .mockResolvedValueOnce({ id: "r4", releaseVersion: 4, status: "active" })
+      .mockResolvedValueOnce({ id: "r2", releaseVersion: 2, status: "active" })
+      .mockResolvedValueOnce({ releaseVersion: 4 });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    db.member.findFirst.mockResolvedValue({ role: "member,admin" });
+    expect((await rollback(rollbackReq())).status).toBe(200);
+  });
+
+  it("a caller with no tenant context (no active organization) gets a clean 401, not a 500", async () => {
+    // getTenantId/getUserId throw when the middleware found no active organization to set
+    // x-tenant-id/x-user-id from; requireTenantAdmin must not let that fall through to the
+    // route's generic catch, which would answer 500 (review of #831).
+    const req = new NextRequest("http://localhost/api/content/release", {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // no x-tenant-id, no x-user-id
+      body: JSON.stringify({ ring: "canary_0" }),
+    });
+    const res = await publish(req);
+    expect(res.status).toBe(401);
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+  });
+
+  it("halts the ring for an admin and audits it", async () => {
+    db.contentRelease.findFirst.mockResolvedValue({ id: "r4", releaseVersion: 4, status: "active" });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    const res = await halt(haltReq());
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.update).toHaveBeenCalledWith({
+      where: { id: "r4" },
+      data: { status: "halted" },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe("content/release marks a corrective release in its audit entry (#803)", () => {
+  it("records restoresVersion and corrective:true when the publish names the release it restores", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest, { restoresVersion: 2 })));
+    const details = db.auditLog.create.mock.calls[0][0].data.details;
+    expect(details.corrective).toBe(true);
+    expect(details.restoresVersion).toBe(2);
+  });
+
+  it("records corrective:false for an ordinary release", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest)));
+    const details = db.auditLog.create.mock.calls[0][0].data.details;
+    expect(details.corrective).toBe(false);
+    expect(details.restoresVersion).toBeNull();
   });
 });

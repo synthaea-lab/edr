@@ -36,7 +36,18 @@ const getFleet = async (tenantId: string) =>
   ).agents as {
     id: string;
     status: string;
-    health: { spoolDropped: number; lossObservedAt: string | null; sensors: unknown[] } | null;
+    health: {
+      spoolDropped: number;
+      lossObservedAt: string | null;
+      rarityApplied: number;
+      rarityWithheld: number;
+      rarityUnapplied: number;
+      watchdogRestarts: number;
+      tamperEvents: number;
+      parentImageEvictedLive: number;
+      parentImageEvictedDead: number;
+      sensors: unknown[];
+    } | null;
   }[];
 
 describe("fleet health against a real database (issue #83)", () => {
@@ -129,6 +140,23 @@ describe("fleet health against a real database (issue #83)", () => {
       expect((await getFleet(tenant.id))[0].status).toBe("healthy");
     });
 
+    it("does not degrade a host for the watchdog, tamper or eviction counters: they are shown, not loss (#863)", async () => {
+      const tenant = await createTestTenant();
+      await createTestAgent(tenant.id, "agent-l7");
+      await beat("agent-l7", { beacon: at(0) });
+      await beat("agent-l7", {
+        beacon: at(30, {
+          watchdog_restarts: 4,
+          tamper_events: 9,
+          parent_image_evicted_live: 500,
+          parent_image_evicted_dead: 90000,
+        }),
+      });
+      const [row] = await getFleet(tenant.id);
+      expect(row.status).toBe("healthy");
+      expect(row.health?.lossObservedAt).toBeNull();
+    });
+
     it("ignores a beacon older than the stored one instead of storing its lower counters", async () => {
       const tenant = await createTestTenant();
       const agent = await createTestAgent(tenant.id, "agent-l6");
@@ -139,6 +167,61 @@ describe("fleet health against a real database (issue #83)", () => {
       expect(Number(row.spoolDropped)).toBe(50);
       await beat("agent-l6", { beacon: at(90, { spool_dropped: 50 }) });
       expect((await getFleet(tenant.id))[0].status).toBe("healthy"); // no false loss from the late one
+    });
+  });
+
+  it("stores the rarity evidence counters and shows them in the fleet view (ADR-0020, #76)", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h5");
+    await beat("agent-h5", {
+      beacon: beacon({ rarity_applied: 7, rarity_withheld: 11, rarity_unapplied: 2 }),
+    });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({ rarityApplied: 7, rarityWithheld: 11, rarityUnapplied: 2 });
+  });
+
+  it("stores the beacon of an agent that predates the rarity counters, with zeros", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h6");
+    await beat("agent-h6", { beacon: beacon() });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({ rarityApplied: 0, rarityWithheld: 0, rarityUnapplied: 0 });
+  });
+
+  it("stores the watchdog, tamper and eviction counters and shows them in the fleet view (#863)", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h7");
+    await beat("agent-h7", {
+      beacon: beacon({
+        watchdog_restarts: 3,
+        tamper_events: 5,
+        parent_image_evicted_live: 13,
+        parent_image_evicted_dead: 209000,
+      }),
+    });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({
+      watchdogRestarts: 3,
+      tamperEvents: 5,
+      parentImageEvictedLive: 13,
+      parentImageEvictedDead: 209000,
+    });
+  });
+
+  it("stores the beacon of an agent that predates those counters, with zeros", async () => {
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-h8");
+    await beat("agent-h8", { beacon: beacon() });
+
+    const [row] = await getFleet(tenant.id);
+    expect(row.health).toMatchObject({
+      watchdogRestarts: 0,
+      tamperEvents: 0,
+      parentImageEvictedLive: 0,
+      parentImageEvictedDead: 0,
     });
   });
 

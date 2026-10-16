@@ -96,7 +96,34 @@ indistinguishable from policy-disabled — observe-only either way.
   hash on one record, never a lost detection and never stalled capture.
 - **Sensor goes silent:** the silence monitor (#71) alerts locally and marks
   the sensor in the health beacon; the watchdog restarts a hung process via
-  the progress heartbeat (#102).
+  the progress heartbeat (#102). The eBPF sensor pulses when it handles events
+  (it has no forced tick), with a 120 s deadline, so on a host where nothing
+  happens for two minutes it can read silent: indistinguishable from a stalled
+  sensor, by design (`silence.rs`); in practice the agent's own execs and opens
+  keep it alive. The journal sensor pulses on **every line `journalctl` delivers**,
+  not only the allowlisted ones, and the agent writes its own line into journald
+  every 30 s (`SYSLOG_IDENTIFIER=synthaea-agent-canary`, `journalctl -t
+  synthaea-agent-canary`), so an idle host stays healthy while a stopped journald
+  or a stuck `journalctl` still reads silent at the 120 s deadline. Before that
+  (until #846) only auth and unit records pulsed it: on an idle lab VM,
+  2026-10-14, `linux-journal` went silent, the host showed `Degraded` and
+  recovered when the next login wrote to the journal.
+- **A flood of file opens (kernel ring buffer full):** the eBPF sensor drops open
+  events when its ring buffer fills, logging `ring buffer full, dropping open
+  event` (not counted in the health beacon, so the control plane cannot see it).
+  Every detection built on opens loses events with them, canary touches included.
+  Measured 2026-10-14 on a 2 vCPU Fedora 44 VM, agent from `main`, one canary
+  touch per `cat`: 20 of 20 touches alerted on a quiet host (twice), 9 of 20 while
+  a `grep -r` read `/usr` and `/etc` (29,402 drops logged); an earlier burst of 8,000
+  execs also cost 2 of 4. The canary cooldown plays no part (it is keyed by canary and
+  pid). One run per case on one VM, not a distribution.
+- **Parent-image cache full (#783):** eviction asks `/proc` and drops entries of exited
+  processes before idle live ones, so an idle long-lived parent keeps resolving
+  during a flood. Measured 2026-10-14 (same VM, 240,000 execs in about 257 s, builds
+  alternated, two runs each): children of an idle long-lived parent got no
+  `parent_image_path` in all 8 observed with the build before #801, and
+  `/usr/bin/bash` in all 4 observed after; the agent's CPU time was the same within about 2 %.
+  The capture file lost some of the 5 marker children per run, so few were observed.
 - **Sigma/YARA content absent:** engines disabled, agent runs; content present
   but broken: loud failure (fail-closed, overview invariant 7).
 
