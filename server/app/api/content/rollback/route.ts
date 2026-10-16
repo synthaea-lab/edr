@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getTenantId, getUserId } from "@/lib/tenant";
+import { requireTenantAdmin } from "@/lib/admin-auth";
 import { z } from "zod";
 import { correctiveReleaseAdvice } from "@/lib/content-rollback";
 
@@ -21,14 +21,15 @@ const RollbackSchema = z.object({
  * goes to a lower release number, so one that already applied it stays on it (ADR-0032). The
  * response says so and names the corrective release that withdraws the content from them.
  *
- * Authentication: better-auth session (admin only)
+ * Authentication: better-auth session, `owner` or `admin` member of the tenant (#803)
  * Request body: { ring, targetVersion?, reason? }
  * Response: { status: "rolled_back", previousRelease, activeRelease, correctiveRelease }
  */
 export async function POST(req: NextRequest) {
   try {
-    const tenantId = await getTenantId(req);
-    const userId = await getUserId(req);
+    const authed = await requireTenantAdmin(req);
+    if ("response" in authed) return authed.response;
+    const { tenantId, userId } = authed;
 
     // Parse request body
     const body = await req.json();
