@@ -1,0 +1,12 @@
+#!/bin/sh
+# Only called on a real removal, not an upgrade (apk calls pre-upgrade/
+# post-upgrade for those — this package defines neither, so an upgrade skips
+# straight past this file). Matches the .rpm spec's %postun "$1 -eq 0" branch:
+# full cleanup, including the user account and state.
+set -e
+
+rm -rf /var/lib/synthaea /var/log/synthaea /run/synthaea
+deluser synthaea 2>/dev/null || true
+delgroup synthaea 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,50 @@
+#!/bin/sh
+# Mirrors the .deb postinst (packaging/linux/debian/maintainer-scripts/postinst)
+# and the .rpm spec's %post, OpenRC-shaped: no systemd-sysusers/tmpfiles here
+# (the user already exists from pre-install), but the same symlink, directory
+# and ownership steps.
+set -e
+
+if [ ! -e /var/lib/synthaea/current ]; then
+    ln -s bootstrap /var/lib/synthaea/current
+fi
+
+mkdir -p /var/lib/synthaea/versions /var/log/synthaea /run/synthaea
+chown -R synthaea:synthaea /var/lib/synthaea /var/log/synthaea
+chmod 0750 /var/lib/synthaea /var/lib/synthaea/versions /var/log/synthaea
+
+# Capabilities (ADR-0014, amended for CAP_AUDIT_READ #780) — OpenRC/
+# supervise-daemon has no unit-level capability directive the way systemd's
+# CapabilityBoundingSet/AmbientCapabilities does, so the same set is granted
+# as Linux file capabilities on the agent binary directly instead: a file
+# capability is evaluated at exec() from the file itself, so the unprivileged
+# synthaea user the service runs as still gets them without running as root.
+# Same list, same reasoning as the systemd unit:
+#   CAP_BPF CAP_PERFMON      load programs, attach tracepoints/kprobes (eBPF sensor)
+#   CAP_SYS_RESOURCE         raise RLIMIT_MEMLOCK for the BPF maps
+#   CAP_DAC_READ_SEARCH      read /proc/<pid>/* and files of other users (hashing, cmdline)
+#   CAP_NET_ADMIN            conntrack netlink (network flows)
+#   CAP_KILL                 signal other users' processes (response action, off by default)
+#   CAP_AUDIT_READ           multicast-subscribe NETLINK_AUDIT for SELinux AVC denials
+if command -v setcap >/dev/null 2>&1; then
+    setcap 'cap_bpf,cap_perfmon,cap_sys_resource,cap_dac_read_search,cap_net_admin,cap_kill,cap_audit_read+eip' \
+        /var/lib/synthaea/bootstrap/agent
+else
+    echo "synthaea-agent: 'setcap' not found (apk add libcap-utils) — agent will run without eBPF/audit capabilities until this is fixed and reinstalled." >&2
+fi
+# Known gap, same shape as the .rpm spec's own SELinux-relabeling caveat for
+# the same tree ("files the updater writes still need a restorecon after
+# staging"): a release the updater promotes into versions/vN/ is a fresh file
+# copy and does not inherit this setcap grant automatically. Re-run the
+# setcap line above against the new agent binary after an update, until the
+# updater does this itself (tracked as a follow-up, not yet filed).
+
+ln -sf /var/lib/synthaea/current/cli /usr/bin/synthaea-ctl
+
+cat <<'EOF'
+synthaea-agent: edit /etc/synthaea/agent.toml, then:
+    rc-update add synthaea-agent default
+    rc-service synthaea-agent start
+EOF
+
+exit 0

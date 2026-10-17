@@ -1,0 +1,44 @@
+#!/sbin/openrc-run
+# Mirrors packaging/linux/systemd/synthaea-agent.service's intent (same
+# bootstrap-then-current layout, same unprivileged user, same hardened log
+# path) — OpenRC has no unit-level capability directive, so the equivalent
+# capabilities are granted as Linux file capabilities on the binaries at
+# package-install time instead (synthaea-agent.post-install, same list as
+# the systemd unit's CapabilityBoundingSet/AmbientCapabilities, ADR-0014).
+
+description="Synthaea Endpoint Detection & Response"
+
+supervisor=supervise-daemon
+command="/var/lib/synthaea/current/watchdog"
+command_args="run --agent-bin /var/lib/synthaea/current/agent --alerts /var/log/synthaea/alerts.ndjson"
+command_user="synthaea:synthaea"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+# "0" is explicit, not relied on as OpenRC's own default (#213 lab finding:
+# /etc/rc.conf's site-wide SUPERVISE DAEMON CONFIGURATION VARIABLES block
+# otherwise applies respawn_max="5"/respawn_period="1800" to every
+# supervise-daemon service that doesn't override them — not Restart=always).
+respawn_max="0"
+
+output_log="/var/log/synthaea/watchdog.log"
+error_log="/var/log/synthaea/watchdog.log"
+
+depend() {
+	need net
+	after net
+}
+
+start_pre() {
+	# Same bootstrap-then-current layout as the systemd unit's ExecStartPre
+	# lines (issue #36): first start has no "current" yet, and the updater
+	# only ever promotes into it, never creates it.
+	if [ ! -e /var/lib/synthaea/current ]; then
+		ln -s bootstrap /var/lib/synthaea/current
+	fi
+	checkpath -d -m 0750 -o synthaea:synthaea /var/lib/synthaea/versions
+	checkpath -d -m 0750 -o synthaea:synthaea /var/log/synthaea
+	checkpath -d -m 0755 -o root:root /run/synthaea
+	# Recovers a release that cannot exec, same as the systemd unit's own
+	# ExecStartPre into the package-installed bootstrap watchdog.
+	/var/lib/synthaea/bootstrap/watchdog recover --base-dir /var/lib/synthaea
+}

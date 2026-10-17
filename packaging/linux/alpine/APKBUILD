@@ -11,8 +11,15 @@ arch="x86_64"
 license="Apache-2.0"
 # Fully static (musl, +crt-static): no runtime library dependency at all,
 # same property the .deb build on Alpine proves (CI: linux-deb-portability.yml).
-depends=""
-makedepends="cargo rust-std findutils tar zstd curl python3 python3-dev py3-pip
+# libcap-utils: synthaea-agent.post-install needs `setcap` on the agent
+# binary (the OpenRC equivalent of the systemd unit's AmbientCapabilities).
+depends="libcap-utils"
+# No "cargo"/"rust" here: build() uses its own rustup-managed toolchain (the
+# exact channel rust-toolchain.toml pins, plus the ebpf-toolchain.txt nightly
+# with rust-src), not Alpine's system Rust — see lab/provisioning/alpine-toolchain.sh.
+# These cover the C/C++ side cargo's own build scripts and onnxruntime's CMake
+# need, same list as that provisioning script.
+makedepends="findutils tar zstd curl python3 python3-dev py3-pip
 	cmake clang llvm-dev binutils git bash elfutils-dev openssl-dev xz-dev
 	xz-static zstd-dev"
 install="$pkgname.pre-install $pkgname.post-install $pkgname.pre-deinstall $pkgname.post-deinstall"
@@ -28,13 +35,43 @@ builddir="$startdir/../../.."
 
 build() {
 	cd "$builddir"
+	# abuild sandboxes CARGO_HOME to its own tmp/cargo per run (confirmed
+	# live via /proc/<pid>/environ) — pinned back to the real one so this
+	# reuses the already-provisioned toolchain/registry cache instead of a
+	# fresh, empty one every run.
+	export CARGO_HOME="$HOME/.cargo"
 	local target=x86_64-unknown-linux-musl
+	# CARGO_TARGET_DIR, not a bare "target/": honours a caller override (a
+	# small root disk may need this redirected, e.g. CARGO_TARGET_DIR=/mnt/
+	# build-cache/...) the same way build-deb.sh's own cargo invocation does,
+	# defaulting to the usual in-tree location. package() resolves the same
+	# way, from the same variable.
+	local target_dir="${CARGO_TARGET_DIR:-$builddir/target}"
 
+	# $HOME/.cargo/bin ahead of /usr/local/bin's own bpf-linker copy
+	# (alpine-toolchain.sh symlinks one there too, and it can go stale —
+	# confirmed live: a refreshed ~/.cargo/bin/bpf-linker left the
+	# /usr/local/bin one behind, same binary size/version string, different
+	# bytes, and cargo picked the stale one via PATH order).
+	export PATH="$HOME/.cargo/bin:$PATH"
 	if ! command -v bpf-linker >/dev/null 2>&1; then
 		error "bpf-linker not found — run lab/provisioning/alpine-toolchain.sh first"
 		return 1
 	fi
 	rustup target add "$target" 2>/dev/null || true
+
+	# Same stale-build-cache bust as alpine-toolchain.sh's own
+	# bust_stale_sensor_linux_build: build.rs's rerun-if-env-changed=PATH
+	# does not fire when ~/.cargo/bin was already on PATH and only the
+	# bpf-linker binary underneath it changed, so a target dir reused across
+	# a toolchain/linker refresh (a long-lived dev host, not CI's always-
+	# fresh container) keeps retrying a link that already failed once. No
+	# depth limit (confirmed live: the real stale state sits several levels
+	# down, under <target-triple>/release/build/sensor-linux-*/out/aya-build/...,
+	# past what a shallow maxdepth reaches) — -prune stops each match from
+	# being descended into once found, so this doesn't walk what it deletes.
+	find "$target_dir" -type d \( -iname "sensor-linux-*" -o -iname "sensor_linux_*" \) \
+		-prune -exec rm -rf {} + 2>/dev/null || true
 
 	local ort_lib_location="${ORT_LIB_LOCATION:-}"
 	if [ -z "$ort_lib_location" ]; then
@@ -43,6 +80,7 @@ build() {
 		ort_lib_location="$builddir/onnxruntime/build/Linux/Release"
 	fi
 
+	export ORT_LIB_LOCATION="$ort_lib_location"
 	local ort_flags
 	ort_flags="$(bash "$builddir/lab/provisioning/ort-static-link-flags.sh")" \
 		|| die "ort-static-link-flags.sh failed: ONNX Runtime cannot be linked statically"
@@ -50,25 +88,28 @@ build() {
 		*"-l static="*) ;;
 		*) die "ort-static-link-flags.sh produced no link flags" ;;
 	esac
-
-	export ORT_LIB_LOCATION="$ort_lib_location"
-	export RUSTFLAGS="${ort_flags} -C target-feature=+crt-static"
+	# ort_flags is itself `export RUSTFLAGS="..."` (meant to be eval'd), not a
+	# bare flag string — matches build-deb.sh's own usage of this script.
+	eval "$ort_flags"
+	export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
 	CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
+		CARGO_TARGET_DIR="$target_dir" \
 		CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUNNER=env \
 		cargo build --locked --release --target "$target" \
 		--no-default-features -p agent -p watchdog -p cli
 
 	# The shipped artifacts: no public test signing key (ADR-0027).
 	"$builddir/tools/assert-no-test-key.sh" \
-		"target/$target/release/agent" \
-		"target/$target/release/watchdog" \
-		"target/$target/release/cli"
+		"$target_dir/$target/release/agent" \
+		"$target_dir/$target/release/watchdog" \
+		"$target_dir/$target/release/cli"
 }
 
 package() {
 	cd "$builddir"
 	local target=x86_64-unknown-linux-musl
-	local bin="target/$target/release"
+	local target_dir="${CARGO_TARGET_DIR:-$builddir/target}"
+	local bin="$target_dir/$target/release"
 
 	install -D -m755 "$bin/agent" "$pkgdir/var/lib/synthaea/bootstrap/agent"
 	install -D -m755 "$bin/watchdog" "$pkgdir/var/lib/synthaea/bootstrap/watchdog"

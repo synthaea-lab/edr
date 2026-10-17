@@ -126,10 +126,49 @@ install_bpf_linker() {
     && echo "${sha}  $tmp/bl.tar.zst" | sha256sum -c - \
     && tar --zstd -xf "$tmp/bl.tar.zst" -C "$tmp" \
     && bin=$(find "$tmp" -type f -name bpf-linker -print -quit) && [ -n "$bin" ] \
-    && install -m755 "$bin" "$HOME/.cargo/bin/bpf-linker"
+    && install -m755 "$bin" "$HOME/.cargo/bin/bpf-linker.real"
   rc=$?
   rm -rf "$tmp"
+  [ $rc -eq 0 ] && install_bpf_linker_shim
   return $rc
+}
+
+# aya-build 0.2.0 hardcodes the "-Os" CodeGenOptLevel when it invokes bpf-linker
+# for the probe cross-build; bpf-linker ${BPF_LINKER_VERSION}'s bundled LLVM has
+# dropped "Os"/"Oz" as presets ("The optimization level \"Os\" is no longer
+# supported. Use O2 in conjunction with the optsize attribute instead.") and
+# there is no newer bpf-linker release yet. Verified live (alpine-vm, issue
+# #123 follow-up): a plain `cargo build` of the ebpf crate via its own
+# .cargo/config.toml linker entry succeeds, but the real path through
+# aya_build::build_ebpf() always fails identically — not distro-specific. The
+# real binary installed above as bpf-linker.real stays untouched; this shim
+# takes the `bpf-linker` name on PATH and rewrites only -Os/-Oz to -O2 before
+# exec'ing it. Same shim, same reasoning, in alpine-toolchain.sh and
+# arch-toolchain.sh (they fetch the identical prebuilt release). Drop this once
+# aya-build or bpf-linker ship a real fix upstream.
+install_bpf_linker_shim() {
+  cat >"$HOME/.cargo/bin/bpf-linker" <<'SHIM'
+#!/bin/sh
+# readlink -f, not dirname "$0": this is also reached via the /usr/local/bin
+# symlink below, and dirname of a symlink's own invoked path points at
+# /usr/local/bin, where bpf-linker.real does not exist.
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+dir=$(dirname "$self")
+real="$dir/bpf-linker.real"
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+  i=$((i + 1))
+  a=$1
+  shift
+  case "$a" in
+    -Os|-Oz) a=-O2 ;;
+  esac
+  eval "set -- \"\$@\" \"\$a\""
+done
+exec "$real" "$@"
+SHIM
+  chmod 755 "$HOME/.cargo/bin/bpf-linker"
 }
 
 # Bust a probe-less build cached before bpf-linker existed. userspace/build.rs
@@ -144,6 +183,12 @@ bust_stale_sensor_linux_build() {
   done
 }
 
+if [ -x "$HOME/.cargo/bin/bpf-linker" ] && [ ! -e "$HOME/.cargo/bin/bpf-linker.real" ]; then
+  # Retrofit: an already-provisioned VM has the old-style single unshimmed
+  # binary under the `bpf-linker` name — move it aside and (re-)apply the shim.
+  mv "$HOME/.cargo/bin/bpf-linker" "$HOME/.cargo/bin/bpf-linker.real"
+  install_bpf_linker_shim
+fi
 if ! command -v bpf-linker >/dev/null 2>&1; then
   if install_bpf_linker; then
     bust_stale_sensor_linux_build
