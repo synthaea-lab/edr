@@ -327,53 +327,96 @@ export async function deliverOne(
  */
 export async function purge(db: PrismaClient, now: Date, env: Env = process.env) {
   const day = 86_400_000;
-  const delivered = await db.notification.deleteMany({
-    where: { deliveredAt: { lt: new Date(now.getTime() - RETENTION_DELIVERED_DAYS * day) } },
-  });
-  const failed = await db.notification.deleteMany({
-    where: { failedAt: { lt: new Date(now.getTime() - RETENTION_FAILED_DAYS * day) } },
-  });
+  const deliveredBefore = new Date(now.getTime() - RETENTION_DELIVERED_DAYS * day);
+  const failedBefore = new Date(now.getTime() - RETENTION_FAILED_DAYS * day);
+  // The newest row of each (channel, subject) is never deleted, whatever its age: `seq` is
+  // allocated as max(seq) + 1 over the rows that remain, and a receiver applies an event only if
+  // its `seq` is above the last it applied, so a subject whose rows were all purged would start
+  // again at 1 and its next event would be discarded as stale. One row per (channel, subject) is
+  // the bound; the console and the history are unaffected.
+  const superseded = Prisma.sql`EXISTS (
+    SELECT 1 FROM notifications l
+     WHERE l.channel_id = n.channel_id AND l.subject = n.subject AND l.seq > n.seq)`;
+  const delivered = await db.$executeRaw(
+    Prisma.sql`DELETE FROM notifications n WHERE n.delivered_at < ${deliveredBefore} AND ${superseded}`
+  );
+  const failed = await db.$executeRaw(
+    Prisma.sql`DELETE FROM notifications n WHERE n.failed_at < ${failedBefore} AND ${superseded}`
+  );
+  // What a channel was told about a host that no longer exists is not needed any more.
+  const states = await db.$executeRaw(
+    Prisma.sql`DELETE FROM notification_states s WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = s.subject)`
+  );
   const rotations = await db.notificationChannel.updateMany({
     where: { prevSecretUntil: { lt: now } },
     data: { prevSecretKeyId: null, prevSecretSealed: null, prevSecretUntil: null },
   });
   const rewrapped = await rewrapChannels(db, env);
-  return { deliveredDeleted: delivered.count, failedDeleted: failed.count, rotationsClosed: rotations.count, rewrapped };
+  return { deliveredDeleted: delivered, failedDeleted: failed, statesDeleted: states, rotationsClosed: rotations.count, rewrapped };
 }
 
-/** Seals again, under the current key, what an older key sealed. Returns how many channels changed. */
-export async function rewrapChannels(db: PrismaClient, env: Env = process.env, limit = 20): Promise<number> {
+/**
+ * Seals again, under the current key, what an older key sealed. Returns how many channels changed.
+ * The update names what was read (compare-and-set, like `deliverOne` with the lease id): a
+ * rotation or an edit between the read and the write is not overwritten, the channel is simply
+ * picked up on the next tick. A channel whose old key is gone is skipped and does not hold up the
+ * others: the scan goes past it, up to `scan` channels.
+ */
+export async function rewrapChannels(
+  db: PrismaClient,
+  env: Env = process.env,
+  limit = 20,
+  scan = 500,
+  /** Test seam: runs between a channel being read and being written. */
+  afterRead?: (channelId: string) => Promise<void>
+): Promise<number> {
   const key = currentKey(env);
   if (!key) return 0;
-  const stale = await db.notificationChannel.findMany({
-    where: {
-      OR: [
-        { secretKeyId: { not: key.id } },
-        { urlKeyId: { not: key.id } },
-        { prevSecretKeyId: { not: null, notIn: [key.id] } },
-      ],
-    },
-    take: limit,
-  });
   let changed = 0;
-  for (const c of stale) {
-    const secret = openSecret({ keyId: c.secretKeyId, sealed: c.secretSealed }, c.id, env);
-    const url = openUrl({ keyId: c.urlKeyId, sealed: c.urlSealed }, c.id, env);
-    if (secret === null || url === null) continue; // an old key that is gone: nothing to re-wrap with
-    const s = sealSecret(secret, c.id, env);
-    const u = sealUrl(url, c.id, env);
-    if (!s || !u) continue;
-    let prev: { prevSecretKeyId: string; prevSecretSealed: string } | undefined;
-    if (c.prevSecretKeyId && c.prevSecretSealed) {
-      const p = openSecret({ keyId: c.prevSecretKeyId, sealed: c.prevSecretSealed }, c.id, env);
-      const ps = p === null ? null : sealSecret(p, c.id, env);
-      if (ps) prev = { prevSecretKeyId: ps.keyId, prevSecretSealed: ps.sealed };
-    }
-    await db.notificationChannel.update({
-      where: { id: c.id },
-      data: { secretKeyId: s.keyId, secretSealed: s.sealed, urlKeyId: u.keyId, urlSealed: u.sealed, ...(prev ?? {}) },
+  let seen = 0;
+  let cursor: string | undefined;
+  while (changed < limit && seen < scan) {
+    const stale = await db.notificationChannel.findMany({
+      where: {
+        OR: [
+          { secretKeyId: { not: key.id } },
+          { urlKeyId: { not: key.id } },
+          { prevSecretKeyId: { not: null, notIn: [key.id] } },
+        ],
+      },
+      orderBy: { id: "asc" },
+      take: 50,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
-    changed++;
+    if (stale.length === 0) break;
+    cursor = stale[stale.length - 1].id;
+    for (const c of stale) {
+      seen++;
+      const secret = openSecret({ keyId: c.secretKeyId, sealed: c.secretSealed }, c.id, env);
+      const url = openUrl({ keyId: c.urlKeyId, sealed: c.urlSealed }, c.id, env);
+      if (secret === null || url === null) continue; // an old key that is gone: nothing to re-wrap with
+      const s = sealSecret(secret, c.id, env);
+      const u = sealUrl(url, c.id, env);
+      if (!s || !u) continue;
+      let prev: { prevSecretKeyId: string; prevSecretSealed: string } | undefined;
+      if (c.prevSecretKeyId && c.prevSecretSealed) {
+        const p = openSecret({ keyId: c.prevSecretKeyId, sealed: c.prevSecretSealed }, c.id, env);
+        const ps = p === null ? null : sealSecret(p, c.id, env);
+        if (ps) prev = { prevSecretKeyId: ps.keyId, prevSecretSealed: ps.sealed };
+      }
+      if (afterRead) await afterRead(c.id);
+      const { count } = await db.notificationChannel.updateMany({
+        where: {
+          id: c.id,
+          secretSealed: c.secretSealed,
+          urlSealed: c.urlSealed,
+          prevSecretSealed: c.prevSecretSealed,
+        },
+        data: { secretKeyId: s.keyId, secretSealed: s.sealed, urlKeyId: u.keyId, urlSealed: u.sealed, ...(prev ?? {}) },
+      });
+      if (count === 1) changed++;
+      if (changed >= limit) break;
+    }
   }
   return changed;
 }

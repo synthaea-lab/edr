@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { cleanDatabase, createTestTenant } from "../helpers/db";
-import { enqueue, claimDue, deliverDue, deliverOne, purge, resendFailed, failedCounts, TENANT_PER_MINUTE, PER_TENANT_PER_TICK, LEASE_MS } from "@/lib/notify/outbox";
+import { enqueue, claimDue, deliverDue, deliverOne, purge, rewrapChannels, resendFailed, failedCounts, TENANT_PER_MINUTE, PER_TENANT_PER_TICK, LEASE_MS } from "@/lib/notify/outbox";
 import { sealSecret } from "@/lib/notify/secret";
 import { sendWebhook } from "@/lib/notify/send";
 import { verifySignature } from "@/lib/notify/sign";
@@ -199,6 +199,7 @@ describe("notification outbox", () => {
 
 describe("delivery outcomes, ordering and housekeeping (ADR-0036 points 3, 5, 7)", () => {
   let tenantId: string;
+  const ok = async () => ({ ok: true, statusCode: 204 });
   beforeEach(async () => {
     await cleanDatabase();
     tenantId = (await createTestTenant()).id;
@@ -371,20 +372,91 @@ describe("delivery outcomes, ordering and housekeeping (ADR-0036 points 3, 5, 7)
     expect(after.prevSecretSealed).toBeNull();
   });
 
-  it("deletes delivered rows after 30 days and failed rows after 90, and keeps the rest", async () => {
+  it("deletes delivered rows after 30 days and failed rows after 90, keeps the newest row of each subject, and keeps the rest", async () => {
     const ch = await channel(tenantId);
     const day = 86_400_000;
-    const mk = (n: number, data: object) =>
-      prisma.notification.create({ data: { tenantId, channelId: ch.id, event: "host.degraded", subject: `r${n}`, seq: 1, payload: {}, ...data } });
     const now = new Date("2026-10-19T10:00:00Z");
-    await mk(1, { deliveredAt: new Date(now.getTime() - 31 * day) }); // gone
-    await mk(2, { deliveredAt: new Date(now.getTime() - 29 * day) }); // kept
-    await mk(3, { failedAt: new Date(now.getTime() - 91 * day) }); // gone
-    await mk(4, { failedAt: new Date(now.getTime() - 89 * day) }); // kept
-    await mk(5, {}); // pending, never purged
+    let n = 0;
+    const mk = (subject: string, seq: number, data: object) =>
+      prisma.notification.create({ data: { tenantId, channelId: ch.id, event: "host.degraded", subject, seq, payload: {}, ...data } });
+    const old = (d: number) => new Date(now.getTime() - d * day);
+    // Each subject has an older row (purgeable) and a newer one, so that the older one can go.
+    await mk("a", 1, { deliveredAt: old(40) });
+    await mk("a", 2, { deliveredAt: old(35) }); // newest of a: kept whatever its age
+    await mk("b", 1, { deliveredAt: old(31) }); // gone
+    await mk("b", 2, { deliveredAt: old(1) });
+    await mk("c", 1, { deliveredAt: old(29) }); // kept: not yet 30 days
+    await mk("c", 2, { deliveredAt: old(1) });
+    await mk("d", 1, { failedAt: old(91), attempts: 6 }); // gone
+    await mk("d", 2, { deliveredAt: old(1) });
+    await mk("e", 1, { failedAt: old(89), attempts: 6 }); // kept: not yet 90 days
+    await mk("e", 2, { deliveredAt: old(1) });
+    await mk("f", 1, {}); // pending, never purged
+    void n;
     const res = await purge(prisma, now);
-    expect(res).toMatchObject({ deliveredDeleted: 1, failedDeleted: 1 });
-    expect((await prisma.notification.findMany({ orderBy: { subject: "asc" } })).map((r) => r.subject)).toEqual(["r2", "r4", "r5"]);
+    expect(res).toMatchObject({ deliveredDeleted: 2, failedDeleted: 1 });
+    const left = (await prisma.notification.findMany({ orderBy: [{ subject: "asc" }, { seq: "asc" }] })).map((r) => `${r.subject}${r.seq}`);
+    expect(left).toEqual(["a2", "b2", "c1", "c2", "d2", "e1", "e2", "f1"]);
+  });
+
+  it("a subject whose rows were all old keeps counting: enqueue, purge past the retention, enqueue gives seq 3, not 1", async () => {
+    await channel(tenantId);
+    const day = 86_400_000;
+    await enqueue(prisma, ev(tenantId, "host.degraded", "web-01"), T0); // seq 1
+    await deliverDue(prisma, at(1), { send: ok as never, env });
+    await enqueue(prisma, ev(tenantId, "host.recovered", "web-01"), at(2)); // seq 2
+    await deliverDue(prisma, at(3), { send: ok as never, env });
+    // Day 31: both rows are past the 30 days. The purge may take the first, never the last.
+    const later = new Date(T0.getTime() + 31 * day);
+    await purge(prisma, later);
+    expect((await prisma.notification.findMany({ orderBy: { seq: "asc" } })).map((r) => r.seq)).toEqual([2]);
+    await enqueue(prisma, ev(tenantId, "host.degraded", "web-01"), later);
+    const rows = await prisma.notification.findMany({ orderBy: { seq: "asc" } });
+    expect(rows.map((r) => r.seq)).toEqual([2, 3]);
+    // A receiver that applied seq 2 accepts seq 3 (it would have discarded a restart at 1).
+    expect(Math.max(...rows.map((r) => r.seq))).toBeGreaterThan(2);
+  });
+
+  it("forgets what channels were told about a host that no longer exists, and only that", async () => {
+    const ch = await channel(tenantId);
+    const gone = await prisma.agent.create({ data: { tenantId, enrollmentId: "enr-gone", hostname: "gone", lastSeen: T0 } });
+    const kept = await prisma.agent.create({ data: { tenantId, enrollmentId: "enr-kept", hostname: "kept", lastSeen: T0 } });
+    for (const a of [gone, kept]) await prisma.notificationState.create({ data: { channelId: ch.id, subject: a.id, state: "healthy" } });
+    await prisma.agent.delete({ where: { id: gone.id } });
+    const res = await purge(prisma, T0);
+    expect(res.statesDeleted).toBe(1);
+    expect((await prisma.notificationState.findMany()).map((x) => x.subject)).toEqual([kept.id]);
+  });
+
+  it("rewrapping does not overwrite a rotation that happened after it read the channel", async () => {
+    const ch = await channel(tenantId, { secret: "whsec_one" });
+    const K2 = "k2:" + "22".repeat(32);
+    const both = { NOTIFY_SECRET_KEY: K2, NOTIFY_SECRET_KEY_PREVIOUS: NOTIFY_ENV.NOTIFY_SECRET_KEY };
+    // The channel is rotated (a new sealed secret under the old key) while a rewrap is between its
+    // read and its write.
+    const first = await rewrapChannels(prisma, both, 20, 500, async (id) => {
+      const fresh = sealSecret("whsec_two", id, env)!;
+      await prisma.notificationChannel.update({ where: { id }, data: { secretKeyId: fresh.keyId, secretSealed: fresh.sealed } });
+    });
+    expect(first).toBe(0); // the compare-and-set found a different row and wrote nothing
+    // The next tick picks it up, and the secret that survives is the rotated one.
+    expect(await rewrapChannels(prisma, both)).toBe(1);
+    const sigs: string[] = [];
+    await enqueue(prisma, ev(tenantId, "host.degraded"), T0);
+    await deliverDue(prisma, at(3), { send: (async (_u: string, b: string, h: Record<string, string>) => (sigs.push(h["X-Synthaea-Signature"] + "|" + b), { ok: true, statusCode: 204 })) as never, env: { NOTIFY_SECRET_KEY: K2 } });
+    const [header, body] = sigs[0].split("|");
+    expect(verifySignature("whsec_two", body, header, Math.floor(Date.now() / 1000))).toBe(true);
+  });
+
+  it("a channel whose old key is gone does not hold up the others", async () => {
+    const lost = [] as string[];
+    for (let i = 0; i < 4; i++) lost.push((await channel(tenantId, { secretKeyId: "k0" })).id);
+    const good = await channel(tenantId);
+    const K2 = "k2:" + "22".repeat(32);
+    const res = await purge(prisma, at(1), { NOTIFY_SECRET_KEY: K2, NOTIFY_SECRET_KEY_PREVIOUS: NOTIFY_ENV.NOTIFY_SECRET_KEY });
+    expect(res.rewrapped).toBe(1);
+    expect((await prisma.notificationChannel.findUniqueOrThrow({ where: { id: good.id } })).secretKeyId).toBe("k2");
+    expect(lost).toHaveLength(4);
   });
 });
 

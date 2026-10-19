@@ -185,6 +185,25 @@ describe("an allowlisted private host is still never the server's own loopback, 
       expect(err.reason).toBe("address");
     }
   );
+  it.each([
+    "fd00:ec2::254", // AWS IPv6 metadata, inside fc00::/7
+    "100.100.100.200", // Alibaba, inside CGNAT
+    "192.0.0.192", // Oracle
+    "168.63.129.16", // Azure WireServer, a public address
+    "::ffff:100.100.100.200",
+    "64:ff9b::6464:64c8", // NAT64 form of 100.100.100.200
+    "2002:6464:64c8::1", // 6to4 form of 100.100.100.200
+  ])("refuses the cloud metadata address %s even for an allowlisted name", async (address) => {
+    const err = await resolvePublicTarget("https://soar.corp.example/", opts([address])).catch((e) => e);
+    expect(err).toBeInstanceOf(NotifyBlockedError);
+    expect(err.reason).toBe("address");
+  });
+  it("and for everyone else: the metadata addresses are refused as private, Azure's public one included", () => {
+    for (const a of ["fd00:ec2::254", "100.100.100.200", "192.0.0.192", "168.63.129.16"]) expect(isPrivateAddress(a)).toBe(true);
+    expect(isPrivateAddress("168.63.129.17")).toBe(false);
+    expect(isNeverAllowed("168.63.129.16")).toBe(true);
+    expect(isNeverAllowed("fd00:ec2::255")).toBe(false); // a neighbour in fc00::/7 is private, not never-allowed
+  });
   it.each(["10.1.1.1", "172.16.4.4", "192.168.7.7", "fd12:3456::1", "100.64.1.1"])("still lets %s through for the allowlisted name", async (address) => {
     const t = await resolvePublicTarget("https://soar.corp.example/", opts([address]));
     expect(t.addresses[0].address).toBe(address);

@@ -1,4 +1,4 @@
-import { lookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import type { Env } from "./secret";
 import { isIP } from "node:net";
 
@@ -175,6 +175,7 @@ function isPrivateV6(b: number[]): boolean {
 
 /** True when the address is not one a tenant-chosen URL may reach. Unparseable means true. */
 export function isPrivateAddress(address: string): boolean {
+  if (isMetadataAddress(address)) return true;
   const family = isIP(address);
   if (family === 4) {
     const b = parseV4(address);
@@ -188,12 +189,45 @@ export function isPrivateAddress(address: string): boolean {
 }
 
 /**
+ * Cloud metadata services that sit outside the ranges above or inside a range an allowlist may
+ * open: AWS IPv6 (`fd00:ec2::254`, in fc00::/7), Alibaba (`100.100.100.200`, in CGNAT), Oracle
+ * (`192.0.0.192`) and Azure's WireServer (`168.63.129.16`, a public address). They are refused
+ * for everyone, allowlisted or not; 169.254.169.254 and the ECS task endpoint are link-local.
+ */
+export const METADATA_ADDRESSES = ["fd00:ec2::254", "100.100.100.200", "192.0.0.192", "168.63.129.16"] as const;
+
+function isMetadataAddress(address: string): boolean {
+  const family = isIP(address);
+  const key = (a: string) => (isIP(a) === 6 ? (parseV6(a) ?? []).join(".") : (parseV4(a) ?? []).join("."));
+  const target = key(address);
+  if (!target) return false;
+  if (METADATA_ADDRESSES.some((m) => key(m) === target)) return true;
+  // The same addresses reached through a mapped, translated, NAT64 or 6to4 form.
+  if (family === 6) {
+    const b = parseV6(address);
+    if (b) {
+      const embedded =
+        (b.slice(0, 10).every((x) => x === 0) && b[10] === 0xff && b[11] === 0xff) ||
+        (b.slice(0, 8).every((x) => x === 0) && b[8] === 0xff && b[9] === 0xff && b[10] === 0 && b[11] === 0) ||
+        (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b.slice(4, 12).every((x) => x === 0))
+          ? b.slice(12, 16)
+          : b[0] === 0x20 && b[1] === 0x02
+            ? b.slice(2, 6)
+            : null;
+      if (embedded) return METADATA_ADDRESSES.some((m) => isIP(m) === 4 && key(m) === embedded.join("."));
+    }
+  }
+  return false;
+}
+
+/**
  * Addresses no allowlist can open: loopback, link-local (the cloud metadata address included) and
  * the unspecified address, judged by the embedded IPv4 for the mapped, compatible, NAT64 and
  * 6to4 forms. The operator allowlist (`NOTIFY_ALLOWED_PRIVATE_HOSTS`) is for an on-prem receiver
  * on a private network, not for the server's own host or its metadata service.
  */
 export function isNeverAllowed(address: string): boolean {
+  if (isMetadataAddress(address)) return true;
   const family = isIP(address);
   const v4 = (b: number[]) => b[0] === 0 || b[0] === 127 || (b[0] === 169 && b[1] === 254);
   if (family === 4) {
@@ -233,9 +267,19 @@ export interface GuardOptions {
   resolve?: (host: string) => Promise<string[]>;
 }
 
+/**
+ * The default resolver. It is c-ares (`dns.Resolver`) with its own timeout and retry count, not
+ * `dns.lookup`: `getaddrinfo` cannot be cancelled and holds one of libuv's four threads until it
+ * answers, so eight tenants with black-holed names could stall every other lookup in the process
+ * past the send's 10 s deadline. The cost: c-ares reads `resolv.conf` but not `/etc/hosts`, so an
+ * allowlisted on-prem name has to be in DNS (or be an IP literal, which needs no lookup).
+ */
 async function systemResolve(host: string): Promise<string[]> {
-  const answers = await lookup(host, { all: true, verbatim: true });
-  return answers.map((a) => a.address);
+  const resolver = new Resolver({ timeout: 1500, tries: 2 });
+  const [v4, v6] = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
+  const found = [...(v4.status === "fulfilled" ? v4.value : []), ...(v6.status === "fulfilled" ? v6.value : [])];
+  if (found.length === 0) throw v4.status === "rejected" ? v4.reason : new Error("no address");
+  return found;
 }
 
 /**

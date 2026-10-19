@@ -56,7 +56,9 @@ export default async function NotificationsPage() {
         <p className="mt-1 text-sm text-gray-600">
           Signed webhooks that tell a person when a host goes degraded or silent, recovers, or when a saved hunt has new
           matches. A message points to the console and carries no detection contents. Delivery is at least once: a
-          receiver should check the signature and de-duplicate on the event id.
+          receiver should check the signature and de-duplicate on the event id. A host or a hunt sends at most one
+          message per webhook per cooldown (30 minutes by default): a hunt that finds new matches on every run is
+          not announced again until the cooldown has passed, and what it found meanwhile is not sent later.
         </p>
         {waiting > 0 && (
           <p className={`mt-2 text-sm ${stuck > 0 ? "text-orange-800" : "text-gray-600"}`}>

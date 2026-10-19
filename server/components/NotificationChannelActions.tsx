@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { isSignInRedirect } from "@/lib/notify/sign-in-redirect";
 
 type Props = {
   mode: "create" | "row";
@@ -37,6 +38,10 @@ export default function NotificationChannelActions({ mode, channelId, status, fa
         headers: { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
+      if (isSignInRedirect(res)) {
+        setMessage("Your session has ended: sign in again, then retry.");
+        return { ok: false, json: {} };
+      }
       const json = await res.json().catch(() => ({}));
       if (!res.ok) setMessage(json.error ?? `Failed (${res.status})`);
       return { ok: res.ok, json };

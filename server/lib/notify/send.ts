@@ -56,7 +56,6 @@ const agent = new Agent({ keepAlive: false });
 function attempt(
   url: URL,
   address: string,
-  family: 4 | 6,
   body: string,
   headers: Record<string, string>,
   left: () => number,
@@ -76,14 +75,14 @@ function attempt(
     const req = request(
       {
         agent,
+        // The validated IP itself: the connection goes there and nothing is resolved again. The
+        // name only travels in `Host` and `servername` (SNI and the certificate check).
         host: address,
         port: url.port ? Number(url.port) : 443,
         path: url.pathname + url.search,
         method: "POST",
         servername: isIP(host) ? undefined : host,
         ...(ca ? { ca } : {}),
-        // Connect to the validated address, whatever the name resolves to now.
-        lookup: (_h, _o, cb) => (cb as (e: null, a: string, f: number) => void)(null, address, family),
         headers: {
           ...headers,
           Host: url.host,
@@ -146,9 +145,9 @@ export async function sendWebhook(
   }
 
   let last: SendResult = { ok: false, errorClass: "connect" };
-  for (const { address, family } of target.addresses) {
+  for (const { address } of target.addresses) {
     if (Date.now() >= deadline) return { ok: false, errorClass: "timeout" };
-    last = await attempt(target.url, address, family, body, headers, left, ca);
+    last = await attempt(target.url, address, body, headers, left, ca);
     if (last.ok || last.errorClass !== "connect") return last;
   }
   return last;
