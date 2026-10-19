@@ -37,7 +37,9 @@ export async function sendWebhook(
   rawUrl: string,
   body: string,
   headers: Record<string, string>,
-  guard: GuardOptions = {}
+  guard: GuardOptions = {},
+  /** Extra trusted CA (tests only); production uses the system store. */
+  ca?: string
 ): Promise<SendResult> {
   let target;
   try {
@@ -66,6 +68,7 @@ export async function sendWebhook(
         path: url.pathname + url.search,
         method: "POST",
         servername: isIP(host) ? undefined : host,
+        ...(ca ? { ca } : {}),
         // Connect to the validated address, whatever the name resolves to now.
         lookup: (_h, _o, cb) => (cb as (e: null, a: string, f: number) => void)(null, address, family),
         headers: {

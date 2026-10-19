@@ -276,4 +276,8 @@ See `docs/deployment.md` for production setup instructions.
 | `NEXTAUTH_SECRET` | Session encryption key | `dev_secret_change_in_production` |
 | `BETTER_AUTH_SECRET` | Auth encryption key | `dev_secret_change_in_production` |
 | `CRON_SECRET` | Cron job authorization | `dev_cron_secret` |
+| `NOTIFY_SECRET_KEY` | `<keyId>:<64 hex>`, seals webhook signing secrets (AES-256-GCM). Unset: creating a notification channel answers 503 (ADR-0036) | unset |
+| `NOTIFY_SECRET_KEY_PREVIOUS` | Older keys of the same form, comma-separated, used only to open secrets sealed before a rotation | unset |
+| `NOTIFY_ALLOWED_PRIVATE_HOSTS` | Hostnames a channel URL may resolve to a private address (an on-prem SOAR). Set by whoever runs the server, never by a tenant | empty |
+| `NOTIFY_ALLOWED_PORTS` | Ports besides 443 a channel URL may use | empty |
 | `NODE_ENV` | Environment mode | `development` |

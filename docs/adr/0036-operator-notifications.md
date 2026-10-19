@@ -183,6 +183,11 @@ What exists, read from the code on 2026-10-16:
 - `server/integrations/README.md` stops promising paging in general: the webhook is built, the
   rest stay listed.
 
+## Implementation status
+
+- **Slice 1 (channel model, signing, SSRF guard, outbox with delivery, test send): built** in #863's first PR (`server/lib/notify/`, `server/app/api/notify/channels/`, `server/app/api/cron/deliver-notifications/`). Not built: the `host.*` producers (slice 2), `hunt.new_matches` (slice 3), the console page (slice 4); until slice 2 and 3 land no event is produced, so a channel only receives the test send.
+- Detail the ADR left open: the "backed up" state is exposed as `backlog` (undelivered, not failed rows) on `GET /api/notify/channels`; the tenant limit of 60 a minute is counted on `last_attempt_at`; a row of a paused or disabled channel is not claimed; a row whose secret cannot be opened (key gone, ciphertext not authentic) is a `blocked` failure and follows the retry schedule.
+
 ## Resolved in review
 
 - **Cooldown:** 30 minutes by default, per channel; never below the cron's period.
