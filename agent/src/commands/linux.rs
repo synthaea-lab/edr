@@ -571,7 +571,7 @@ fn starts_avc_reader(sensor_name: &str) -> bool {
 fn spawn_avc_reader(
     sink: Arc<DetectionSink>,
     heartbeat: SensorHeartbeat,
-    mut reader: sensor_linux_audit::AvcReader,
+    reader: sensor_linux_audit::AvcReader,
     shutdown: &mut ShutdownPlan,
 ) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -579,28 +579,14 @@ fn spawn_avc_reader(
     let handle = std::thread::Builder::new()
         .name("avc-reader".into())
         .spawn(move || {
-            let mut overruns: u64 = 0;
-            while !worker_stop.load(Ordering::SeqCst) {
-                match reader.drain(sink.as_ref(), AVC_POLL_TIMEOUT_MS) {
-                    Ok((_, overran)) => {
-                        heartbeat.pulse();
-                        if overran {
-                            overruns += 1;
-                            // Powers of two only: a sustained flood must not flood the log too.
-                            if overruns.is_power_of_two() {
-                                tracing::warn!(
-                                    overruns_total = overruns,
-                                    "avc-reader: kernel dropped records (socket buffer overrun)"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "avc-reader: socket error, stopping");
-                        break;
-                    }
-                }
-            }
+            run_avc_reader(
+                reader,
+                sensor_linux_audit::AvcReader::open,
+                sink.as_ref(),
+                &heartbeat,
+                &worker_stop,
+                avc_reopen_delay,
+            );
         })
         .expect("spawning the avc-reader thread");
     shutdown.register(
@@ -608,6 +594,122 @@ fn spawn_avc_reader(
         move || stop.store(true, Ordering::SeqCst),
         handle,
     );
+}
+
+/// First wait before reopening the AVC socket after an error (#878); doubles per
+/// failed attempt up to [`AVC_REOPEN_MAX_DELAY`].
+const AVC_REOPEN_BASE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+/// Ceiling on [`avc_reopen_delay`]: a socket that stays broken is retried once a
+/// minute for the rest of the run, never abandoned.
+const AVC_REOPEN_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Wait before reopen attempt `attempt` (0-based): 1s, 2s, 4s, ... capped at
+/// [`AVC_REOPEN_MAX_DELAY`].
+fn avc_reopen_delay(attempt: u32) -> std::time::Duration {
+    AVC_REOPEN_BASE_DELAY
+        .saturating_mul(2u32.saturating_pow(attempt))
+        .min(AVC_REOPEN_MAX_DELAY)
+}
+
+/// What [`run_avc_reader`] needs from `sensor_linux_audit::AvcReader`, so the reopen
+/// loop is testable without a `NETLINK_AUDIT` socket.
+trait AvcDrain {
+    fn drain(
+        &mut self,
+        sink: &dyn schema::sensor::EventSink,
+        timeout_ms: i32,
+    ) -> Result<(usize, bool), sensor_linux_audit::AuditError>;
+}
+
+impl AvcDrain for sensor_linux_audit::AvcReader {
+    fn drain(
+        &mut self,
+        sink: &dyn schema::sensor::EventSink,
+        timeout_ms: i32,
+    ) -> Result<(usize, bool), sensor_linux_audit::AuditError> {
+        sensor_linux_audit::AvcReader::drain(self, sink, timeout_ms)
+    }
+}
+
+/// The avc-reader thread's body: drains until `stop`, and on a socket error reopens
+/// the subscription with backoff instead of ending AVC coverage for the rest of the
+/// run (#878).
+///
+/// The heartbeat is not pulsed while reopening: an outage that outlasts
+/// `AVC_SILENCE_DEADLINE_NS` is real lost coverage and still raises the stalled-sensor
+/// alert, once per episode, cleared by the first drain after a successful reopen. The
+/// warnings logged here are what tell that cause apart from a killed source.
+fn run_avc_reader<R: AvcDrain>(
+    mut reader: R,
+    mut reopen: impl FnMut() -> Result<R, sensor_linux_audit::AuditError>,
+    sink: &dyn schema::sensor::EventSink,
+    heartbeat: &SensorHeartbeat,
+    stop: &AtomicBool,
+    reopen_delay: impl Fn(u32) -> std::time::Duration,
+) {
+    let mut overruns: u64 = 0;
+    loop {
+        let error = loop {
+            if stop.load(Ordering::SeqCst) {
+                return;
+            }
+            match reader.drain(sink, AVC_POLL_TIMEOUT_MS) {
+                Ok((_, overran)) => {
+                    heartbeat.pulse();
+                    if overran {
+                        overruns += 1;
+                        // Powers of two only: a sustained flood must not flood the log too.
+                        if overruns.is_power_of_two() {
+                            tracing::warn!(
+                                overruns_total = overruns,
+                                "avc-reader: kernel dropped records (socket buffer overrun)"
+                            );
+                        }
+                    }
+                }
+                Err(e) => break e,
+            }
+        };
+        tracing::warn!(
+            error = %error,
+            "avc-reader: socket error, reopening NETLINK_AUDIT — SELinux AVC denials are not captured until it succeeds"
+        );
+        drop(reader);
+        reader = match reopen_with_backoff(&mut reopen, stop, &reopen_delay) {
+            Some(fresh) => fresh,
+            None => return,
+        };
+    }
+}
+
+/// Retries `reopen` after `reopen_delay(attempt)` until it succeeds, or returns `None`
+/// once `stop` is set. Failures are logged at powers of two, so a socket broken for
+/// the rest of the run logs a handful of lines, not one a minute.
+fn reopen_with_backoff<R>(
+    reopen: &mut impl FnMut() -> Result<R, sensor_linux_audit::AuditError>,
+    stop: &AtomicBool,
+    reopen_delay: &impl Fn(u32) -> std::time::Duration,
+) -> Option<R> {
+    let mut attempt: u32 = 0;
+    loop {
+        sleep_unless_stopped(stop, reopen_delay(attempt));
+        if stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        attempt = attempt.saturating_add(1);
+        match reopen() {
+            Ok(fresh) => {
+                tracing::info!(attempts = attempt, "avc-reader: NETLINK_AUDIT reopened");
+                return Some(fresh);
+            }
+            Err(e) if attempt.is_power_of_two() => tracing::warn!(
+                error = %e,
+                attempts = attempt,
+                "avc-reader: reopening NETLINK_AUDIT failed, still retrying"
+            ),
+            Err(_) => {}
+        }
+    }
 }
 
 /// Spawns the background thread that tails journald for auth/session events
@@ -843,7 +945,148 @@ pub(crate) fn cmd_capture_events(output: &std::path::Path) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
-    use super::starts_avc_reader;
+    use std::{
+        cell::Cell,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use schema::{Event, sensor::EventSink};
+    use sensor_linux_audit::AuditError;
+    use tamper::heartbeat::SensorHeartbeat;
+
+    use super::{AvcDrain, avc_reopen_delay, run_avc_reader, starts_avc_reader};
+
+    struct NullSink;
+
+    impl EventSink for NullSink {
+        fn on_event(&self, _event: Event) {}
+    }
+
+    /// A reader whose drain fails, or succeeds once and then sets `stop`.
+    struct FakeReader {
+        fails: bool,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl AvcDrain for FakeReader {
+        fn drain(
+            &mut self,
+            _sink: &dyn EventSink,
+            _timeout_ms: i32,
+        ) -> Result<(usize, bool), AuditError> {
+            if self.fails {
+                return Err(AuditError::Netlink(libc::EIO));
+            }
+            self.stop.store(true, Ordering::SeqCst);
+            Ok((0, false))
+        }
+    }
+
+    #[test]
+    fn a_socket_error_reopens_the_reader_instead_of_stopping() {
+        // Regression (#878): the first `Err` from `drain` ended the thread for the
+        // rest of the run, with no reopen.
+        let stop = Arc::new(AtomicBool::new(false));
+        let heartbeat = SensorHeartbeat::new("test-avc");
+        let reopens = Cell::new(0);
+        run_avc_reader(
+            FakeReader {
+                fails: true,
+                stop: Arc::clone(&stop),
+            },
+            || {
+                reopens.set(reopens.get() + 1);
+                Ok(FakeReader {
+                    fails: false,
+                    stop: Arc::clone(&stop),
+                })
+            },
+            &NullSink,
+            &heartbeat,
+            &stop,
+            |_| Duration::ZERO,
+        );
+        assert_eq!(reopens.get(), 1);
+        assert_eq!(
+            heartbeat.pulse_count(),
+            1,
+            "the reopened reader's drain must pulse the heartbeat again"
+        );
+    }
+
+    #[test]
+    fn a_failing_reopen_keeps_retrying_until_stopped() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let heartbeat = SensorHeartbeat::new("test-avc");
+        let reopens = Cell::new(0);
+        run_avc_reader(
+            FakeReader {
+                fails: true,
+                stop: Arc::clone(&stop),
+            },
+            || {
+                reopens.set(reopens.get() + 1);
+                if reopens.get() == 5 {
+                    stop.store(true, Ordering::SeqCst);
+                }
+                Err(AuditError::Netlink(libc::EPERM))
+            },
+            &NullSink,
+            &heartbeat,
+            &stop,
+            |_| Duration::ZERO,
+        );
+        assert_eq!(reopens.get(), 5, "every failed reopen is retried");
+        assert_eq!(
+            heartbeat.pulse_count(),
+            0,
+            "no pulse while the socket is down"
+        );
+    }
+
+    #[test]
+    fn stopping_during_the_backoff_returns_without_waiting_it_out() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let reopens = Cell::new(0);
+        let started = std::time::Instant::now();
+        let stopper = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                stop.store(true, Ordering::SeqCst);
+            })
+        };
+        run_avc_reader(
+            FakeReader {
+                fails: true,
+                stop: Arc::clone(&stop),
+            },
+            || {
+                reopens.set(reopens.get() + 1);
+                Err(AuditError::Netlink(libc::EPERM))
+            },
+            &NullSink,
+            &SensorHeartbeat::new("test-avc"),
+            &stop,
+            |_| Duration::from_secs(60),
+        );
+        stopper.join().expect("stopper thread");
+        assert_eq!(reopens.get(), 0, "stopped before the first backoff ended");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn avc_reopen_delay_doubles_then_caps_at_a_minute() {
+        assert_eq!(avc_reopen_delay(0), Duration::from_secs(1));
+        assert_eq!(avc_reopen_delay(1), Duration::from_secs(2));
+        assert_eq!(avc_reopen_delay(5), Duration::from_secs(32));
+        assert_eq!(avc_reopen_delay(6), Duration::from_secs(60));
+        assert_eq!(avc_reopen_delay(u32::MAX), Duration::from_secs(60));
+    }
 
     #[test]
     fn starts_avc_reader_when_ebpf_is_primary() {
