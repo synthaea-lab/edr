@@ -2,9 +2,12 @@
 //! programs through the kernel verifier without attaching them); run/capture
 //! drive `LinuxSensor` with the appropriate sink.
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use schema::sensor::{EventSink as _, Sensor as _};
@@ -13,7 +16,7 @@ use tamper::heartbeat::{SensorHeartbeat, SilenceMonitor};
 use crate::{
     protected::ProtectedResourceGuard,
     shutdown::{SHUTDOWN_BUDGET, ShutdownPlan, sleep_unless_stopped},
-    silence::PulsingSink,
+    silence::{PulsingSink, SourceStatus},
     sink::DetectionSink,
 };
 
@@ -312,14 +315,27 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     // packaged install without `CAP_AUDIT_READ` must not accrue silence for a
     // sensor that never started, or every start raises a false T1562 alert.
     let ebpf_primary = starts_avc_reader(sensor_name);
+    // Down for a reason the agent knows (#878, #879): reported through the health beacon as a
+    // silent `linux-avc` sensor, so the fleet page shows the host as degraded, rather than as
+    // a heartbeat that went quiet, which is read as tampering.
+    let avc_status = SourceStatus::new("linux-avc");
     let avc_reader = ebpf_primary
         .then(sensor_linux_audit::AvcReader::open)
         .and_then(|result| match result {
             Ok(reader) => Some(reader),
-            Err(e) => {
+            Err(e) if selinux_active() => {
+                avc_status.set_down(true);
                 tracing::warn!(
                     error = %e,
-                    "avc-reader: could not open NETLINK_AUDIT — SELinux AVC denials will not be captured on this host"
+                    "avc-reader: could not open NETLINK_AUDIT — SELinux AVC denials will not be captured on this host (reported as a degraded sensor, linux-avc)"
+                );
+                None
+            }
+            Err(e) => {
+                // Without SELinux there is no AVC stream to lose, so this is not a degradation.
+                tracing::info!(
+                    error = %e,
+                    "avc-reader: could not open NETLINK_AUDIT, and SELinux is not active on this host"
                 );
                 None
             }
@@ -374,6 +390,7 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     let health = super::common::health_collector(
         &pipeline,
         silence_monitor,
+        vec![avc_status.clone()],
         Arc::new(crate::host_counters::AgentHostCounters::new(
             Arc::clone(&pipeline.sink),
             crate::host_counters::WatchdogReport::from_env(),
@@ -391,7 +408,13 @@ pub(crate) fn cmd_run(opts: super::RunOptions) -> anyhow::Result<()> {
     spawn_netlink_poller(sink.clone(), netlink_heartbeat, &mut shutdown);
     spawn_journal_tail(sink.clone(), journal_heartbeat, alerts);
     if let Some(avc_reader) = avc_reader {
-        spawn_avc_reader(sink.clone(), avc_heartbeat, avc_reader, &mut shutdown);
+        spawn_avc_reader(
+            sink.clone(),
+            avc_heartbeat,
+            avc_status,
+            avc_reader,
+            &mut shutdown,
+        );
     }
     crate::log_sources::spawn(sink.clone(), log_sources, alerts, &mut shutdown);
     if enable_tls_capture || enable_readline_capture || enable_dns_capture {
@@ -571,7 +594,8 @@ fn starts_avc_reader(sensor_name: &str) -> bool {
 fn spawn_avc_reader(
     sink: Arc<DetectionSink>,
     heartbeat: SensorHeartbeat,
-    mut reader: sensor_linux_audit::AvcReader,
+    status: SourceStatus,
+    reader: sensor_linux_audit::AvcReader,
     shutdown: &mut ShutdownPlan,
 ) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -579,28 +603,19 @@ fn spawn_avc_reader(
     let handle = std::thread::Builder::new()
         .name("avc-reader".into())
         .spawn(move || {
-            let mut overruns: u64 = 0;
-            while !worker_stop.load(Ordering::SeqCst) {
-                match reader.drain(sink.as_ref(), AVC_POLL_TIMEOUT_MS) {
-                    Ok((_, overran)) => {
-                        heartbeat.pulse();
-                        if overran {
-                            overruns += 1;
-                            // Powers of two only: a sustained flood must not flood the log too.
-                            if overruns.is_power_of_two() {
-                                tracing::warn!(
-                                    overruns_total = overruns,
-                                    "avc-reader: kernel dropped records (socket buffer overrun)"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "avc-reader: socket error, stopping");
-                        break;
-                    }
-                }
-            }
+            run_avc_worker(
+                &worker_stop,
+                &status,
+                reader,
+                |reader| {
+                    reader
+                        .drain(sink.as_ref(), AVC_POLL_TIMEOUT_MS)
+                        .map(|(_, overran)| overran)
+                },
+                sensor_linux_audit::AvcReader::open,
+                |delay| pause_pulsing(&worker_stop, &heartbeat, delay),
+                || heartbeat.pulse(),
+            );
         })
         .expect("spawning the avc-reader thread");
     shutdown.register(
@@ -608,6 +623,113 @@ fn spawn_avc_reader(
         move || stop.store(true, Ordering::SeqCst),
         handle,
     );
+}
+
+/// First wait before [`run_avc_worker`] reopens a failed socket, doubled after each failed
+/// reopen up to [`AVC_REOPEN_MAX`].
+const AVC_REOPEN_FIRST: Duration = Duration::from_secs(1);
+const AVC_REOPEN_MAX: Duration = Duration::from_secs(60);
+
+fn next_reopen_delay(previous: Duration) -> Duration {
+    (previous * 2).min(AVC_REOPEN_MAX)
+}
+
+/// Whether `SELinux` is active on this host. The AVC reader only has something to capture then,
+/// so only then is a reader that cannot run a degradation worth telling the control plane about.
+fn selinux_active() -> bool {
+    std::path::Path::new("/sys/fs/selinux/enforce").exists()
+}
+
+/// Waits `total`, pulsing `heartbeat` about once a second and returning early when `stop` is set.
+/// The reader is alive and working to recover while it waits, so it must not look silent: silence
+/// is read as tampering, and the beacon already says the source is down ([`SourceStatus`]).
+fn pause_pulsing(stop: &AtomicBool, heartbeat: &SensorHeartbeat, total: Duration) {
+    let slice = Duration::from_secs(1);
+    let mut left = total;
+    while !stop.load(Ordering::SeqCst) && !left.is_zero() {
+        heartbeat.pulse();
+        let step = left.min(slice);
+        sleep_unless_stopped(stop, step);
+        left -= step;
+    }
+}
+
+/// The body of the `avc-reader` thread, with its I/O handed in so it can be tested without a
+/// netlink socket. `drain` returns whether the kernel dropped records; an error from it (a
+/// transient socket error, not only `ENOBUFS`, which `drain` already absorbs) no longer ends
+/// the reader for good (#878): the source is marked down, the socket is reopened after a delay
+/// that doubles from [`AVC_REOPEN_FIRST`] to [`AVC_REOPEN_MAX`], and it is marked up again once
+/// a reopen succeeds. While it waits it pulses, so it is not mistaken for a killed source.
+fn run_avc_worker<R, E: std::fmt::Display>(
+    stop: &AtomicBool,
+    status: &SourceStatus,
+    reader: R,
+    mut drain: impl FnMut(&mut R) -> Result<bool, E>,
+    mut reopen: impl FnMut() -> Result<R, E>,
+    mut pause: impl FnMut(Duration),
+    pulse: impl Fn(),
+) {
+    let mut reader = Some(reader);
+    let mut overruns: u64 = 0;
+    let mut delay = AVC_REOPEN_FIRST;
+    let mut failed_reopens: u64 = 0;
+    while !stop.load(Ordering::SeqCst) {
+        let Some(current) = reader.as_mut() else {
+            pulse();
+            pause(delay);
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            match reopen() {
+                Ok(fresh) => {
+                    tracing::info!("avc-reader: socket reopened");
+                    reader = Some(fresh);
+                    status.set_down(false);
+                    delay = AVC_REOPEN_FIRST;
+                    failed_reopens = 0;
+                }
+                Err(e) => {
+                    failed_reopens += 1;
+                    // Powers of two only: a socket that stays down must not flood the log.
+                    if failed_reopens.is_power_of_two() {
+                        tracing::warn!(
+                            error = %e,
+                            failed_reopens,
+                            retry_in = ?next_reopen_delay(delay),
+                            "avc-reader: could not reopen the socket"
+                        );
+                    }
+                    delay = next_reopen_delay(delay);
+                }
+            }
+            continue;
+        };
+        match drain(current) {
+            Ok(overran) => {
+                pulse();
+                if overran {
+                    overruns += 1;
+                    // Powers of two only: a sustained flood must not flood the log too.
+                    if overruns.is_power_of_two() {
+                        tracing::warn!(
+                            overruns_total = overruns,
+                            "avc-reader: kernel dropped records (socket buffer overrun)"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "avc-reader: socket error, reopening (AVC denials are not captured until it is back)"
+                );
+                status.set_down(true);
+                reader = None;
+                delay = AVC_REOPEN_FIRST;
+                failed_reopens = 0;
+            }
+        }
+    }
 }
 
 /// Spawns the background thread that tails journald for auth/session events
@@ -843,7 +965,162 @@ pub(crate) fn cmd_capture_events(output: &std::path::Path) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
-    use super::starts_avc_reader;
+    use std::{
+        cell::{Cell, RefCell},
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+
+    use super::{
+        AVC_REOPEN_FIRST, AVC_REOPEN_MAX, next_reopen_delay, run_avc_worker, starts_avc_reader,
+    };
+    use crate::silence::SourceStatus;
+
+    #[test]
+    fn the_reopen_delay_doubles_and_stops_at_the_cap() {
+        let mut delay = AVC_REOPEN_FIRST;
+        let mut seen = vec![delay.as_secs()];
+        for _ in 0..8 {
+            delay = next_reopen_delay(delay);
+            seen.push(delay.as_secs());
+        }
+        assert_eq!(seen, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+        assert_eq!(next_reopen_delay(AVC_REOPEN_MAX), AVC_REOPEN_MAX);
+    }
+
+    /// What `drive` records about one run of the worker.
+    struct Run {
+        waits: Vec<Duration>,
+        drains: u32,
+        pulses: u32,
+    }
+
+    /// Runs `run_avc_worker` with scripted I/O: `drains` is what each `drain` call returns,
+    /// `reopens` what each `reopen` call returns. The worker is stopped when a script runs out.
+    fn drive(drains: Vec<Result<bool, String>>, reopens: Vec<Result<u32, String>>) -> Run {
+        let stop = AtomicBool::new(false);
+        let status = SourceStatus::new("linux-avc");
+        let drains = RefCell::new(drains.into_iter());
+        let reopens = RefCell::new(reopens.into_iter());
+        let waits = RefCell::new(Vec::new());
+        let drained = Cell::new(0);
+        let pulses = Cell::new(0);
+        run_avc_worker(
+            &stop,
+            &status,
+            0u32,
+            |_reader| {
+                drained.set(drained.get() + 1);
+                drains.borrow_mut().next().unwrap_or_else(|| {
+                    stop.store(true, Ordering::SeqCst);
+                    Ok(false)
+                })
+            },
+            || {
+                reopens.borrow_mut().next().unwrap_or_else(|| {
+                    stop.store(true, Ordering::SeqCst);
+                    Err("script exhausted".into())
+                })
+            },
+            |delay| waits.borrow_mut().push(delay),
+            || pulses.set(pulses.get() + 1),
+        );
+        Run {
+            waits: waits.into_inner(),
+            drains: drained.get(),
+            pulses: pulses.get(),
+        }
+    }
+
+    #[test]
+    fn a_socket_error_no_longer_ends_the_reader_it_is_reopened() {
+        // Healthy, one fatal error, then the reopened socket drains again.
+        let run = drive(vec![Ok(false), Err("EIO".into())], vec![Ok(1)]);
+        assert_eq!(run.waits, [AVC_REOPEN_FIRST]);
+        // Two drains before the stop: the healthy one and the failing one, then the reopened
+        // socket's, which finds the script empty and stops the worker.
+        assert_eq!(run.drains, 3);
+    }
+
+    #[test]
+    fn failed_reopens_back_off_and_a_success_resets_the_delay() {
+        let run = drive(
+            vec![Err("EIO".into()), Ok(false), Err("EIO again".into())],
+            vec![Err("EPERM".into()), Err("EPERM".into()), Ok(7), Ok(8)],
+        );
+        let secs: Vec<u64> = run.waits.iter().map(Duration::as_secs).collect();
+        // 1 s, 2 s (two failed reopens), 4 s (the one that works); the second error starts over
+        // from 1 s and its reopen works.
+        assert_eq!(secs, [1, 2, 4, 1]);
+    }
+
+    #[test]
+    fn the_reader_pulses_while_it_waits_so_it_is_not_taken_for_a_killed_source() {
+        let run = drive(
+            vec![Err("EIO".into())],
+            vec![Err("EPERM".into()), Err("EPERM".into()), Ok(1)],
+        );
+        // One pulse per wait (three), and none from a drain that succeeded before the error.
+        assert_eq!(run.waits.len(), 3);
+        assert!(run.pulses >= 3, "pulsed {} times", run.pulses);
+    }
+
+    #[test]
+    fn the_source_is_down_while_the_socket_is_gone_and_up_when_it_is_back() {
+        use crate::health::SensorHealthSource as _;
+
+        let status = SourceStatus::new("linux-avc");
+        let monitor = std::sync::Arc::new(std::sync::Mutex::new(
+            tamper::heartbeat::SilenceMonitor::new(),
+        ));
+        let health = crate::silence::SilenceHealthSource::new(monitor, vec![status.clone()]);
+        let stop = AtomicBool::new(false);
+        let during = RefCell::new(None);
+        let after = RefCell::new(None);
+        let mut drains = vec![Err("EIO".to_string())].into_iter();
+        run_avc_worker(
+            &stop,
+            &status,
+            0u32,
+            |_| {
+                drains.next().unwrap_or_else(|| {
+                    *after.borrow_mut() = Some(health.sensor_health());
+                    stop.store(true, Ordering::SeqCst);
+                    Ok(false)
+                })
+            },
+            || Ok(1),
+            |_| *during.borrow_mut() = Some(health.sensor_health()),
+            || {},
+        );
+        let during = during.into_inner().expect("it waited");
+        assert_eq!(during.len(), 1);
+        assert!(during[0].silent, "down while the socket is gone");
+        assert!(
+            after.into_inner().expect("it drained again").is_empty(),
+            "up once reopened"
+        );
+    }
+
+    #[test]
+    fn a_stop_during_the_wait_ends_the_worker_without_reopening() {
+        let stop = AtomicBool::new(false);
+        let status = SourceStatus::new("linux-avc");
+        let reopened = Cell::new(false);
+        run_avc_worker(
+            &stop,
+            &status,
+            0u32,
+            |_| Err::<bool, _>("EIO".to_string()),
+            || {
+                reopened.set(true);
+                Ok(1)
+            },
+            |_| stop.store(true, Ordering::SeqCst),
+            || {},
+        );
+        assert!(!reopened.get());
+    }
 
     #[test]
     fn starts_avc_reader_when_ebpf_is_primary() {
