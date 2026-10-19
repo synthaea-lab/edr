@@ -106,21 +106,24 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   `/proc` shows running another image is raised at once, and so is every touch when `allow_exe`
   is empty and every touch by a process in a container or another mount namespace (no image can
   excuse it). At most 256 touches are held; beyond that they are raised at once.
-- **What the hold costs.** The detection, not only the ransomware reflex, comes up to 500 ms
-  later, plus the time until the next file or exec event moves the clock (the hold runs on the
-  event time of the exec and file stream, so a poller's events do not end it). A touch still held
-  when the agent stops, or on a host that sends no further such event, is not reported; the
-  agent logs how many were held at shutdown. The reflex does not kill from a touch judged after
-  the hold: `/proc` named nothing for the process when it was held, so its pid may be someone
-  else's by then, and the reflex kills by pid (the finding is still raised, and a burst that
-  follows within the join window still corroborates it). On Windows and macOS the agent cannot read a process's image
-  from `/proc`, so with `allow_exe` set every touch not excused by a recorded `exec` waits the
-  500 ms. An exec excuses a held touch only when it carries the same process generation as the
-  touch; a sensor that does not stamp one leaves the touch to the end of the hold. Two outcomes
-  bring the false positive back and are counted and logged (`canary hold queue full`,
-  `held canary touch raised, no allowed exec before it`). Measured 2026-10-16 on the Fedora VM: a
-  `tar` started by a real `crond` raised 12 alerts in 3 processes before this, none after, with
-  `allow_exe = ["/usr/bin/tar"]` (before the timestamp rule above was added; not re-measured).
+- **What the hold costs.** The detection, not only the ransomware reflex, comes up to 500 ms later,
+  plus the time until the next file or exec event moves the clock (the hold runs on the event time
+  of the exec and file stream, so a poller's events do not end it). A touch still held when the
+  agent stops, or on a host that sends no further such event, is not reported; the agent logs how
+  many were held at shutdown. The reflex does not kill from a touch judged after the hold: `/proc`
+  named nothing for the process when it was held, so its pid may be someone else's by then, and the
+  reflex kills by pid (the finding is still raised, and a burst that follows within the join window
+  still corroborates it). On Windows and macOS the agent cannot read a process's image from `/proc`,
+  so with `allow_exe` set every touch not excused by a recorded `exec` waits the 500 ms. An exec
+  excuses a held touch only when it carries the same process generation as the touch; a sensor that
+  does not stamp one leaves the touch to the end of the hold. A touch judged with no recorded image
+  is judged on `/proc` when the hold ends, so a pid recycled inside the 500 ms by a process running
+  an allowed image would excuse it (the same `/proc` weakness as above). Two outcomes bring the
+  false positive back and are counted and logged (`canary hold queue full`, `held canary touch
+  raised, no allowed exec before it`). Measured on the Fedora VM: a `tar` started by a real `crond` raised 12 alerts in 3
+  processes without `allow_exe` and none with `allow_exe = ["/usr/bin/tar"]` (2026-10-16, and again
+  on 2026-10-19 after the timestamp rule); a shell that opens a canary and then execs an allowed
+  `tar` alerted in 15 of 15 runs (0 of 15 before the rule).
 - **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
   `env`, ...): allowing one allows every script it runs.
 - **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be

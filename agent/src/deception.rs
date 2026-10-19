@@ -256,7 +256,10 @@ impl CanaryAllow {
             // exec'd again and that event was shed or arrived late. `/proc`, where the agent can
             // read it, shows the image now: if it names something else the entry is stale and
             // the process is not allowed. Where `/proc` says nothing (no ptrace access) the
-            // table decides alone, and that residue is documented.
+            // table decides alone, and that residue is documented. The same weakness applies to a
+            // touch held for its `exec` and judged with no image: `/proc` is read when the hold
+            // ends, so a pid recycled inside the 500 ms by a process running an allowed image
+            // would excuse it (narrow: it needs a pid reuse inside the hold).
             // The string checks go first. A name the table does not list is not a refusal: the
             // exec may have gone through a link (`/bin/updatedb` under usrmerge, a `PATH` lookup)
             // that `/proc` canonicalises, so that process takes the `/proc` route below.
