@@ -175,6 +175,10 @@ def test_the_site_rarity_run_trains_both_models_and_records_the_effect(
             str(out),
             "--min-hosts",
             "3",
+            # Without it the floor check refuses this corpus (rarity is known for 95% of its
+            # rows): see test_rarity_floor.py.
+            "--withhold-fraction",
+            "0.3",
         ],
     )
     train_site_rarity.main()

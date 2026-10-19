@@ -17,12 +17,26 @@ is a false positive: `fp_rate_test_*` in the model record is the empirical FP ra
 model at its own calibrated threshold. The split is by **time**, not random: a random split
 would put an event's near-duplicates on both sides and flatter both models.
 
-What this does not do: ship a model. The Rust extractor exists (`ml::features::rarity`, pinned to
-`rarity.py` by a golden file) but nothing hands the agent a common-set snapshot and no scorer
-loads an 11-feature model yet (ADR-0020); and the global-model-floor
-check of `train_site_model.py` (a site model must not lose detections the global model has)
-still has to pass before any site model leaves the lab. Detection quality is not measured
-here: only the false-positive side, on benign corpora.
+A model that fails the **floor** below is not written. The rarity features are withheld (0, 0)
+until a snapshot covers enough hosts, which is the state of every freshly enrolled fleet, and a
+model trained mostly on rows where rarity was known can score that state as anomalous without
+the figure above showing it (it is taken at the natural mix of known and withheld rows). So the
+run also measures, on the same test slice with the rarity forced to withheld:
+
+- the false-positive rate, which may exceed the cmdline-only model's by at most
+  `WITHHELD_FP_MARGIN`;
+- with `--robustness-scenarios`, the escape rate and median degradation of the adversarial
+  scenario suite, scoring the candidate with the rarity withheld against the cmdline-only model
+  of the same corpus, each at its own calibrated threshold, with the tolerances of
+  `train_site_model.py`'s floor check.
+
+What this does not do: ship a model, or compare it with the **global** model. The Rust extractor
+exists (`ml::features::rarity`, pinned to `rarity.py` by a golden file) but nothing hands the
+agent a common-set snapshot and no scorer loads an 11-feature model yet (ADR-0020); and the
+global-model-floor check of `train_site_model.py` (a site model must not lose detections the
+global model has) is still not made for this family, so the record says so. Detection quality
+with the rarity *known* is not measured either: a scenario event has no image hash, so only the
+withheld state can be scored, and only the false-positive side is measured on benign corpora.
 
 Input: a site corpus JSONL (`{timestamp, event_type, event, agent_id}` per line, as
 `/api/corpus/finalize` exports it). Usage:
@@ -37,6 +51,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +68,7 @@ from synthaea_ml.data.common_set import (
     _timestamp_ns,
     point_in_time_snapshots,
 )
+from synthaea_ml.evaluation.robustness import run_robustness_evaluation
 from synthaea_ml.features import cmdline, rarity
 from synthaea_ml.registry.training_record import DatasetVersion, write_training_record
 
@@ -70,6 +87,13 @@ CALIBRATION_FRACTION = 0.15
 FP_BUDGET_PER_ENDPOINT_DAY = 5.0
 BENIGN_RATE_PER_DAY = 1000.0
 FEATURE_BOUNDS_MARGIN = 0.05
+
+WITHHELD_FP_MARGIN = 0.01
+"""How far above the cmdline-only model's test false-positive rate the candidate's rate may be
+with the rarity withheld (one percentage point). A starting point, to calibrate on a real corpus."""
+ESCAPE_RATE_TOLERANCE = 0.05
+DEGRADATION_TOLERANCE = 0.10
+"""The tolerances of `train_site_model.run_global_floor_check`, so the two floors read alike."""
 
 HYPERPARAMETERS: dict[str, object] = {
     "n_estimators": 100,
@@ -149,6 +173,137 @@ def fit_and_measure(
     return clf, cal, bounds, fp_rate
 
 
+class WithheldRarity:
+    """The 11-feature candidate seen as a 9-feature T0 model: the cmdline features go in, the
+    two rarity columns are appended as withheld (0, 0), as on an agent with no usable snapshot.
+    The robustness evaluation scores a command line with `decision_function` on the cmdline
+    features alone, and a scenario event carries no image hash to look up."""
+
+    def __init__(self, model: IsolationForest) -> None:
+        self._model = model
+        self.n_features_in_ = len(cmdline.FEATURE_NAMES)
+
+    def decision_function(self, x: Any) -> np.ndarray:
+        rows = np.asarray(x, dtype=np.float32)
+        withheld = np.zeros((len(rows), len(rarity.FEATURE_NAMES)), dtype=np.float32)
+        return self._model.decision_function(np.hstack([rows, withheld]))
+
+
+def withhold_rows(x: np.ndarray, fraction: float, seed: int, rows: slice) -> np.ndarray:
+    """A copy of `x` where a random `fraction` of the rows in `rows` has its two rarity columns
+    set to withheld (0, 0), as if no usable snapshot had existed for them.
+
+    In a real corpus the withheld rows are only those before the first snapshot boundary, a few
+    percent, so the forest learns (0, 0) as a rare combination and then flags the withheld
+    state of every new fleet (what `check_rarity_floor` measures). Withholding a share of the
+    training rows teaches it that state. Only the rows in `rows` change: the slices that are
+    calibrated and tested stay as the corpus gave them."""
+    if not 0.0 <= fraction < 1.0:
+        raise ValueError(f"withhold fraction must be in [0, 1), got {fraction}")
+    out = x.copy()
+    if fraction == 0.0:
+        return out
+    start, stop, _ = rows.indices(len(x))
+    chosen = np.random.default_rng(seed).random(stop - start) < fraction
+    out[start:stop][chosen, -len(rarity.FEATURE_NAMES):] = 0.0
+    return out
+
+
+def withheld_fp_rate(model: IsolationForest, calibration: Any, x_base_test: np.ndarray) -> float:
+    """The share of benign test rows flagged at the model's calibrated threshold with the rarity
+    forced to withheld: the false-positive rate of a fleet that has no snapshot yet."""
+    if not len(x_base_test):
+        return 0.0
+    scores = WithheldRarity(model).decision_function(x_base_test)
+    return float((scores < calibration.threshold).mean())
+
+
+@dataclass(frozen=True)
+class RarityFloor:
+    passed: bool
+    fp_cmdline_only: float
+    fp_withheld: float
+    scenario_lines: list[str]
+    failures: list[str]
+
+
+def check_rarity_floor(
+    candidate: IsolationForest,
+    candidate_cal: Any,
+    baseline: IsolationForest,
+    baseline_cal: Any,
+    x_base_test: np.ndarray,
+    scenario_yamls: Sequence[Path] = (),
+) -> RarityFloor:
+    """The floor of the module docstring: the withheld-state false-positive rate, and the
+    scenario suite when `scenario_yamls` are given. Collects every failure rather than
+    stopping at the first, so a run reports all of them."""
+    failures: list[str] = []
+    fp_base = float((baseline.decision_function(x_base_test) < baseline_cal.threshold).mean()) if len(x_base_test) else 0.0
+    fp_withheld = withheld_fp_rate(candidate, candidate_cal, x_base_test)
+    if fp_withheld > fp_base + WITHHELD_FP_MARGIN:
+        failures.append(
+            f"with the rarity withheld the candidate flags {fp_withheld:.2%} of the benign test "
+            f"slice, above the cmdline-only model's {fp_base:.2%} + {WITHHELD_FP_MARGIN:.2%}: "
+            "a fleet with no snapshot yet would see that false-positive rate"
+        )
+
+    lines: list[str] = []
+    withheld_model = WithheldRarity(candidate)
+    for scenario in scenario_yamls:
+        name = Path(scenario).stem
+        try:
+            base_card = run_robustness_evaluation(
+                baseline, scenario, tier="T0", mutation_seed=42, threshold=baseline_cal.threshold
+            )
+        except ValueError as error:
+            # Nothing the baseline detects: there is nothing for the candidate to lose here.
+            lines.append(f"{name}: skipped, the cmdline-only model detects none of it ({error})")
+            continue
+        try:
+            cand_card = run_robustness_evaluation(
+                withheld_model, scenario, tier="T0", mutation_seed=42, threshold=candidate_cal.threshold
+            )
+        except ValueError as error:
+            failures.append(
+                f"{name}: the candidate with the rarity withheld detects none of what the "
+                f"cmdline-only model detects ({error})"
+            )
+            continue
+        lines.append(
+            f"{name}: escape rate {cand_card.escape_rate:.2%} vs {base_card.escape_rate:.2%}, "
+            f"median degradation {cand_card.median_score_degradation:.3f} vs "
+            f"{base_card.median_score_degradation:.3f}"
+        )
+        if cand_card.escape_rate > base_card.escape_rate + ESCAPE_RATE_TOLERANCE:
+            failures.append(
+                f"{name}: escape rate {cand_card.escape_rate:.2%} is above the cmdline-only "
+                f"model's {base_card.escape_rate:.2%} + {ESCAPE_RATE_TOLERANCE:.0%}"
+            )
+        if cand_card.median_score_degradation > base_card.median_score_degradation + DEGRADATION_TOLERANCE:
+            failures.append(
+                f"{name}: median degradation {cand_card.median_score_degradation:.3f} is above "
+                f"the cmdline-only model's {base_card.median_score_degradation:.3f} + {DEGRADATION_TOLERANCE:.2f}"
+            )
+    return RarityFloor(not failures, fp_base, fp_withheld, lines, failures)
+
+
+def _describe_floor(floor: RarityFloor, with_scenarios: bool) -> str:
+    """One line for the training record: what was checked, and what was not."""
+    if not with_scenarios:
+        return (
+            f"PASSED (withheld false-positive rate only: {floor.fp_withheld:.2%} against "
+            f"{floor.fp_cmdline_only:.2%} + {WITHHELD_FP_MARGIN:.2%}; no scenarios given, "
+            "so the escape rate was not checked)"
+        )
+    return (
+        f"PASSED (withheld false-positive rate {floor.fp_withheld:.2%} against "
+        f"{floor.fp_cmdline_only:.2%} + {WITHHELD_FP_MARGIN:.2%}; "
+        + "; ".join(floor.scenario_lines)
+        + ")"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site-corpus", type=Path, required=True)
@@ -162,6 +317,22 @@ def main() -> None:
         default=DEFAULT_INTERVAL_NS / 3_600_000_000_000,
         help="Cadence of published snapshots.",
     )
+    parser.add_argument(
+        "--withhold-fraction",
+        type=float,
+        default=0.0,
+        help="Share of the training rows whose rarity is set to withheld, so the model learns "
+        "the state of a fleet with no snapshot yet. 0 (the default) trains on the corpus as it is, "
+        "which the floor check rejects when almost all rows have a known rarity.",
+    )
+    parser.add_argument(
+        "--robustness-scenarios",
+        type=Path,
+        nargs="+",
+        default=[],
+        help="Scenario YAMLs for the floor check: the candidate with the rarity withheld must "
+        "not be less robust than the cmdline-only model of the same corpus.",
+    )
     args = parser.parse_args()
 
     records = load_corpus(args.site_corpus)
@@ -173,12 +344,23 @@ def main() -> None:
         )
     print(f"{len(x_rare)} exec events; rarity known for {known:.0%} of them")
 
-    _, base_cal, _, base_fp = fit_and_measure(x_base, list(cmdline.FEATURE_NAMES))
-    clf, cal, bounds, rare_fp = fit_and_measure(x_rare, FEATURE_NAMES)
+    base_clf, base_cal, _, base_fp = fit_and_measure(x_base, list(cmdline.FEATURE_NAMES))
+    train_rows, _, test_rows = time_split(len(x_rare))
+    x_fit = withhold_rows(x_rare, args.withhold_fraction, HYPERPARAMETERS["random_state"], train_rows)
+    clf, cal, bounds, rare_fp = fit_and_measure(x_fit, FEATURE_NAMES)
     print(
         f"test-slice false-positive rate: cmdline only {base_fp:.2%}, "
         f"with rarity {rare_fp:.2%} (budget {FP_BUDGET_PER_ENDPOINT_DAY:g}/endpoint/day)"
     )
+
+    floor = check_rarity_floor(clf, cal, base_clf, base_cal, x_base[test_rows], args.robustness_scenarios)
+    print(f"with the rarity withheld: false-positive rate {floor.fp_withheld:.2%}")
+    for line in floor.scenario_lines:
+        print(f"  scenario {line}")
+    if not floor.passed:
+        raise ValueError(
+            "the rarity floor failed, no model written:\n  - " + "\n  - ".join(floor.failures)
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     onnx_model = to_onnx(clf, x_rare[:1], target_opset={"": 18, "ai.onnx.ml": 3})
@@ -220,10 +402,17 @@ def main() -> None:
             "snapshot_interval_hours": str(args.interval_hours),
             "exec_events": str(len(x_rare)),
             "rarity_known_fraction": f"{known:.4f}",
+            "withhold_fraction": f"{args.withhold_fraction:.4f}",
             "fp_rate_test_cmdline_only": f"{base_fp:.4f}",
             "fp_rate_test_with_rarity": f"{rare_fp:.4f}",
             "threshold_cmdline_only": f"{base_cal.threshold:.6f}",
-            "global_model_floor": "NOT CHECKED: run it before this model leaves the lab",
+            "fp_rate_test_with_rarity_withheld": f"{floor.fp_withheld:.4f}",
+            "rarity_floor": _describe_floor(floor, bool(args.robustness_scenarios)),
+            "global_model_floor": (
+                "NOT CHECKED against the global model: the floor above compares the candidate "
+                "with this corpus's cmdline-only model; run the global comparison before this "
+                "model leaves the lab"
+            ),
         },
     )
     print(f"Site model with rarity -> {args.output_dir}")
