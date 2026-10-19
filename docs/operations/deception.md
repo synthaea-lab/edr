@@ -103,7 +103,10 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   anything else raises it when the time is up. A process `/proc` shows running another image is
   raised at once, and so is every touch when `allow_exe` is empty. At most 256 touches are held;
   beyond that they are raised at once. The ransomware reflex sees such a touch up to 500 ms
-  later. Measured 2026-10-16 on the Fedora VM: a `tar` started by a real `crond` raised 12 alerts
+  later. The hold runs on event time, so a touch still held when the agent stops, or on a host
+  that sends no further event, is not reported. An exec excuses a held touch only when it
+  carries the same process generation as the touch; a sensor that does not stamp one leaves the
+  touch to the end of the hold. Measured 2026-10-16 on the Fedora VM: a `tar` started by a real `crond` raised 12 alerts
   in 3 processes before this, none after, with `allow_exe = ["/usr/bin/tar"]`.
 - **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
   `env`, ...): allowing one allows every script it runs.

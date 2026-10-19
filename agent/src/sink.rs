@@ -974,6 +974,10 @@ impl DetectionSink {
     /// Drops the held touches of the incarnation that has just exec'd when its image is allowed.
     /// The others stay held: a process may exec more than once (`bash -c "tar ..."` is `bash`,
     /// then `tar` in one pid), so an image that is not allowed is not yet the last word.
+    ///
+    /// An exec without a generation never excuses a touch (`ExecImages::image_of` answers
+    /// nothing unless both sides carry the same one), so a pid reused within the hold cannot
+    /// resolve the touch of its previous life: the touch goes back and waits out the hold.
     fn resolve_held_canary(&self, pid: u32, generation: Option<u64>) {
         if self.held_canary_len.load(Ordering::Relaxed) == 0 {
             return;
@@ -2785,6 +2789,30 @@ rule response_marker {
         assert_eq!(canary_alert_count(&dir), 1, "the hold is bounded");
         sink.on_event(tick_at(10_000 + 3 * CANARY_EXEC_HOLD_NS));
         assert_eq!(canary_alert_count(&dir), 1, "raised once");
+    }
+
+    #[test]
+    fn an_exec_without_a_generation_does_not_resolve_a_held_touch() {
+        // A sensor that does not stamp the generation: the touch and the exec both carry
+        // `None`; `None == None` must not let the exec excuse the touch (a recycled pid).
+        let (sink, canary, dir) = sink_allowing_tar("canary-hold-no-generation");
+        let pid = std::process::id() + 1;
+        let Event::FileOpen(mut open) = canary_touch(&canary, pid, 3, 10_000) else {
+            unreachable!()
+        };
+        open.meta.process_generation = None;
+        sink.on_event(Event::FileOpen(open));
+        let Event::Exec(mut exec) = exec_of("/usr/bin/tar", pid, 3, 10_500) else {
+            unreachable!()
+        };
+        exec.meta.process_generation = None;
+        sink.on_event(Event::Exec(exec));
+        sink.on_event(tick_at(10_000 + CANARY_EXEC_HOLD_NS));
+        assert_eq!(
+            canary_alert_count(&dir),
+            1,
+            "no generation on the exec: the touch is judged when the hold ends"
+        );
     }
 
     #[test]
