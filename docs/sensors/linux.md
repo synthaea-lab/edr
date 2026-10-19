@@ -17,7 +17,10 @@ explicitly out of scope until after v1.
 **Status (issue #80):** Attribution foundation landed — `EventMeta::container`
 (`ContainerContext.id`) is resolved on every exec/file-open/connect event from
 `/proc/<pid>/cgroup` (cgroup v1 `/docker/<id>` and v2 `docker-<id>.scope` /
-`cri-containerd-<id>.scope` naming both handled; Kubernetes' `kubepods` nesting is
+`cri-containerd-<id>.scope` naming both handled, and podman's `libpod-<id>.scope` since #894:
+podman puts the processes in a `container` child cgroup of that scope, the id is the segment
+above it; checked on a rootful podman 5.8.8 container on Fedora 43, rootless podman and the
+image/name lookup through podman's socket are not covered; Kubernetes' `kubepods` nesting is
 transparent to the same matching, its pod/namespace context is not extracted).
 `image`/`name` are always `None` for now — they need a cached Docker/containerd
 socket lookup, deferred to a follow-up PR. Overlayfs path normalization and the
