@@ -10,7 +10,10 @@ simulates: >
 expected_detections:
   - technique: "T1505.003"
     rule: rule_web_request_shell   # crates/correlator/src/rules.rs — a web-server shell
-                                   # paired with the nearest signature request
+                                   # named with the request read from its time through 3 s after
+                                   # it (#807); this script sends its requests before the shell, so
+                                   # it only gets the generic alert, see the notes below and
+                                   # web-webshell-php for the pairing
     min_count: 1
     tolerance: 0
   - technique: "T1059"
@@ -33,14 +36,15 @@ notes: >
   LogFormat is web-custom-logformat.
   Re-run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68 with `FAKE_COMM=httpd`, access log
   /var/log/httpd/access_log: T1505.003 (0 s from the webshell_like request, status 404; this is
-  the agent build of #820, before #807) and T1059 fire, the four `http_request` events (sql_injection, path_traversal, scanner_user_agent,
+  the agent build `665dc8d` (#820, with inline-fix.diff), before #807) and T1059 fire, the four `http_request` events (sql_injection, path_traversal, scanner_user_agent,
   webshell_like) are written, then one `http_summary`. The sqlmap-agent request returns 403 on
   this httpd, not 404; the signature is unaffected.
-  Since #807 (2026-10-15, main) this scenario cannot show the pairing any more: a shell is paired
+  Since #807 (merged 2026-10-14) this scenario cannot show the pairing any more: a shell is paired
   only with a request read from the shell's time through 3 s after it (the log line is written
   after the response), and this script sends its four requests BEFORE it starts the fake shell.
-  Run with the agent of main (plus #845 on kernel 7.2) on Fedora 43 and on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main,
-  alone, twice each: the same on both. T1059 fires; T1505.003 fires after the 3 s grace as the
+  Run with the agent of main, `b28935b` plus #845 (needed on kernel 7.2), on Fedora 43 and on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main `b28935b` plus #845's diff (the Rocky build; the
+  notes of the run record that same static build for the Fedora comparison, no separate Fedora hash
+  was kept), alone, twice each: the same on both. T1059 fires; T1505.003 fires after the 3 s grace as the
   generic "shell spawned by a web server; no matching access-log request has been read yet"; the
   second run's requests, read later, also produce the completion alert "late access-log request
   read after the generic shell alert (unverified ...)". The four `http_request` events and the
