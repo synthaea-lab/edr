@@ -85,7 +85,7 @@ impl SourceStatus {
         self.down.store(down, Ordering::SeqCst);
     }
 
-    fn is_down(&self) -> bool {
+    pub(crate) fn is_down(&self) -> bool {
         self.down.load(Ordering::SeqCst)
     }
 }
