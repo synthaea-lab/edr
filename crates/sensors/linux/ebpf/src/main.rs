@@ -3605,10 +3605,15 @@ const SINGLE_ID_OFFSET: usize = 12;
 /// register width apart each, and `try_sys_enter_setres` reads all three in
 /// a single `read_at::<[_; 3]>` instead of three separate reads at three
 /// separate offsets: three reads, each with its own early-return `?`, was
-/// enough extra verifier state that bpf-linker's `-O2` fallback (upstream
-/// dropped `-Os`, see lab/provisioning/alpine-toolchain.sh) rejected this
-/// function with "R2 !read_ok" at its call sites, where it had verified
-/// fine under `-Os`.
+/// enough extra verifier state to fail this function with "R2 !read_ok" at
+/// its call sites under a forced `-O2` build (abuild's default.conf was
+/// overriding Cargo's resolved opt-level for the Alpine package — see
+/// packaging/linux/alpine/APKBUILD; the real fix was unsetting that
+/// override, not this). Kept anyway as cheap hardening: one read instead of
+/// three is less verifier state regardless of optimization level, and
+/// `raw_sys_enter` (ebpf/src/raw.rs) is one shared verifier unit across
+/// every `sys_enter_*` branch — a rejection anywhere in it loses all syscall
+/// telemetry, not just this probe.
 #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
 const RES_ID_REAL_OFFSET: usize = 16;
 /// i686: inferred, not independently verified.

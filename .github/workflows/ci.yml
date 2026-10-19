@@ -146,50 +146,14 @@ jobs:
             "https://github.com/aya-rs/bpf-linker/releases/download/${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst"
           echo "${BPF_LINKER_SHA256}  $RUNNER_TEMP/bpf-linker.tar.zst" | sha256sum -c -
           tar --zstd -xf "$RUNNER_TEMP/bpf-linker.tar.zst" -C "$RUNNER_TEMP"
-          install -m755 "$(find "$RUNNER_TEMP" -type f -name bpf-linker -print -quit)" "$HOME/.cargo/bin/bpf-linker.real"
-          # Shim: aya-build 0.2.0 hardcodes the "-Os" CodeGenOptLevel for the
-          # ebpf cross-build; this bpf-linker's bundled LLVM has dropped
-          # "Os"/"Oz" as presets and there is no newer release yet. Same shim,
-          # same reasoning as lab/provisioning/{alpine,linux,arch}-toolchain.sh
-          # (verified live on alpine-vm — not distro-specific). This job's own
-          # past "success" runs were restoring a stale cached link from before
-          # BPF_LINKER_VERSION was last bumped (build.rs has no
-          # rerun-if-changed on the linker's own identity, only on PATH); drop
-          # this shim once aya-build or bpf-linker ship a real fix upstream.
-          cat >"$HOME/.cargo/bin/bpf-linker" <<'SHIM'
-          #!/bin/sh
-          self=$(readlink -f "$0" 2>/dev/null || echo "$0")
-          dir=$(dirname "$self")
-          real="$dir/bpf-linker.real"
-          n=$#
-          i=0
-          while [ "$i" -lt "$n" ]; do
-            i=$((i + 1))
-            a=$1
-            shift
-            case "$a" in
-              -Os|-Oz) a=-O2 ;;
-            esac
-            eval "set -- \"\$@\" \"\$a\""
-          done
-          exec "$real" "$@"
-          SHIM
-          chmod 755 "$HOME/.cargo/bin/bpf-linker"
+          install -m755 "$(find "$RUNNER_TEMP" -type f -name bpf-linker -print -quit)" "$HOME/.cargo/bin/bpf-linker"
           bpf-linker --version
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Never share a cache with the probe-less `test` job: a restored build
           # script output from there would skip the probes (see the stale-build
           # note in lab/provisioning/linux-toolchain.sh).
-          #
-          # Bumped (-v2-bpf-linker-shim): this job's past green runs were
-          # almost certainly restoring a stale linked object from before
-          # BPF_LINKER_VERSION was last bumped — build.rs has no
-          # rerun-if-changed on the linker's own identity, only on PATH, so
-          # the cache never saw a reason to invalidate. Forces one genuine
-          # rebuild+relink under the bpf-linker shim above; bump again if
-          # this job ever needs to be forced to relink from scratch.
-          key: ebpf-embedded-v2-bpf-linker-shim
+          key: ebpf-embedded
       - name: clippy (embedded probes)
         run: cargo clippy -p sensor-linux -p sensor-linux-uprobes -p agent --all-targets -- -D warnings
       - name: probes are embedded
