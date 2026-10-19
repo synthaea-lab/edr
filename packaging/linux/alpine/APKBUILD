@@ -40,6 +40,26 @@ build() {
 	# reuses the already-provisioned toolchain/registry cache instead of a
 	# fresh, empty one every run.
 	export CARGO_HOME="$HOME/.cargo"
+
+	# abuild's own /usr/share/abuild/default.conf exports these four for
+	# every Alpine package, size/footprint-first (same spirit as its
+	# CFLAGS="-Os ..."): OPT_LEVEL=s, PANIC=abort, LTO=true,
+	# CODEGEN_UNITS=1. They override Cargo.toml and leak straight into
+	# aya-build's nested eBPF cross-build. Confirmed live on alpine-vm this
+	# is exactly where the eBPF probes' "-Os" came from — not bpf-linker,
+	# not aya-build, both innocent (bpf-linker 0.11.1's bundled LLVM has
+	# genuinely dropped "Os" as a preset, see its own `-O` help text
+	# default of "2", but that only bites when something still asks for
+	# "s"). The dangerous one is CARGO_PROFILE_RELEASE_PANIC=abort: the
+	# agent relies on unwind to degrade a single sensor whose thread
+	# panics instead of taking the whole process down with it (and for the
+	# graceful-shutdown path) — built with abort, a sensor panic kills the
+	# agent outright and watchdog loops forever restarting it. Unset all
+	# four so this package gets the exact same Cargo-resolved profile as
+	# build-deb.sh/build-rpm.sh and CI, which never run under abuild and
+	# never had this leak.
+	unset CARGO_PROFILE_RELEASE_OPT_LEVEL CARGO_PROFILE_RELEASE_PANIC \
+		CARGO_PROFILE_RELEASE_LTO CARGO_PROFILE_RELEASE_CODEGEN_UNITS
 	local target=x86_64-unknown-linux-musl
 	# CARGO_TARGET_DIR, not a bare "target/": honours a caller override (a
 	# small root disk may need this redirected, e.g. CARGO_TARGET_DIR=/mnt/
