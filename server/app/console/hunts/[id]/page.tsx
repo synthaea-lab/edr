@@ -54,6 +54,12 @@ export default async function HuntPage({ params }: { params: { id: string } }) {
         </div>
         <div className="flex shrink-0 items-start gap-3">
           <a
+            href={`/console/hunts/${hunt.id}/matches`}
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+          >
+            Matches
+          </a>
+          <a
             href={`/console/hunts/${hunt.id}/edit`}
             className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
           >

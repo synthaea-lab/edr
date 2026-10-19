@@ -51,12 +51,20 @@ export default async function HuntsPage() {
             detections that match in its window, and how many of them arrived since the previous run.
           </p>
         </div>
-        <a
-          href="/console/hunts/new"
-          className="shrink-0 px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
-        >
-          New hunt
-        </a>
+        <div className="flex shrink-0 gap-2">
+          <a
+            href="/console/hunts/search"
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-800 hover:bg-gray-50"
+          >
+            Search
+          </a>
+          <a
+            href="/console/hunts/new"
+            className="px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+          >
+            New hunt
+          </a>
+        </div>
       </div>
 
       {hunts.length === 0 ? (
