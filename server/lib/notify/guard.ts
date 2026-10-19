@@ -77,51 +77,100 @@ function parseV6(text: string): number[] | null {
   return bytes;
 }
 
+/**
+ * The ranges a tenant-chosen URL may not reach, taken from the IANA special-purpose address
+ * registries (IPv4: iana.org/assignments/iana-ipv4-special-registry, IPv6:
+ * iana.org/assignments/iana-ipv6-special-registry; read 2026-10-19) and not only from the ADR's
+ * list, which is a minimum. Every entry that is not globally reachable is here, and so are the
+ * few that are (the AS112 and AMT anycast prefixes, the PCP and TURN anycast addresses): no
+ * webhook receiver lives there, so refusing them costs nothing and keeps the table simple. An
+ * address that embeds an IPv4 (mapped, translated, NAT64, 6to4, IPv4-compatible) is judged by
+ * the IPv4 it embeds; the 2001::/23 block (IETF protocol assignments, Teredo included) is
+ * refused as a whole.
+ */
+export const SPECIAL_V4_CIDRS = [
+  "0.0.0.0/8", // "this network", 0.0.0.0/32 included
+  "10.0.0.0/8", // private
+  "100.64.0.0/10", // shared address space (CGNAT)
+  "127.0.0.0/8", // loopback
+  "169.254.0.0/16", // link-local, the cloud metadata address
+  "172.16.0.0/12", // private
+  "192.0.0.0/24", // IETF protocol assignments
+  "192.0.2.0/24", // documentation (TEST-NET-1)
+  "192.31.196.0/24", // AS112-v4
+  "192.52.193.0/24", // AMT
+  "192.88.99.0/24", // 6to4 relay anycast (deprecated)
+  "192.168.0.0/16", // private
+  "192.175.48.0/24", // direct delegation AS112
+  "198.18.0.0/15", // benchmarking
+  "198.51.100.0/24", // documentation (TEST-NET-2)
+  "203.0.113.0/24", // documentation (TEST-NET-3)
+  "224.0.0.0/4", // multicast
+  "240.0.0.0/4", // reserved, 255.255.255.255/32 (limited broadcast) included
+] as const;
+
+export const SPECIAL_V6_CIDRS = [
+  "::/128", // unspecified
+  "::1/128", // loopback
+  "100::/64", // discard-only
+  "100:0:0:1::/64", // dummy IPv6 prefix
+  "2001::/23", // IETF protocol assignments: Teredo 2001::/32, benchmarking, AMT, AS112, ORCHID, drone ID
+  "2001:db8::/32", // documentation
+  "3fff::/20", // documentation (RFC 9637)
+  "5f00::/16", // SRv6 SIDs
+  "64:ff9b:1::/48", // NAT64 local-use
+  "fc00::/7", // unique local (the IPv6 metadata address included)
+  "fe80::/10", // link-local
+  "fec0::/10", // site-local (deprecated)
+  "ff00::/8", // multicast
+] as const;
+
+function parseCidr4(cidr: string): { base: number; mask: number } {
+  const [addr, len] = cidr.split("/");
+  const b = parseV4(addr)!;
+  const base = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+  const bits = Number(len);
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return { base: (base & mask) >>> 0, mask };
+}
+
+function parseCidr6(cidr: string): { bytes: number[]; bits: number } {
+  const [addr, len] = cidr.split("/");
+  return { bytes: parseV6(addr)!, bits: Number(len) };
+}
+
+const V4_TABLE = SPECIAL_V4_CIDRS.map(parseCidr4);
+const V6_TABLE = SPECIAL_V6_CIDRS.map(parseCidr6);
+
+function inV6(b: number[], c: { bytes: number[]; bits: number }): boolean {
+  let left = c.bits;
+  for (let i = 0; left > 0; i++, left -= 8) {
+    const mask = left >= 8 ? 0xff : (0xff << (8 - left)) & 0xff;
+    if ((b[i] & mask) !== (c.bytes[i] & mask)) return false;
+  }
+  return true;
+}
+
 function isPrivateV4(b: number[]): boolean {
-  const [a, c, d] = b;
-  return (
-    a === 0 || // 0.0.0.0/8
-    a === 10 ||
-    (a === 100 && c >= 64 && c <= 127) || // CGNAT
-    a === 127 ||
-    (a === 169 && c === 254) || // link-local, cloud metadata
-    (a === 172 && c >= 16 && c <= 31) ||
-    (a === 192 && c === 0 && d === 0) || // IETF protocol assignments
-    (a === 192 && c === 0 && d === 2) || // TEST-NET-1
-    (a === 192 && c === 168) ||
-    (a === 192 && c === 88 && d === 99) || // 6to4 relay anycast (deprecated)
-    (a === 198 && (c === 18 || c === 19)) || // benchmarking
-    (a === 198 && c === 51 && d === 100) || // TEST-NET-2
-    (a === 203 && c === 0 && d === 113) || // TEST-NET-3
-    a >= 224 // multicast, reserved, broadcast
-  );
+  const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+  return V4_TABLE.some((c) => ((n & c.mask) >>> 0) === c.base);
 }
 
 function isPrivateV6(b: number[]): boolean {
   const allZero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
   const v4 = (at: number) => b.slice(at, at + 4);
-  // ::, ::1 and the IPv4-compatible ::a.b.c.d (judged by the embedded IPv4).
+  // ::a.b.c.d (IPv4-compatible, deprecated) and ::, ::1 — the unspecified and loopback addresses
+  // are refused outright, the rest is judged by the IPv4 it embeds.
   if (allZero(0, 12)) return b[12] === 0 && b[13] === 0 && b[14] === 0 ? true : isPrivateV4(v4(12));
   // ::ffff:a.b.c.d (IPv4-mapped).
   if (allZero(0, 10) && b[10] === 0xff && b[11] === 0xff) return isPrivateV4(v4(12));
-  // 64:ff9b::/96 (NAT64) is judged by the embedded IPv4.
-  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(4, 12)) {
-    return isPrivateV4(v4(12));
-  }
-  // 64:ff9b:1::/48 is NAT64's local-use prefix: any address under it is refused.
-  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 1) return true;
+  // ::ffff:0:a.b.c.d (IPv4-translated, deprecated).
+  if (allZero(0, 8) && b[8] === 0xff && b[9] === 0xff && b[10] === 0 && b[11] === 0) return isPrivateV4(v4(12));
+  // 64:ff9b::/96 (NAT64): the IPv4 it embeds. (64:ff9b:1::/48 is in the table, refused whole.)
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(4, 12)) return isPrivateV4(v4(12));
   // 2002::/16 (6to4) carries an IPv4 in bytes 2..5.
   if (b[0] === 0x20 && b[1] === 0x02) return isPrivateV4(v4(2));
-  // Teredo 2001::/32 tunnels IPv4 and carries the client's address obfuscated: refused outright.
-  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0 && b[3] === 0) return true;
-  return (
-    (b[0] & 0xfe) === 0xfc || // fc00::/7 unique-local (includes the IPv6 metadata address)
-    (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) || // fe80::/10 link-local
-    (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) || // fec0::/10 site-local (deprecated)
-    b[0] === 0xff || // multicast
-    (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) || // documentation
-    (b[0] === 0x01 && allZero(1, 8)) // 100::/64 discard
-  );
+  return V6_TABLE.some((c) => inV6(b, c));
 }
 
 /** True when the address is not one a tenant-chosen URL may reach. Unparseable means true. */
