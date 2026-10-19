@@ -17,7 +17,11 @@ rm -rf /var/lib/synthaea /run/synthaea
 # is kept for its contents, not for the synthaea uid/gid — once deluser runs
 # that uid has no name, and a later system account could be assigned the
 # same one and silently inherit ownership of the kept alert log.
-chown -R root:root /var/log/synthaea
+# `[ -d ... ] &&`, not a bare chown (review finding): under `set -e`, a
+# missing directory (an operator removed it by hand, or a second apk del
+# after an already-incomplete one) would fail the whole script here, before
+# the account is dropped.
+[ -d /var/log/synthaea ] && chown -R root:root /var/log/synthaea || true
 deluser synthaea 2>/dev/null || true
 delgroup synthaea 2>/dev/null || true
 
