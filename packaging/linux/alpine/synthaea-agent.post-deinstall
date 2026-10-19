@@ -1,11 +1,18 @@
 #!/bin/sh
 # Only called on a real removal, not an upgrade (apk calls pre-upgrade/
 # post-upgrade for those — this package defines neither, so an upgrade skips
-# straight past this file). Matches the .rpm spec's %postun "$1 -eq 0" branch:
-# full cleanup, including the user account and state.
+# straight past this file).
+#
+# Deliberately NOT the same as the .rpm spec's %postun "$1 -eq 0" branch,
+# which (like the .deb's "purge" case) deletes /var/log/synthaea too: apk has
+# no purge/remove split (review finding, #861 — on a security product,
+# `apk del` silently erasing the alert log the agent just raised is worse
+# than leaving it behind), so this keeps /var/log/synthaea and only removes
+# the runtime/versioned state and the account. An operator who wants the logs
+# gone too can still `rm -rf /var/log/synthaea` by hand.
 set -e
 
-rm -rf /var/lib/synthaea /var/log/synthaea /run/synthaea
+rm -rf /var/lib/synthaea /run/synthaea
 deluser synthaea 2>/dev/null || true
 delgroup synthaea 2>/dev/null || true
 

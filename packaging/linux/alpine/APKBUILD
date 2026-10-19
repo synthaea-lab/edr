@@ -11,9 +11,16 @@ arch="x86_64"
 license="Apache-2.0"
 # Fully static (musl, +crt-static): no runtime library dependency at all,
 # same property the .deb build on Alpine proves (CI: linux-deb-portability.yml).
-# libcap-utils: synthaea-agent.post-install needs `setcap` on the agent
-# binary (the OpenRC equivalent of the systemd unit's AmbientCapabilities).
-depends="libcap-utils"
+# openrc>=0.45: synthaea-agent.initd's `capabilities=` directive (ambient
+# capabilities via supervise-daemon, the OpenRC equivalent of the systemd
+# unit's AmbientCapabilities=) needs that version or later. Every Alpine
+# release this package targets (3.19+, see lab/MATRIX.md) ships well above
+# it — this is a floor, not expected to bind — but it documents the
+# assumption instead of failing silently on an ancient host. No
+# libcap-utils/setcap: dropped in favor of that directive (review finding —
+# file capabilities broke both self-update and the watchdog's die-with-
+# parent protection, see the initd's own comment).
+depends="openrc>=0.45"
 # No "cargo"/"rust" here: build() uses its own rustup-managed toolchain (the
 # exact channel rust-toolchain.toml pins, plus the ebpf-toolchain.txt nightly
 # with rust-src), not Alpine's system Rust — see lab/provisioning/alpine-toolchain.sh.
@@ -21,11 +28,25 @@ depends="libcap-utils"
 # need, same list as that provisioning script.
 makedepends="findutils tar zstd curl python3 python3-dev py3-pip
 	cmake clang llvm-dev binutils git bash elfutils-dev openssl-dev xz-dev
-	xz-static zstd-dev"
+	xz-static zstd-dev samurai"
+# samurai: abuild's own default.conf exports CMAKE_GENERATOR=Ninja for every
+# Alpine package (review finding, same leak category as the four
+# CARGO_PROFILE_RELEASE_* ones above, just not Rust-specific), which reaches
+# the ONNX Runtime CMake build in build() below. Declared explicitly rather
+# than unset: unlike the Cargo profile leak, this one isn't a correctness
+# bug on its own — it just means a builder without samurai fails at
+# configure with no indication why.
 install="$pkgname.pre-install $pkgname.post-install $pkgname.pre-deinstall $pkgname.post-deinstall"
 subpackages=""
 # cargo build needs crates.io + the onnxruntime source clone; abuild's
 # default sandbox has no network.
+# !check: no check() is defined. build-deb.sh's equivalent build runs
+# `cargo test -p ml` (the ORT static-link smoke test) and a readelf
+# static-link check before packaging (review finding — this recipe has
+# neither, and no CI job builds the APKBUILD at all yet); left as a
+# follow-up rather than threading build()'s local target/env setup through a
+# second abuild hook under review-driven time pressure, same gap old-dov's
+# review flagged for #891's test plan (no `apk upgrade` cycle either).
 options="net !check"
 
 # Built directly from the monorepo checkout this APKBUILD ships in — not an
@@ -155,5 +176,10 @@ package() {
 	ln -s /var/lib/synthaea/current/cli "$pkgdir/usr/bin/synthaea-ctl"
 }
 
+# Empty, not missing: builddir is this monorepo checkout (see builddir=
+# above), not a fetched/verified source tarball, so there is nothing for
+# abuild to checksum here — same as build-deb.sh/build-rpm.sh's own trust
+# boundary (the checkout itself, via normal git/CI provenance). Do not add
+# a source= entry and "fix" this to silence abuild's warning.
 sha512sums="
 "
