@@ -164,7 +164,21 @@ pub fn service_main_path_is_trusted(path: &str) -> bool {
         "python", "perl", "ruby", "node", "php", "java", "bun", "deno",
     ];
     let name = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
-    !(EXACT.contains(&name) || FAMILIES.iter().any(|family| name.starts_with(family)))
+    let is_family_interpreter = FAMILIES.iter().any(|family| {
+        name.strip_prefix(family).is_some_and(|rest| {
+            // A bare family name or a version suffix (`python3`, `python3.11`,
+            // `perl5.36.0`) is the interpreter; anything else (`php-fpm8.4`,
+            // `nodm`, `javac`) is a different binary that happens to share the
+            // prefix (review of #755, old-dov 2026-10-19: `starts_with` alone
+            // over-matches here, the unsafe direction for this check unlike
+            // `allow_exe`'s identical list — it strips protection from a real
+            // daemon, not from a script runner). Only digits and `.` after the
+            // prefix: no interpreter name in either list has a further suffix
+            // that isn't a version number.
+            rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+    });
+    !(EXACT.contains(&name) || is_family_interpreter)
 }
 
 /// The port of the address-selection probe `sshd-session`/`sshd-auth` run on every

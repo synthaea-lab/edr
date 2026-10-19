@@ -122,6 +122,11 @@ struct SchemaProbe {
 /// line it executes, so an attacker needs only to start their tool through it. Matched on the
 /// file name, by exact name or by family prefix (`python3.12`, `perl5.38`). Not a complete
 /// list, a guard against the obvious mistake; the operator still chooses what to trust.
+///
+/// `policy::service_main_path_is_trusted` keeps an intentionally identical `EXACT`/
+/// `FAMILIES` pair for a different question (the correlator's kill-gate provenance
+/// guard, #652/#755) — `correlator` can't depend on this crate (dependency direction,
+/// `tools/check-deps.py`), so it isn't shared. Keep the two lists in sync by hand.
 fn is_interpreter(path: &Path) -> bool {
     const EXACT: &[&str] = &[
         "sh",

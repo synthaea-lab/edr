@@ -61,9 +61,17 @@ the implant from `NetworkManager` is provenance, not the amount of evidence.
 
 ## Consequences
 
-- `NetworkManager`, `chronyd`, `sshd` and every other package-owned daemon started by init
-  are escalated, not killed, whatever their belief score. The lab implant (exec'd from
-  `/tmp`, child of a shell) is killed as before; the regression tests pin both sides.
+- `NetworkManager`, `chronyd`, `sshd` and most other package-owned daemons started by
+  init are escalated, not killed, whatever their belief score. The lab implant (exec'd
+  from `/tmp`, child of a shell) is killed as before; the regression tests pin both
+  sides. One category is not covered despite being package-owned and started by init:
+  a daemon whose own image *is* an interpreter (`ExecStart=/usr/bin/python3 -s
+  /usr/sbin/firewalld`, `tuned` on Fedora, most JVM-based services) is indistinguishable
+  at the image-path level from a script run the same way, and closing that gap (review
+  of #755) means this daemon stays killable on `BAYES` too. Accepted: a false
+  positive against an interpreter-run system service is judged less likely and less
+  disruptive than leaving every script run through a system interpreter permanently
+  immune to the gate.
 - A compromised service's own main process is no longer auto-killed. The accepted
   trade-off: killing it restarts it, and the fleet-wide outage a false positive causes
   outweighs it. The compromised service's children remain killable.

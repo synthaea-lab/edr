@@ -398,6 +398,35 @@ fn opt_and_usr_local_are_not_service_main_paths() {
     assert!(!engine.is_service_main_process(810, None));
 }
 
+#[test]
+fn a_daemon_that_shares_an_interpreter_family_prefix_still_qualifies() {
+    // Review of #755 (old-dov, 2026-10-19): a bare `starts_with` on the family
+    // list over-matches a real daemon that happens to share a prefix with an
+    // interpreter name — php-fpm (the PHP-FPM master, #478's web host context)
+    // is not a script runner, and losing its service-main status would make it
+    // killable on a BAYES crossing again, the opposite of what this guard is
+    // for. Only a bare family name or a version suffix (digits and `.`) counts
+    // as the interpreter itself.
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(exec_with_meta(
+        meta_full(811, 1, "php-fpm8.4", 0),
+        "/usr/sbin/php-fpm8.4",
+    ));
+    engine.on_event(exec_with_meta(
+        meta_full(812, 1, "nodm", 0),
+        "/usr/bin/nodm",
+    ));
+    assert!(engine.is_service_main_process(811, None));
+    assert!(engine.is_service_main_process(812, None));
+
+    // The actual interpreter, with or without a version suffix, still does not.
+    engine.on_event(exec_with_meta(
+        meta_full(813, 1, "php8.4", 0),
+        "/usr/bin/php8.4",
+    ));
+    assert!(!engine.is_service_main_process(813, None));
+}
+
 // ── BAYES_NAME_EXCLUSIONS (issue #212) ──────────────────────────────────────
 
 #[test]
