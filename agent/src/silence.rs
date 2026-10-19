@@ -70,7 +70,9 @@ pub(crate) struct SourceStatus {
     down: Arc<AtomicBool>,
 }
 
+// Only the Linux AVC reader marks a source down (#878, #879); the Windows build never calls these.
 impl SourceStatus {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -78,6 +80,7 @@ impl SourceStatus {
         }
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_down(&self, down: bool) {
         self.down.store(down, Ordering::SeqCst);
     }
