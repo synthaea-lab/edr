@@ -120,10 +120,10 @@ is on the list and the process is in the agent's mount namespace. Never the proc
   is judged on `/proc` when the hold ends, so a pid recycled inside the 500 ms by a process running
   an allowed image would excuse it (the same `/proc` weakness as above). Two outcomes bring the
   false positive back and are counted and logged (`canary hold queue full`, `held canary touch
-  raised, no allowed exec before it`). Measured on the Fedora VM: a `tar` started by a real `crond` raised 12 alerts in 3
-  processes without `allow_exe` and none with `allow_exe = ["/usr/bin/tar"]` (2026-10-16, and again
-  on 2026-10-19 after the timestamp rule); a shell that opens a canary and then execs an allowed
-  `tar` alerted in 15 of 15 runs (0 of 15 before the rule).
+  raised, no allowed exec before it`). Measured on the Fedora VM: a `tar` started by a real `crond`
+  raised 12 alerts in 3 processes without `allow_exe` and none with `allow_exe = ["/usr/bin/tar"]`
+  (2026-10-16, and again on 2026-10-19 after the timestamp rule); a shell that opens a canary and
+  then execs an allowed `tar` alerted in 15 of 15 runs (0 of 15 before the rule).
 - **Shells and interpreters are refused** at load (`bash`, `sh`, `python3.x`, `perl`, `find`,
   `env`, ...): allowing one allows every script it runs.
 - **The entry must be in a trusted system location** (`/usr`, `/opt`, ...) and must not be
