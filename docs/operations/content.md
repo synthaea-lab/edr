@@ -74,6 +74,32 @@ one it will assign, or lists an artifact that is missing from the store or does 
 value, so none of this shows up later as a failure for every agent of the ring. Agents fetch what
 differs and remove what it no longer lists (see above).
 
+## Halting or rolling back a ring from the console
+
+`/console/ops` shows each ring's rollout state, and an organization **owner or admin** also gets two
+buttons on it (#898, #863 item 4). They call the same admin routes as before (`POST /api/content/halt`
+and `/rollback`), which check the role again, make the change and write the audit row
+(`content.release.halt`, `content.release.rollback`, with the ring, the versions, the reason and the
+user): the console adds no authority of its own.
+
+| Ring state | Buttons | What it does |
+|---|---|---|
+| serving | Halt, Roll back | Halt: agents of the ring stop being offered content until a new release is published or the ring is rolled back; what an agent already applied stays applied. Roll back: see below |
+| halted | Roll back | The earlier release is offered again |
+| rolled back, or no release | none | Nothing to halt or roll back |
+
+A click opens a confirmation, it does not act. The confirmation says what the action does and does not
+do, takes an optional reason (kept in the audit row) and, for a rollback, asks for the ring's name. A
+rollback does not reach an agent that has already applied the rolled-back release (see above): the
+answer names the number a corrective release must carry, and the page shows it. **Publishing a release
+(or the corrective one) stays an API call**: there is no one-click release, because who may publish is
+not decided.
+
+**A member who is not an owner or admin** sees the same rollout state and agent counts, no buttons, and
+the line "Only an organization owner or admin can halt or roll back a ring." The routes answer them
+`403` in any case. A session that has ended is reported as such ("sign in again, then retry") instead of
+as a failure.
+
 ## Running it from a timer
 
 Status 75 is `EX_TEMPFAIL`. So that a halt does not show as a failed unit,

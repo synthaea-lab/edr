@@ -5,6 +5,8 @@ import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
 import type { FleetStatus } from "@/lib/fleet-health";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import RingControls from "@/components/RingControls";
+import { NON_ADMIN_NOTE } from "@/lib/ring-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +41,13 @@ export default async function FleetHealthPage() {
 
   const agents = await loadFleet(prisma, tenantId);
   const { rings, truncated } = await loadRings(prisma, tenantId);
+  // Halt and roll back are admin actions (#803): only an owner or admin sees the buttons; the
+  // routes check the role again.
+  const member = await prisma.member.findFirst({
+    where: { organizationId: tenantId, userId: session.user.id },
+    select: { role: true },
+  });
+  const isAdmin = (member?.role.split(",").map((r) => r.trim()) ?? []).some((r) => r === "owner" || r === "admin");
 
   return (
     <div>
@@ -49,7 +58,7 @@ export default async function FleetHealthPage() {
           had to drop, show here before they show as missing detections.
         </p>
       </div>
-      <RingPanel rings={rings} truncated={truncated} />
+      <RingPanel rings={rings} truncated={truncated} isAdmin={isAdmin} />
       {agents.length === 0 ? (
         <p className="text-sm text-gray-600">No agents enrolled yet.</p>
       ) : (
@@ -142,7 +151,7 @@ const ROLLOUT_LABEL: Record<RolloutState, string> = {
 };
 
 /** Content rollout per ring next to the health of the agents in it. */
-function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boolean }) {
+function RingPanel({ rings, truncated, isAdmin }: { rings: RingStatus[]; truncated: boolean; isAdmin: boolean }) {
   return (
     <section className="mb-8" aria-label="Content rings">
       <h3 className="mb-2 text-lg font-semibold text-gray-900">Content rings</h3>
@@ -169,9 +178,11 @@ function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boole
               {r.byStatus.silent > 0 && `, ${r.byStatus.silent} silent`}
               {r.byStatus.degraded > 0 && `, ${r.byStatus.degraded} degraded`}
             </p>
+            {isAdmin && <RingControls ring={r.ring} rollout={r.rollout} servedVersion={r.servedVersion} />}
           </div>
         ))}
       </div>
+      {!isAdmin && <p className="mt-2 text-xs text-gray-500">{NON_ADMIN_NOTE}</p>}
       {truncated && (
         <p className="mt-2 text-xs text-gray-500">
           Agent counts cover the {rings.reduce((n, r) => n + r.agents, 0)} most recently seen agents only.

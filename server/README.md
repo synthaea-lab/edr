@@ -11,7 +11,7 @@ migration; agent identity stays the mTLS enrollment PKI — the two never mix.
 | `ingest/` | Agent-facing endpoints — event/detection upload, heartbeats; mTLS terminated in front (proxy/sidecar) |
 | `api/` | Management API — enrollment/PKI, policy distribution, fleet inventory, case queries, audit log |
 | `console/` | Analyst console — case-centric triage UI, fleet health, content/model distribution |
-| `ops/` | Fleet operations — agent health, observable-loss counters, ring rollout, ingest health |
+| `ops/` | Fleet operations — agent health, observable-loss counters, ring rollout (halt and roll back from `/console/ops` for an owner or admin: `docs/operations/content.md`), ingest health |
 | `integrations/` | SOAR/ticketing/paging — bidirectional case workflow (Jira, ServiceNow, PagerDuty, webhooks) |
 | `datalake/` | Telemetry lake — full-fidelity raw events, columnar/partitioned; substrate for cloud detection, hunting, graph/prevalence rebuilds, ML corpora |
 | `cloud-detection/` | Cloud-based detection: streaming on ingest, scheduled sweeps, and retrospective replay of new content over history |
