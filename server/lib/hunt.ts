@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { notifyHuntNewMatches } from "@/lib/notify/hunt-matches";
 
 /**
  * Saved hunts (issue #61, ADR-0025).
@@ -223,7 +224,7 @@ export async function runHunt(
     // is a failed run in its history and not an error that stops the cron's batch.
     const query = parseHuntQuery(hunt.query);
     const result = await executeHunt(prisma, hunt.tenantId, query, now, previous?.startedAt ?? null, options);
-    return prisma.huntRun.create({
+    const run = await prisma.huntRun.create({
       data: {
         ...base,
         finishedAt: new Date(),
@@ -232,6 +233,10 @@ export async function runHunt(
         sampleDetectionIds: result.sample,
       },
     });
+    // After the run is recorded. `notifyHuntNewMatches` does not throw: a notification problem
+    // is logged, never a second (failed) run row for the same run (ADR-0036, #863).
+    await notifyHuntNewMatches(prisma, hunt, run);
+    return run;
   } catch (error) {
     console.error("Hunt run failed:", hunt.id, error);
     return prisma.huntRun.create({

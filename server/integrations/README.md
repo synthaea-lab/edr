@@ -10,8 +10,9 @@ telemetry to SIEMs — this is bidirectional case workflow):
   (`/api/cron/deliver-notifications`), at least once, signed `X-Synthaea-Signature`
   (`t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<body>">`, re-signed on every attempt: enforce a
   ~5 minute window on `t` and de-duplicate on the event `id`). Built so far: the channel model,
-  signing, the SSRF guard, the outbox and delivery, and the admin routes with a test send.
-  The `host.*` and `hunt.new_matches` producers and the console page are the next slices.
+  signing, the SSRF guard, the outbox and delivery, the admin routes with a test send, the
+  `host.degraded` / `host.silent` / `host.recovered` and `hunt.new_matches` producers, and the
+  console page (`/console/notifications`).
 - **Paging** (not built): severity-threshold routing to PagerDuty/Opsgenie/Slack with dedup by
   case (a case pages once, not per detection)
 - **SOAR/webhooks**: signed outbound webhooks on case lifecycle events, and a small

@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 
 const db = vi.hoisted(() => ({
   notificationChannel: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  notification: { count: vi.fn() },
+  notification: { count: vi.fn(), updateMany: vi.fn() },
   hunt: { count: vi.fn() },
   auditLog: { create: vi.fn() },
   member: { findFirst: vi.fn() },
@@ -100,6 +100,15 @@ describe("notification channel routes", () => {
     expect(db.auditLog.create.mock.calls.map((c) => c[0].data.action)).toEqual([
       "notify.channel.rotate_secret", "notify.channel.disable", "notify.channel.enable",
     ]);
+  });
+
+  it("resend_failed requeues only this channel's failed rows and is audited", async () => {
+    db.notification.updateMany.mockResolvedValue({ count: 2 });
+    expect((await PATCH(r("PATCH", { action: "resend_failed" }), ctx)).status).toBe(200);
+    const call = db.notification.updateMany.mock.calls[0][0];
+    expect(call.where).toEqual({ channelId: "c1", failedAt: { not: null } });
+    expect(call.data).toMatchObject({ failedAt: null, attempts: 0 });
+    expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("notify.channel.resend_failed");
   });
 
   it("looks a channel up inside the caller's tenant only", async () => {

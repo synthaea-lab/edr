@@ -8,7 +8,7 @@ import { channelView, newSigningSecret } from "@/lib/notify/channels";
 
 const PatchSchema = z
   .object({
-    action: z.enum(["enable", "disable", "rotate_secret", "update"]),
+    action: z.enum(["enable", "disable", "rotate_secret", "update", "resend_failed"]),
     events: z.array(z.enum(EVENTS)).optional(),
     huntIds: z.array(z.string().uuid()).max(50).optional(),
     cooldownSeconds: z.number().int().min(CRON_PERIOD_SECONDS).max(86_400).optional(),
@@ -20,7 +20,8 @@ type Ctx = { params: { id: string } };
 /**
  * PATCH /api/notify/channels/{id} — tenant `owner`/`admin` only.
  * `enable` re-activates a paused or disabled channel: its kept rows are replayed oldest first.
- * `rotate_secret` returns the new secret once. Every action is an AuditLog row.
+ * `rotate_secret` returns the new secret once. `resend_failed` puts the rows marked `failed` back
+ * in the queue. Every action is an AuditLog row.
  */
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   try {
@@ -39,7 +40,14 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     let data: Record<string, unknown> = {};
     let secret: string | undefined;
-    if (action === "enable") data = { status: "active" };
+    if (action === "resend_failed") {
+      // Failed rows stay visible; this is the console's "send again" (ADR-0036 point 7).
+      const now = new Date();
+      await prisma.notification.updateMany({
+        where: { channelId: channel.id, failedAt: { not: null } },
+        data: { failedAt: null, attempts: 0, nextAttemptAt: now, lockedUntil: null, lastError: null },
+      });
+    } else if (action === "enable") data = { status: "active" };
     else if (action === "disable") data = { status: "disabled" };
     else if (action === "rotate_secret") {
       if (!currentKey()) {

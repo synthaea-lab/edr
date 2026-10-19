@@ -46,6 +46,9 @@ model Agent {
   ring         String   @default("prod") // Canary ring: canary_0, canary_1, canary_2, prod
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
+  // What the server last told someone about this host (ADR-0036): healthy | degraded | silent.
+  // Null until the first evaluation with a notification channel; never read to compute status.
+  notifiedStatus String? @map("notified_status")
 
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   health      AgentHealth?
