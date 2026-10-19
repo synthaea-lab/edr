@@ -47,7 +47,7 @@ notes: >
   10.88.0.1)` fire (the client is the podman bridge, not 127.0.0.1). That wording is the one of the
   `665dc8d` build; since #807 main words the same alert `<delta>s after a WebshellLike request`
   (crates/correlator/src/rules.rs), so the quote is not what a current agent prints; the container
-  case was not re-run with one. The exec event carries no container
+  case was not re-run with one. The missing attribution is tracked as #894. The exec event carries no container
   attribution: the container's cgroup is `machine.slice/libpod-<id>.scope/container`, and the id extraction
   in crates/sensors/linux/userspace/src/container.rs (where the exec events are attributed, sensor.rs:325;
   the uprobes copy has the same logic) only knows `docker-<id>.scope` and `cri-containerd-<id>.scope`.

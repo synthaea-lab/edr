@@ -49,4 +49,5 @@ notes: >
   second run's requests, read later, also produce the completion alert "late access-log request
   read after the generic shell alert (unverified ...)". The four `http_request` events and the
   `http_summary` are unchanged. The named pairing is shown by web-webshell-php.sh, where the
-  request really causes the shell. The expected_detections above (technique level) still hold.
+  request really causes the shell (tracked as #893: this script should send its requests after the
+  shell starts, or be split). The expected_detections above (technique level) still hold.
