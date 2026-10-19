@@ -7,6 +7,9 @@ import { sendWebhook } from "@/lib/notify/send";
 import { signBody } from "@/lib/notify/sign";
 import { randomUUID } from "node:crypto";
 
+/** Test sends a tenant may trigger in a minute. */
+const TEST_SENDS_PER_MINUTE = 5; // not exported: a Next.js route file may only export route handlers and config
+
 /**
  * POST /api/notify/channels/{id}/test — tenant `owner`/`admin` only. Sends one signed
  * `test` event, outside the outbox, and answers with a status code and a coarse error class
@@ -21,6 +24,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const channel = await prisma.notificationChannel.findFirst({ where: { id: params.id, tenantId } });
     if (!channel) return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+
+    // A test send is an outbound call the tenant triggers on demand, outside the outbox's budget:
+    // a few a minute, counted from the audit log.
+    const recent = await prisma.auditLog.count({
+      where: { tenantId, action: "notify.channel.test", timestamp: { gt: new Date(Date.now() - 60_000) } },
+    });
+    if (recent >= TEST_SENDS_PER_MINUTE) {
+      return NextResponse.json({ error: "Too many test sends, try again in a minute" }, { status: 429 });
+    }
 
     const secret = openSecret({ keyId: channel.secretKeyId, sealed: channel.secretSealed }, channel.id);
     const url = openUrl({ keyId: channel.urlKeyId, sealed: channel.urlSealed }, channel.id);

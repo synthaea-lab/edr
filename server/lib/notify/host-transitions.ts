@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { fleetStatus, sensorsOf, lostRecently, type FleetStatus } from "@/lib/fleet-health";
 import { enqueueForChannel, type NotifyEvent } from "./outbox";
+import { consoleUrl } from "./urls";
 
 /**
  * Host state transitions for the notification outbox (ADR-0036 point 2, slice 2, #863).
@@ -43,10 +44,6 @@ function isNotifyState(v: string | null | undefined): v is NotifyState {
   return v === "healthy" || v === "degraded" || v === "silent";
 }
 
-function baseUrl(env: Record<string, string | undefined>): string {
-  return (env.NOTIFY_CONSOLE_URL ?? env.NEXTAUTH_URL ?? "").replace(/\/$/, "");
-}
-
 /**
  * Looks at every host of every tenant that has a channel subscribed to a host event and, for
  * each such channel, enqueues one message per change from what that channel was told.
@@ -73,7 +70,6 @@ export async function evaluateHostTransitions(
   const byTenant = new Map<string, typeof channels>();
   for (const c of channels) byTenant.set(c.tenantId, [...(byTenant.get(c.tenantId) ?? []), c]);
 
-  const base = baseUrl(env);
   for (const [tenantId, tenantChannels] of Array.from(byTenant.entries())) {
     const agents = await db.agent.findMany({ where: { tenantId }, include: { health: true } });
     const states = await db.notificationState.findMany({
@@ -115,12 +111,19 @@ export async function evaluateHostTransitions(
         }
 
         if (t.event === "host.silent" && caseLink === undefined) {
-          // The silent-agent cron's case, when it has opened one by now.
+          // The silent-agent cron's case, when it has opened one by now. The cron titles it by the
+          // host name when there is one (`Agent Silent: web-01`), so the title cannot find it by
+          // agent id; its description always ends with the enrollment id, which is unique.
           const c = await db.case.findFirst({
-            where: { tenantId, status: "open", title: { contains: agent.id } },
+            where: {
+              tenantId,
+              status: "open",
+              title: { startsWith: "Agent Silent:" },
+              description: { contains: `Enrollment ID: ${agent.enrollmentId}` },
+            },
             select: { id: true },
           });
-          caseLink = c ? `${base}/console/cases/${c.id}` : null;
+          caseLink = c ? consoleUrl(env, `/console/cases/${c.id}`) : null;
         }
         const written = await enqueueForChannel(
           db,
@@ -131,7 +134,7 @@ export async function evaluateHostTransitions(
             subject: agent.id,
             occurredAt: now,
             data: {
-              subject: { id: agent.id, hostname: agent.hostname ?? null, console_url: `${base}/console/ops` },
+              subject: { id: agent.id, hostname: agent.hostname ?? null, console_url: consoleUrl(env, "/console/ops") },
               change: {
                 from: notified,
                 to: current,

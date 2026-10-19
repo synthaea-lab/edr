@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -81,29 +82,35 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if ((await prisma.notificationChannel.count({ where: { tenantId } })) >= CHANNELS_PER_TENANT) {
-      return NextResponse.json({ error: `At most ${CHANNELS_PER_TENANT} channels per tenant` }, { status: 409 });
-    }
-
     const id = randomUUID();
     const secret = newSigningSecret();
     const sealed = sealSecret(secret, id)!;
     const sealedUrl = sealUrl(url, id)!;
-    const channel = await prisma.notificationChannel.create({
-      data: {
-        id,
-        tenantId,
-        host: new URL(url).host,
-        urlKeyId: sealedUrl.keyId,
-        urlSealed: sealedUrl.sealed,
-        secretKeyId: sealed.keyId,
-        secretSealed: sealed.sealed,
-        events,
-        huntIds,
-        ...(cooldownSeconds ? { cooldownSeconds } : {}),
-        createdBy: userId,
-      },
+    // The cap is checked and the channel written under one advisory lock per tenant: two admins
+    // adding the fifth and the sixth at once cannot both pass the count.
+    const created = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`notify-channels:${tenantId}`}))`);
+      if ((await tx.notificationChannel.count({ where: { tenantId } })) >= CHANNELS_PER_TENANT) return null;
+      return tx.notificationChannel.create({
+        data: {
+          id,
+          tenantId,
+          host: new URL(url).host,
+          urlKeyId: sealedUrl.keyId,
+          urlSealed: sealedUrl.sealed,
+          secretKeyId: sealed.keyId,
+          secretSealed: sealed.sealed,
+          events,
+          huntIds,
+          ...(cooldownSeconds ? { cooldownSeconds } : {}),
+          createdBy: userId,
+        },
+      });
     });
+    if (!created) {
+      return NextResponse.json({ error: `At most ${CHANNELS_PER_TENANT} channels per tenant` }, { status: 409 });
+    }
+    const channel = created;
 
     await prisma.auditLog.create({
       data: {

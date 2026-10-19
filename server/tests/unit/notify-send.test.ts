@@ -17,12 +17,14 @@ const seen: { host?: string; sni?: string; sig?: string; body: string }[] = [];
 let reply = { status: 204, location: "" };
 let big = false;
 let stall = false;
+let drip = false;
 let retryAfter = "";
 
 const guard = (extra: object = {}) => ({
   resolve: async () => ["127.0.0.1"],
   allowedPrivateHosts: new Set(["t1:hooks.test"]),
   tenantId: "t1",
+  unsafeAllowLoopbackForTests: true, // the receiver here is on 127.0.0.1; production never allows loopback
   extraPorts: new Set([port]),
   ...extra,
 });
@@ -49,6 +51,14 @@ beforeAll(async () => {
       if (reply.location) h.Location = reply.location;
       if (retryAfter) h["Retry-After"] = retryAfter;
       res.writeHead(reply.status, h);
+      if (drip) {
+        // Headers out at once, then a byte every 200 ms for ever: only an answer that ends at the
+        // status line is not held by it.
+        res.write("x");
+        const t = setInterval(() => res.write("x"), 200);
+        res.on("close", () => clearInterval(t));
+        return;
+      }
       res.end(big ? "x".repeat(300_000) : "");
     });
   });
@@ -111,6 +121,34 @@ describe("sendWebhook", () => {
     stall = false;
     expect(r).toEqual({ ok: false, errorClass: "timeout" });
     expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it("settles at the status line: a body dripped after the headers does not hold the call", async () => {
+    reply = { status: 200, location: "" }; // a 204 cannot carry a body, so its headers would not leave before the end
+    drip = true;
+    const t0 = Date.now();
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard(), cert, 5000);
+    drip = false;
+    expect(r).toEqual({ ok: true, statusCode: 200 });
+    expect(Date.now() - t0).toBeLessThan(1500);
+  });
+
+  it("tries the next validated address when a connection cannot be made, and only then", async () => {
+    reply = { status: 204, location: "" };
+    // 127.0.0.2 has nothing listening on that port; 127.0.0.1 is the receiver.
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard({ resolve: async () => ["127.0.0.2", "127.0.0.1"] }), cert);
+    expect(r).toEqual({ ok: true, statusCode: 204 });
+    // An HTTP answer ends the call: the second address is not tried after a 500.
+    reply = { status: 500, location: "" };
+    const before = seen.length;
+    const r2 = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard({ resolve: async () => ["127.0.0.1", "127.0.0.1"] }), cert);
+    expect(r2.statusCode).toBe(500);
+    expect(seen.length).toBe(before + 1);
+  });
+
+  it("refuses an allowlisted host that resolves to loopback unless the test flag is set", async () => {
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard({ unsafeAllowLoopbackForTests: false }), cert);
+    expect(r).toEqual({ ok: false, errorClass: "blocked" });
   });
 
   it("a name that does not resolve and one that resolves to a refused address are both `blocked`", async () => {

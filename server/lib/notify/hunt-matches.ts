@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { enqueue } from "./outbox";
+import { consoleUrl } from "./urls";
 
 /**
  * `hunt.new_matches` (ADR-0036 point 2, slice 3, #863): called by `runHunt` once a run is
@@ -20,7 +21,6 @@ export async function notifyHuntNewMatches(
   if (run.newMatchCount <= 0) return 0;
   try {
     const row = await db.hunt.findFirst({ where: { id: hunt.id, tenantId: hunt.tenantId }, select: { name: true } });
-    const base = (env.NOTIFY_CONSOLE_URL ?? env.NEXTAUTH_URL ?? "").replace(/\/$/, "");
     return await enqueue(
       db,
       {
@@ -29,7 +29,7 @@ export async function notifyHuntNewMatches(
         subject: hunt.id,
         occurredAt: run.startedAt,
         data: {
-          subject: { id: hunt.id, name: row?.name ?? null, console_url: `${base}/console/hunts/${hunt.id}` },
+          subject: { id: hunt.id, name: row?.name ?? null, console_url: consoleUrl(env, `/console/hunts/${hunt.id}`) },
           change: { new_match_count: run.newMatchCount, match_count: run.matchCount, run_id: run.id, query_version: hunt.version },
         },
       },

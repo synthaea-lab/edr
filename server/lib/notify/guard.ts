@@ -22,9 +22,8 @@ export class NotifyBlockedError extends Error {
 
 export interface PublicTarget {
   url: URL;
-  /** The validated address the client must connect to. */
-  address: string;
-  family: 4 | 6;
+  /** Every validated address, in the order the resolver gave them: the client tries them in turn. */
+  addresses: { address: string; family: 4 | 6 }[];
 }
 
 /** Parses a dotted IPv4 string (already normalised by `URL`) into 4 bytes, or null. */
@@ -90,6 +89,7 @@ function isPrivateV4(b: number[]): boolean {
     (a === 192 && c === 0 && d === 0) || // IETF protocol assignments
     (a === 192 && c === 0 && d === 2) || // TEST-NET-1
     (a === 192 && c === 168) ||
+    (a === 192 && c === 88 && d === 99) || // 6to4 relay anycast (deprecated)
     (a === 198 && (c === 18 || c === 19)) || // benchmarking
     (a === 198 && c === 51 && d === 100) || // TEST-NET-2
     (a === 203 && c === 0 && d === 113) || // TEST-NET-3
@@ -108,6 +108,8 @@ function isPrivateV6(b: number[]): boolean {
   if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(4, 12)) {
     return isPrivateV4(v4(12));
   }
+  // 64:ff9b:1::/48 is NAT64's local-use prefix: any address under it is refused.
+  if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 1) return true;
   // 2002::/16 (6to4) carries an IPv4 in bytes 2..5.
   if (b[0] === 0x20 && b[1] === 0x02) return isPrivateV4(v4(2));
   // Teredo 2001::/32 tunnels IPv4 and carries the client's address obfuscated: refused outright.
@@ -136,7 +138,38 @@ export function isPrivateAddress(address: string): boolean {
   return true;
 }
 
+/**
+ * Addresses no allowlist can open: loopback, link-local (the cloud metadata address included) and
+ * the unspecified address, judged by the embedded IPv4 for the mapped, compatible, NAT64 and
+ * 6to4 forms. The operator allowlist (`NOTIFY_ALLOWED_PRIVATE_HOSTS`) is for an on-prem receiver
+ * on a private network, not for the server's own host or its metadata service.
+ */
+export function isNeverAllowed(address: string): boolean {
+  const family = isIP(address);
+  const v4 = (b: number[]) => b[0] === 0 || b[0] === 127 || (b[0] === 169 && b[1] === 254);
+  if (family === 4) {
+    const b = parseV4(address);
+    return !b || v4(b);
+  }
+  if (family === 6) {
+    const b = parseV6(address);
+    if (!b) return true;
+    const allZero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+    if (allZero(0, 12)) return b[12] === 0 && b[13] === 0 && b[14] === 0 ? b[15] <= 1 : v4(b.slice(12));
+    if (allZero(0, 10) && b[10] === 0xff && b[11] === 0xff) return v4(b.slice(12));
+    if (b[0] === 0 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && allZero(4, 12)) return v4(b.slice(12));
+    if (b[0] === 0x20 && b[1] === 0x02) return v4(b.slice(2, 6));
+    return (b[0] === 0xfe && (b[1] & 0xc0) === 0x80); // fe80::/10
+  }
+  return true;
+}
+
 export interface GuardOptions {
+  /**
+   * Tests only: lets an allowlisted host resolve to loopback, which production never allows.
+   * Not read from the environment.
+   */
+  unsafeAllowLoopbackForTests?: boolean;
   /** Ports allowed besides 443 (the server's explicit allowlist). */
   extraPorts?: ReadonlySet<number>;
   /**
@@ -206,7 +239,10 @@ export async function resolvePublicTarget(raw: string, opts: GuardOptions = {}):
     if (addresses.length === 0) throw new NotifyBlockedError("dns");
   }
   if (!allowPrivate && addresses.some(isPrivateAddress)) throw new NotifyBlockedError("address");
+  // An allowlisted private host is still never the server's own loopback, link-local or metadata address.
+  if (allowPrivate && !opts.unsafeAllowLoopbackForTests && addresses.some(isNeverAllowed)) {
+    throw new NotifyBlockedError("address");
+  }
 
-  const address = addresses[0];
-  return { url, address, family: isIP(address) === 6 ? 6 : 4 };
+  return { url, addresses: addresses.map((address) => ({ address, family: isIP(address) === 6 ? 6 : 4 })) };
 }

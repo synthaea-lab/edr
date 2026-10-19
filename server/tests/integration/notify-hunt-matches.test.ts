@@ -4,6 +4,7 @@ import { runHunt } from "@/lib/hunt";
 import { makeChannel } from "../helpers/notify";
 
 const HOUR = 3_600_000;
+process.env.NOTIFY_CONSOLE_URL = "https://console.example.com";
 
 const channel = (tenantId: string, huntIds: string[], events = ["hunt.new_matches"]) =>
   makeChannel(prisma, tenantId, { events, huntIds });
@@ -29,9 +30,10 @@ describe("hunt.new_matches", () => {
     const rows = await prisma.notification.findMany();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ channelId: ch.id, event: "hunt.new_matches", subject: hunt.id, seq: 1 });
-    const p = rows[0].payload as { subject: { name: string }; change: { new_match_count: number; run_id: string } };
+    const p = rows[0].payload as { subject: { name: string; console_url: string | null }; change: { new_match_count: number; run_id: string } };
     expect(p.subject.name).toBe("Encoded PowerShell");
     expect(p.change).toMatchObject({ new_match_count: 1, run_id: run.id });
+    expect(p.subject.console_url).toBe(`https://console.example.com/console/hunts/${hunt.id}`);
     // A webhook is a pointer to the console: no detection contents.
     expect(JSON.stringify(rows[0].payload)).not.toContain("SECRET-ARGUMENT");
   });

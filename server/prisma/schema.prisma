@@ -551,6 +551,8 @@ model NotificationChannel {
   lastStatusCode      Int?      @map("last_status_code")
   lastError           String?   @map("last_error")
   lastDeliveredAt     DateTime? @map("last_delivered_at")
+  // Set when an admin re-enables a paused channel: "five consecutive failed rows" counts from here.
+  pauseCountFrom      DateTime? @map("pause_count_from")
   createdBy           String    @map("created_by")
   createdAt           DateTime  @default(now()) @map("created_at")
 
@@ -590,6 +592,9 @@ model Notification {
   attempts      Int       @default(0)
   nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
   lockedUntil   DateTime? @map("locked_until")
+  // Which claim holds the row: every write of a delivery's outcome names it, so a tick whose
+  // lease expired cannot overwrite what the tick that took the row over recorded.
+  leaseId       String?   @map("lease_id")
   lastAttemptAt DateTime? @map("last_attempt_at")
   deliveredAt   DateTime? @map("delivered_at")
   failedAt      DateTime? @map("failed_at")
@@ -603,5 +608,6 @@ model Notification {
   @@unique([channelId, subject, seq])
   @@index([deliveredAt, failedAt, nextAttemptAt])
   @@index([tenantId, createdAt])
+  @@index([tenantId, lastAttemptAt])
   @@map("notifications")
 }

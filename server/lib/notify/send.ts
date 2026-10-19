@@ -1,4 +1,4 @@
-import { request } from "node:https";
+import { Agent, request } from "node:https";
 import { isIP } from "node:net";
 import { NotifyBlockedError, resolvePublicTarget, type GuardOptions } from "./guard";
 
@@ -19,7 +19,6 @@ export interface SendResult {
 
 /** Total deadline of a send: resolve, connect, TLS and response (not an idle timeout). */
 export const SEND_DEADLINE_MS = 10_000;
-export const RESPONSE_CAP_BYTES = 64 * 1024;
 
 const TLS_CODES = new Set([
   "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN",
@@ -44,10 +43,79 @@ export function parseRetryAfter(value: string | string[] | undefined, now = Date
 }
 
 /**
- * POSTs `body` to a channel URL after the guard has resolved it once, connecting to that
- * validated address (the original host stays in `Host` and SNI, and TLS is verified against it:
- * there is no skip-verify). No redirect is followed, no proxy is used (`node:https` ignores
- * `HTTP(S)_PROXY`), the response is read up to `RESPONSE_CAP_BYTES` and thrown away.
+ * An explicit agent, so the process's own settings cannot reroute this call: the global agent of a
+ * recent Node honours `HTTPS_PROXY` when `NODE_USE_ENV_PROXY` is set, which would bypass the guard.
+ */
+const agent = new Agent({ keepAlive: false });
+
+/**
+ * One attempt against one validated address. It settles as soon as the status line is in: the
+ * answer's body is never read, so a receiver that drips bytes after its headers cannot hold the
+ * call, and the 64 KiB cap is only a backstop for what arrives with the headers.
+ */
+function attempt(
+  url: URL,
+  address: string,
+  family: 4 | 6,
+  body: string,
+  headers: Record<string, string>,
+  left: () => number,
+  ca?: string
+): Promise<SendResult> {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  return new Promise<SendResult>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const done = (r: SendResult) => {
+      if (!settled) {
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(r);
+      }
+    };
+    const req = request(
+      {
+        agent,
+        host: address,
+        port: url.port ? Number(url.port) : 443,
+        path: url.pathname + url.search,
+        method: "POST",
+        servername: isIP(host) ? undefined : host,
+        ...(ca ? { ca } : {}),
+        // Connect to the validated address, whatever the name resolves to now.
+        lookup: (_h, _o, cb) => (cb as (e: null, a: string, f: number) => void)(null, address, family),
+        headers: {
+          ...headers,
+          Host: url.host,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body).toString(),
+        },
+      },
+      (res) => {
+        const code = res.statusCode ?? 0;
+        // 3xx is a failure: a redirect is never followed.
+        done(
+          code >= 200 && code < 300
+            ? { ok: true, statusCode: code }
+            : { ok: false, statusCode: code, errorClass: "http_status", retryAfterSeconds: parseRetryAfter(res.headers["retry-after"]) }
+        );
+        res.destroy(); // the body is never read
+      }
+    );
+    timer = setTimeout(() => {
+      req.destroy();
+      done({ ok: false, errorClass: "timeout" });
+    }, left());
+    req.on("error", (err: NodeJS.ErrnoException) => done({ ok: false, errorClass: classify(err) }));
+    req.end(body);
+  });
+}
+
+/**
+ * POSTs `body` to a channel URL after the guard has resolved it once, connecting to a validated
+ * address (the original host stays in `Host` and SNI, and TLS is verified against it: there is
+ * no skip-verify). The addresses are tried in turn when a connection cannot be made; any other
+ * outcome ends the call. No redirect is followed, no proxy is used, the answer's body is not read.
  *
  * The whole call, resolution included, has one deadline (`SEND_DEADLINE_MS`): a receiver that
  * answers a byte a second cannot hold a delivery tick for longer than that.
@@ -76,61 +144,12 @@ export async function sendWebhook(
     console.warn("Notification target refused:", e instanceof NotifyBlockedError ? e.reason : "error");
     return { ok: false, errorClass: "blocked" };
   }
-  const { url, address, family } = target;
-  const host = url.hostname.replace(/^\[|\]$/g, "");
 
-  return new Promise<SendResult>((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const done = (r: SendResult) => {
-      if (!settled) {
-        settled = true;
-        if (timer) clearTimeout(timer);
-        resolve(r);
-      }
-    };
-    const req = request(
-      {
-        host: address,
-        port: url.port ? Number(url.port) : 443,
-        path: url.pathname + url.search,
-        method: "POST",
-        servername: isIP(host) ? undefined : host,
-        ...(ca ? { ca } : {}),
-        // Connect to the validated address, whatever the name resolves to now.
-        lookup: (_h, _o, cb) => (cb as (e: null, a: string, f: number) => void)(null, address, family),
-        headers: {
-          ...headers,
-          Host: url.host,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body).toString(),
-        },
-      },
-      (res) => {
-        let seen = 0;
-        res.on("data", (chunk: Buffer) => {
-          seen += chunk.length;
-          if (seen > RESPONSE_CAP_BYTES) res.destroy();
-        });
-        const finish = () => {
-          const code = res.statusCode ?? 0;
-          // 3xx is a failure: a redirect is never followed.
-          done(
-            code >= 200 && code < 300
-              ? { ok: true, statusCode: code }
-              : { ok: false, statusCode: code, errorClass: "http_status", retryAfterSeconds: parseRetryAfter(res.headers["retry-after"]) }
-          );
-        };
-        res.on("end", finish);
-        res.on("close", finish);
-        res.on("error", finish);
-      }
-    );
-    timer = setTimeout(() => {
-      req.destroy();
-      done({ ok: false, errorClass: "timeout" });
-    }, left());
-    req.on("error", (err: NodeJS.ErrnoException) => done({ ok: false, errorClass: classify(err) }));
-    req.end(body);
-  });
+  let last: SendResult = { ok: false, errorClass: "connect" };
+  for (const { address, family } of target.addresses) {
+    if (Date.now() >= deadline) return { ok: false, errorClass: "timeout" };
+    last = await attempt(target.url, address, family, body, headers, left, ca);
+    if (last.ok || last.errorClass !== "connect") return last;
+  }
+  return last;
 }

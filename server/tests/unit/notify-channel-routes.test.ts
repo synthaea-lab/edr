@@ -6,8 +6,9 @@ const db = vi.hoisted(() => ({
   notification: { count: vi.fn() },
   $executeRaw: vi.fn(),
   $queryRaw: vi.fn(),
+  $transaction: vi.fn(),
   hunt: { count: vi.fn() },
-  auditLog: { create: vi.fn() },
+  auditLog: { create: vi.fn(), count: vi.fn() },
   member: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -31,7 +32,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.NOTIFY_SECRET_KEY = KEY;
   db.member.findFirst.mockResolvedValue({ role: "owner" });
+  db.$transaction.mockImplementation(async (fn: (tx: typeof db) => unknown) => fn(db));
+  db.$executeRaw.mockResolvedValue(0);
   db.auditLog.create.mockResolvedValue({});
+  db.auditLog.count.mockResolvedValue(0);
   db.notificationChannel.count.mockResolvedValue(0);
   db.notificationChannel.create.mockImplementation(async ({ data }) => ({ ...row, ...data }));
   db.notificationChannel.findFirst.mockResolvedValue(row);
@@ -90,6 +94,22 @@ describe("notification channel routes", () => {
     expect(db.notificationChannel.create).not.toHaveBeenCalled();
   });
 
+  it("the channel cap is checked inside the transaction, under a per-tenant lock", async () => {
+    db.notificationChannel.count.mockResolvedValue(5);
+    const res = await POST(r("POST", { url: "https://hooks.example.com/" }));
+    expect(res.status).toBe(409);
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(db.$executeRaw.mock.calls[0][0])).toContain("pg_advisory_xact_lock");
+    expect(db.notificationChannel.create).not.toHaveBeenCalled();
+  });
+
+  it("re-enabling a channel restarts the count of consecutive failures", async () => {
+    await PATCH(r("PATCH", { action: "enable" }), ctx);
+    const data = db.notificationChannel.update.mock.calls[0][0].data;
+    expect(data.status).toBe("active");
+    expect(data.pauseCountFrom).toBeInstanceOf(Date);
+  });
+
   it("caps channels per tenant and refuses another tenant's hunt", async () => {
     db.notificationChannel.count.mockResolvedValue(5);
     expect((await POST(r("POST", { url: "https://hooks.example.com/" }))).status).toBe(409);
@@ -129,6 +149,14 @@ describe("notification channel routes", () => {
     expect(sql).toContain("l.seq > n.seq"); // a failed row a later row supersedes is left alone
     expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("notify.channel.resend_failed");
     expect(db.auditLog.create.mock.calls[0][0].data.details.resent).toBe(2);
+  });
+
+  it("a test send is limited to a few a minute per tenant", async () => {
+    db.auditLog.count.mockResolvedValue(5);
+    const res = await testSend(r("POST"), ctx);
+    expect(res.status).toBe(429);
+    expect(db.notificationChannel.findFirst).toHaveBeenCalled();
+    expect(db.auditLog.count.mock.calls[0][0].where).toMatchObject({ tenantId: "t1", action: "notify.channel.test" });
   });
 
   it("looks a channel up inside the caller's tenant only", async () => {

@@ -46,7 +46,7 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       // The console's "send again" (ADR-0036 point 7). A failed row that a later row of the same
       // subject has superseded stays as it is: a receiver would discard it by `seq` anyway.
       resent = await resendFailed(prisma, channel.id, new Date());
-    } else if (action === "enable") data = { status: "active" };
+    } else if (action === "enable") data = { status: "active", pauseCountFrom: new Date() };
     else if (action === "disable") data = { status: "disabled" };
     else if (action === "rotate_secret") {
       if (!currentKey()) {

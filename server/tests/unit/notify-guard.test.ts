@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { guardOptionsFromEnv, isPrivateAddress, resolvePublicTarget, NotifyBlockedError } from "@/lib/notify/guard";
+import { guardOptionsFromEnv, isNeverAllowed, isPrivateAddress, resolvePublicTarget, NotifyBlockedError } from "@/lib/notify/guard";
 
 const pub = async () => ["93.184.216.34"];
 
@@ -12,6 +12,10 @@ describe("isPrivateAddress", () => {
     "2001:db8::1",
     "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo 2001::/32, refused outright
     "2001::1",
+    "64:ff9b:1::1", // NAT64 local-use prefix
+    "64:ff9b:1:abcd::8.8.8.8",
+    "192.88.99.1", // 6to4 relay anycast
+    "::ffff:192.88.99.1",
   ])("refuses %s", (a) => expect(isPrivateAddress(a)).toBe(true));
 
   it.each(["93.184.216.34", "8.8.8.8", "172.32.0.1", "100.128.0.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"])(
@@ -33,8 +37,7 @@ describe("resolvePublicTarget", () => {
 
   it("accepts https on 443 and returns the validated address", async () => {
     const t = await resolvePublicTarget("https://hooks.example.com/x", { resolve: pub });
-    expect(t.address).toBe("93.184.216.34");
-    expect(t.family).toBe(4);
+    expect(t.addresses).toEqual([{ address: "93.184.216.34", family: 4 }]);
   });
 
   it("refuses other schemes, credentials and ports", async () => {
@@ -79,11 +82,42 @@ describe("resolvePublicTarget", () => {
       allowedPrivateHosts: allowed,
       tenantId: "t1",
     });
-    expect(t.address).toBe("10.1.1.1");
+    expect(t.addresses[0].address).toBe("10.1.1.1");
     // Another host, another tenant, or no tenant at all: refused.
     await blocked("https://other.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed, tenantId: "t1" });
     await blocked("https://soar.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed, tenantId: "t2" });
     await blocked("https://soar.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed });
+  });
+});
+
+describe("an allowlisted private host is still never the server's own loopback, link-local or metadata address", () => {
+  const opts = (answer: string[]) => ({ resolve: async () => answer, allowedPrivateHosts: new Set(["t1:soar.corp.example"]), tenantId: "t1" });
+  it.each(["127.0.0.1", "127.9.9.9", "::1", "169.254.169.254", "169.254.0.5", "fe80::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "0.0.0.0", "::", "64:ff9b::7f00:1", "2002:7f00:1::1"])(
+    "refuses %s even for an allowlisted name",
+    async (address) => {
+      const err = await resolvePublicTarget("https://soar.corp.example/", opts([address])).catch((e) => e);
+      expect(err).toBeInstanceOf(NotifyBlockedError);
+      expect(err.reason).toBe("address");
+    }
+  );
+  it.each(["10.1.1.1", "172.16.4.4", "192.168.7.7", "fd12:3456::1", "100.64.1.1"])("still lets %s through for the allowlisted name", async (address) => {
+    const t = await resolvePublicTarget("https://soar.corp.example/", opts([address]));
+    expect(t.addresses[0].address).toBe(address);
+  });
+  it("a name that returns a private and a loopback address is refused as a whole", async () => {
+    const err = await resolvePublicTarget("https://soar.corp.example/", opts(["10.1.1.1", "127.0.0.1"])).catch((e) => e);
+    expect(err).toBeInstanceOf(NotifyBlockedError);
+  });
+  it("isNeverAllowed on its own", () => {
+    expect(isNeverAllowed("10.0.0.1")).toBe(false);
+    expect(isNeverAllowed("8.8.8.8")).toBe(false);
+    expect(isNeverAllowed("169.254.169.254")).toBe(true);
+    expect(isNeverAllowed("not-an-ip")).toBe(true);
+  });
+  it("returns every validated address, not only the first", async () => {
+    const t = await resolvePublicTarget("https://hooks.example.com/", { resolve: async () => ["93.184.216.34", "2606:4700:4700::1111"] });
+    expect(t.addresses.map((a) => a.address)).toEqual(["93.184.216.34", "2606:4700:4700::1111"]);
+    expect(t.addresses.map((a) => a.family)).toEqual([4, 6]);
   });
 });
 

@@ -8,7 +8,7 @@ import {
   RETENTION_DELIVERED_DAYS,
   RETENTION_FAILED_DAYS,
 } from "./backoff";
-import { openSecret, openUrl, type Env } from "./secret";
+import { currentKey, openSecret, openUrl, sealSecret, sealUrl, type Env } from "./secret";
 import { sendWebhook, type SendResult } from "./send";
 import { signBody } from "./sign";
 
@@ -55,57 +55,53 @@ export async function enqueueForChannel(
   input: EnqueueInput,
   now = new Date()
 ): Promise<number> {
-  if (input.event !== "host.recovered") {
-    const cooldownMs = Math.max(channel.cooldownSeconds, CRON_PERIOD_SECONDS) * 1000;
-    const blocking = await db.notification.findFirst({
-      where: {
+  // The check and the insert run under one advisory lock per (channel, subject): two overlapping
+  // evaluations cannot both pass the check and write two rows with different ids.
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`notify:${channel.id}:${input.subject}`}))`);
+
+    if (input.event !== "host.recovered") {
+      const cooldownMs = Math.max(channel.cooldownSeconds, CRON_PERIOD_SECONDS) * 1000;
+      const blocking = await tx.notification.findFirst({
+        where: {
+          channelId: channel.id,
+          event: input.event,
+          subject: input.subject,
+          failedAt: null,
+          OR: [{ deliveredAt: null }, { deliveredAt: { gt: new Date(now.getTime() - cooldownMs) } }],
+        },
+        select: { id: true },
+      });
+      if (blocking) return 0;
+    }
+
+    const last = await tx.notification.aggregate({
+      where: { channelId: channel.id, subject: input.subject },
+      _max: { seq: true },
+    });
+    const id = randomUUID();
+    const seq = (last._max.seq ?? 0) + 1;
+    await tx.notification.create({
+      data: {
+        id,
+        tenantId: input.tenantId,
         channelId: channel.id,
         event: input.event,
         subject: input.subject,
-        failedAt: null,
-        OR: [{ deliveredAt: null }, { deliveredAt: { gt: new Date(now.getTime() - cooldownMs) } }],
+        seq,
+        nextAttemptAt: now,
+        payload: {
+          id,
+          event: input.event,
+          tenant: input.tenantId,
+          occurred_at: (input.occurredAt ?? now).toISOString(),
+          seq,
+          ...input.data,
+        } as Prisma.InputJsonValue,
       },
-      select: { id: true },
     });
-    if (blocking) return 0;
-  }
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await db.$transaction(async (tx) => {
-        const last = await tx.notification.aggregate({
-          where: { channelId: channel.id, subject: input.subject },
-          _max: { seq: true },
-        });
-        const id = randomUUID();
-        const seq = (last._max.seq ?? 0) + 1;
-        await tx.notification.create({
-          data: {
-            id,
-            tenantId: input.tenantId,
-            channelId: channel.id,
-            event: input.event,
-            subject: input.subject,
-            seq,
-            nextAttemptAt: now,
-            payload: {
-              id,
-              event: input.event,
-              tenant: input.tenantId,
-              occurred_at: (input.occurredAt ?? now).toISOString(),
-              seq,
-              ...input.data,
-            } as Prisma.InputJsonValue,
-          },
-        });
-      });
-      return 1;
-    } catch (e) {
-      // Two producers took the same seq: the unique index refused one, retry with the next.
-      if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002")) throw e;
-    }
-  }
-  return 0;
+    return 1;
+  });
 }
 
 /**
@@ -133,6 +129,7 @@ interface Claimed {
   channelId: string;
   attempts: number;
   payload: unknown;
+  leaseId: string;
 }
 
 /**
@@ -153,9 +150,10 @@ export async function claimDue(
   const perTenant = opts.perTenant ?? PER_TENANT_PER_TICK;
   const limit = opts.limit ?? 200;
   const until = new Date(now.getTime() + LEASE_MS);
+  const leaseId = randomUUID();
   return db.$queryRaw<Claimed[]>(Prisma.sql`
     UPDATE notifications n
-       SET locked_until = ${until}
+       SET locked_until = ${until}, lease_id = ${leaseId}
       FROM (
         SELECT r.id, r.rn, r.next_attempt_at
           FROM (
@@ -185,7 +183,8 @@ export async function claimDue(
        AND n.failed_at IS NULL
        AND (n.locked_until IS NULL OR n.locked_until < ${now})
        AND n.id IN (SELECT id FROM notifications WHERE id = pick.id FOR UPDATE SKIP LOCKED)
-    RETURNING n.id, n.tenant_id AS "tenantId", n.channel_id AS "channelId", n.attempts, n.payload`);
+    RETURNING n.id, n.tenant_id AS "tenantId", n.channel_id AS "channelId", n.attempts, n.payload,
+              n.lease_id AS "leaseId"`);
 }
 
 export type Sender = (url: string, body: string, headers: Record<string, string>) => Promise<SendResult>;
@@ -195,7 +194,7 @@ export interface DeliverDeps {
   env?: Env;
 }
 
-export type Outcome = "delivered" | "retry" | "failed" | "deferred" | "paused";
+export type Outcome = "delivered" | "retry" | "failed" | "deferred" | "paused" | "lost";
 
 /** A 2xx is a delivery; these statuses and any network error are retried; any other answer is final. */
 function isRetryable(r: SendResult): boolean {
@@ -204,7 +203,11 @@ function isRetryable(r: SendResult): boolean {
   return s === 408 || s === 425 || s === 429 || s >= 500;
 }
 
-/** Sends one claimed row and records the outcome. Never stores the response body. */
+/**
+ * Sends one claimed row and records the outcome. Never stores the response body. Every write
+ * to the row names the claim (`leaseId`): if the lease ran out and another tick took the row
+ * over, this tick's write matches nothing and the outcome is "lost", not an overwrite.
+ */
 export async function deliverOne(
   db: PrismaClient,
   row: Claimed,
@@ -212,19 +215,24 @@ export async function deliverOne(
   deps: DeliverDeps = {}
 ): Promise<Outcome> {
   const env = deps.env ?? process.env;
+  const mine = { id: row.id, leaseId: row.leaseId };
+  const write = async (data: Prisma.NotificationUncheckedUpdateManyInput) =>
+    (await db.notification.updateMany({ where: mine, data })).count === 1;
+  const release = (data: Prisma.NotificationUncheckedUpdateManyInput = {}) =>
+    write({ lockedUntil: null, leaseId: null, ...data });
 
   const sentLastMinute = await db.notification.count({
     where: { tenantId: row.tenantId, lastAttemptAt: { gt: new Date(now.getTime() - 60_000) } },
   });
   if (sentLastMinute >= TENANT_PER_MINUTE) {
     // Over the tenant's rate: the row waits, it is not dropped.
-    await db.notification.update({ where: { id: row.id }, data: { lockedUntil: null, nextAttemptAt: new Date(now.getTime() + 60_000) } });
+    await release({ nextAttemptAt: new Date(now.getTime() + 60_000) });
     return "deferred";
   }
 
   const channel = await db.notificationChannel.findUnique({ where: { id: row.channelId } });
   if (!channel || channel.status !== "active") {
-    await db.notification.update({ where: { id: row.id }, data: { lockedUntil: null } });
+    await release();
     return "deferred";
   }
 
@@ -241,8 +249,10 @@ export async function deliverOne(
       if (prev !== null) secrets.push(prev);
     }
     const body = JSON.stringify(row.payload);
+    // Signed now, not at the tick's start: a row late in a slow batch must still pass a receiver's
+    // freshness window.
     const headers = {
-      "X-Synthaea-Signature": signBody(secrets, body, Math.floor(now.getTime() / 1000)),
+      "X-Synthaea-Signature": signBody(secrets, body, Math.floor(Date.now() / 1000)),
       "User-Agent": "synthaea-notify/1",
     };
     const send: Sender =
@@ -252,29 +262,25 @@ export async function deliverOne(
 
   const attempts = row.attempts + 1;
   const lastError = result.ok ? null : (result.errorClass ?? "connect");
-  const base = { attempts, lastAttemptAt: now, lastStatus: result.statusCode ?? null, lockedUntil: null };
+  const base = { attempts, lastAttemptAt: now, lastStatus: result.statusCode ?? null, lockedUntil: null, leaseId: null };
 
   if (result.ok) {
-    await db.$transaction([
-      db.notification.update({ where: { id: row.id }, data: { ...base, deliveredAt: now, lastError: null } }),
-      db.notificationChannel.update({
-        where: { id: channel.id },
-        data: { lastStatusCode: result.statusCode ?? null, lastError: null, lastDeliveredAt: now },
-      }),
-    ]);
+    if (!(await write({ ...base, deliveredAt: now, lastError: null }))) return "lost";
+    await db.notificationChannel.update({
+      where: { id: channel.id },
+      data: { lastStatusCode: result.statusCode ?? null, lastError: null, lastDeliveredAt: now },
+    });
     return "delivered";
   }
-
-  await db.notificationChannel.update({
-    where: { id: channel.id },
-    data: { lastStatusCode: result.statusCode ?? null, lastError },
-  });
 
   // 410: the receiver says it is gone. The channel pauses at once; the row is kept and goes out,
   // oldest first, when an admin re-enables it.
   if (result.statusCode === 410) {
-    await db.notification.update({ where: { id: row.id }, data: { ...base, lastError, nextAttemptAt: now } });
-    await db.notificationChannel.update({ where: { id: channel.id }, data: { status: "paused" } });
+    if (!(await write({ ...base, lastError, nextAttemptAt: now }))) return "lost";
+    await db.notificationChannel.update({
+      where: { id: channel.id },
+      data: { status: "paused", lastStatusCode: 410, lastError },
+    });
     return "paused";
   }
 
@@ -286,22 +292,26 @@ export async function deliverOne(
       delay = Math.min(Math.max(delay, result.retryAfterSeconds * 1000), MAX_DELAY_MS);
     }
   }
-  await db.notification.update({
-    where: { id: row.id },
-    data: {
-      ...base,
-      lastError,
-      ...(delay === null ? { failedAt: now } : { nextAttemptAt: new Date(now.getTime() + delay) }),
-    },
+  const wrote = await write({
+    ...base,
+    lastError,
+    ...(delay === null ? { failedAt: now } : { nextAttemptAt: new Date(now.getTime() + delay) }),
+  });
+  if (!wrote) return "lost";
+  await db.notificationChannel.update({
+    where: { id: channel.id },
+    data: { lastStatusCode: result.statusCode ?? null, lastError },
   });
   if (delay !== null) return "retry";
 
-  // Five failed rows since the last delivery pause the channel; its rows stay queued.
+  // Five failed rows in a row pause the channel: counted from the last delivery, or from the
+  // last re-enable if that is later (otherwise one new failure after a re-enable would pause it
+  // again); its rows stay queued.
+  const since = [channel.lastDeliveredAt, channel.pauseCountFrom]
+    .filter((d): d is Date => d !== null)
+    .sort((x, y) => y.getTime() - x.getTime())[0];
   const failedSince = await db.notification.count({
-    where: {
-      channelId: channel.id,
-      failedAt: { not: null, ...(channel.lastDeliveredAt ? { gt: channel.lastDeliveredAt } : {}) },
-    },
+    where: { channelId: channel.id, failedAt: { not: null, ...(since ? { gt: since } : {}) } },
   });
   if (failedSince >= PAUSE_AFTER_FAILED_ROWS) {
     await db.notificationChannel.update({ where: { id: channel.id }, data: { status: "paused" } });
@@ -310,10 +320,12 @@ export async function deliverOne(
 }
 
 /**
- * Housekeeping, once per tick: delivered rows go after 30 days, failed rows after 90, and a
- * rotation's previous secret is forgotten once its 24 hours are over.
+ * Housekeeping, once per tick: delivered rows go after 30 days, failed rows after 90, a
+ * rotation's previous secret is forgotten once its 24 hours are over, and the secrets and URLs
+ * sealed under an older server key are sealed again under the current one (a few channels a
+ * tick), so an old key can be retired.
  */
-export async function purge(db: PrismaClient, now: Date) {
+export async function purge(db: PrismaClient, now: Date, env: Env = process.env) {
   const day = 86_400_000;
   const delivered = await db.notification.deleteMany({
     where: { deliveredAt: { lt: new Date(now.getTime() - RETENTION_DELIVERED_DAYS * day) } },
@@ -325,10 +337,55 @@ export async function purge(db: PrismaClient, now: Date) {
     where: { prevSecretUntil: { lt: now } },
     data: { prevSecretKeyId: null, prevSecretSealed: null, prevSecretUntil: null },
   });
-  return { deliveredDeleted: delivered.count, failedDeleted: failed.count, rotationsClosed: rotations.count };
+  const rewrapped = await rewrapChannels(db, env);
+  return { deliveredDeleted: delivered.count, failedDeleted: failed.count, rotationsClosed: rotations.count, rewrapped };
 }
 
-/** One cron tick: claim and deliver what is due, within the tick's budget. */
+/** Seals again, under the current key, what an older key sealed. Returns how many channels changed. */
+export async function rewrapChannels(db: PrismaClient, env: Env = process.env, limit = 20): Promise<number> {
+  const key = currentKey(env);
+  if (!key) return 0;
+  const stale = await db.notificationChannel.findMany({
+    where: {
+      OR: [
+        { secretKeyId: { not: key.id } },
+        { urlKeyId: { not: key.id } },
+        { prevSecretKeyId: { not: null, notIn: [key.id] } },
+      ],
+    },
+    take: limit,
+  });
+  let changed = 0;
+  for (const c of stale) {
+    const secret = openSecret({ keyId: c.secretKeyId, sealed: c.secretSealed }, c.id, env);
+    const url = openUrl({ keyId: c.urlKeyId, sealed: c.urlSealed }, c.id, env);
+    if (secret === null || url === null) continue; // an old key that is gone: nothing to re-wrap with
+    const s = sealSecret(secret, c.id, env);
+    const u = sealUrl(url, c.id, env);
+    if (!s || !u) continue;
+    let prev: { prevSecretKeyId: string; prevSecretSealed: string } | undefined;
+    if (c.prevSecretKeyId && c.prevSecretSealed) {
+      const p = openSecret({ keyId: c.prevSecretKeyId, sealed: c.prevSecretSealed }, c.id, env);
+      const ps = p === null ? null : sealSecret(p, c.id, env);
+      if (ps) prev = { prevSecretKeyId: ps.keyId, prevSecretSealed: ps.sealed };
+    }
+    await db.notificationChannel.update({
+      where: { id: c.id },
+      data: { secretKeyId: s.keyId, secretSealed: s.sealed, urlKeyId: u.keyId, urlSealed: u.sealed, ...(prev ?? {}) },
+    });
+    changed++;
+  }
+  return changed;
+}
+
+/** How many tenants are served at once: a slow receiver stalls its own tenant, not the others. */
+export const TENANT_CONCURRENCY = 8;
+
+/**
+ * One cron tick: claim and deliver what is due, within the tick's budget. Tenants run in
+ * parallel, each tenant's rows in order; one row's error is logged and the lease released, it
+ * does not end the tick.
+ */
 export async function deliverDue(
   db: PrismaClient,
   now = new Date(),
@@ -337,17 +394,37 @@ export async function deliverDue(
   const started = Date.now();
   const budget = deps.budgetMs ?? TICK_BUDGET_MS;
   const claimed = await claimDue(db, now);
-  const tally = { claimed: claimed.length, delivered: 0, retry: 0, failed: 0, deferred: 0, paused: 0, released: 0 };
-  for (let i = 0; i < claimed.length; i++) {
-    if (Date.now() - started > budget) {
-      // Out of time: stop claiming and give the rest back, so the next tick takes them.
-      const rest = claimed.slice(i).map((r) => r.id);
-      await db.notification.updateMany({ where: { id: { in: rest } }, data: { lockedUntil: null } });
-      tally.released = rest.length;
-      break;
+  const tally = { claimed: claimed.length, delivered: 0, retry: 0, failed: 0, deferred: 0, paused: 0, lost: 0, released: 0, errors: 0 };
+
+  const byTenant = new Map<string, Claimed[]>();
+  for (const r of claimed) byTenant.set(r.tenantId, [...(byTenant.get(r.tenantId) ?? []), r]);
+  const queue = Array.from(byTenant.values());
+
+  const runTenant = async (rows: Claimed[]) => {
+    for (let i = 0; i < rows.length; i++) {
+      if (Date.now() - started > budget) {
+        // Out of time: stop sending and give the rest back, so the next tick takes them.
+        for (const r of rows.slice(i)) {
+          await db.notification.updateMany({ where: { id: r.id, leaseId: r.leaseId }, data: { lockedUntil: null, leaseId: null } });
+          tally.released++;
+        }
+        return;
+      }
+      try {
+        tally[await deliverOne(db, rows[i], now, deps)]++;
+      } catch (error) {
+        console.error("Notification delivery error:", rows[i].id, error);
+        tally.errors++;
+        await db.notification
+          .updateMany({ where: { id: rows[i].id, leaseId: rows[i].leaseId }, data: { lockedUntil: null, leaseId: null } })
+          .catch(() => undefined);
+      }
     }
-    tally[await deliverOne(db, claimed[i], now, deps)]++;
-  }
+  };
+  const worker = async () => {
+    for (let rows = queue.shift(); rows; rows = queue.shift()) await runTenant(rows);
+  };
+  await Promise.all(Array.from({ length: Math.min(TENANT_CONCURRENCY, queue.length) }, worker));
   return tally;
 }
 

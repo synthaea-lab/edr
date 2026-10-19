@@ -3,6 +3,8 @@ import { PrismaClient } from "@prisma/client";
 import { cleanDatabase, createTestTenant, createTestAgent } from "../helpers/db";
 import { evaluateHostTransitions } from "@/lib/notify/host-transitions";
 import { deliverDue } from "@/lib/notify/outbox";
+import { GET as silentCron } from "@/app/api/cron/detect-silent-agents/route";
+import { NextRequest } from "next/server";
 import { makeChannel, NOTIFY_ENV } from "../helpers/notify";
 
 const prisma = new PrismaClient();
@@ -91,20 +93,39 @@ describe("host transitions", () => {
     expect((await rows()).map((r) => r.event)).toEqual(["host.degraded", "host.recovered"]);
   });
 
-  it("a silent host carries the link to the case the silent-agent cron opened", async () => {
-    await channel(tenantId);
+  it("a silent host carries the link to the case the silent-agent cron really opened, found by enrollment id", async () => {
+    const ch = await channel(tenantId);
     await evalAt(0);
-    const c = await prisma.case.create({
-      data: { tenantId, title: `Agent Silent: ${agentId}`, description: "x", severity: "high", status: "open" },
-    });
-    await evalAt(600); // lastSeen is at(0): more than 5 minutes ago
-    const r = await rows();
+    // Another host's case must not be picked up, and the real cron titles a case by host name.
+    const other = await createTestAgent(tenantId, "enr-2", { hostname: "db-02", lastSeen: at(0) });
+    await prisma.agent.update({ where: { id: agentId }, data: { lastSeen: new Date(Date.now() - 10 * 60_000) } });
+    await prisma.agent.update({ where: { id: other.id }, data: { lastSeen: new Date(Date.now() - 10 * 60_000) } });
+    process.env.CRON_SECRET = "cron-test";
+    const res = await silentCron(new NextRequest("http://localhost/api/cron/detect-silent-agents", { headers: { Authorization: "Bearer cron-test" } }));
+    expect(res.status).toBe(200);
+    const cases = await prisma.case.findMany({ where: { tenantId } });
+    expect(cases.map((c) => c.title).sort()).toEqual(["Agent Silent: db-02", "Agent Silent: web-01"]);
+    const mine = cases.find((c) => c.title === "Agent Silent: web-01")!;
+
+    await evaluateHostTransitions(prisma, new Date(), env); // both hosts are silent now
+    const r = (await rows()).filter((x) => x.subject === agentId);
     expect(r.map((x) => x.event)).toEqual(["host.silent"]);
-    expect((r[0].payload as { change: { case_url: string } }).change.case_url).toBe(`https://console.example.com/console/cases/${c.id}`);
+    expect((r[0].payload as { change: { case_url: string } }).change.case_url).toBe(`https://console.example.com/console/cases/${mine.id}`);
+    expect(ch.id).toBeTruthy();
+
     // And it comes back healthy once it heartbeats again.
-    await prisma.agent.update({ where: { id: agentId }, data: { lastSeen: at(610) } });
-    await evalAt(611);
-    expect((await rows()).map((x) => x.event)).toEqual(["host.silent", "host.recovered"]);
+    await prisma.agent.update({ where: { id: agentId }, data: { lastSeen: new Date() } });
+    await evaluateHostTransitions(prisma, new Date(), env);
+    expect((await rows()).filter((x) => x.subject === agentId).map((x) => x.event)).toEqual(["host.silent", "host.recovered"]);
+  });
+
+  it("without a configured console URL the links are null, never relative", async () => {
+    await channel(tenantId);
+    await evaluateHostTransitions(prisma, at(0), {});
+    await setHealth(agentId, tenantId, { silentSensor: true });
+    await evaluateHostTransitions(prisma, at(1), {});
+    const p = (await rows())[0].payload as { subject: { console_url: string | null } };
+    expect(p.subject.console_url).toBeNull();
   });
 
   it("a flap inside the cooldown is held, not lost, and not repeated", async () => {
