@@ -13,6 +13,11 @@
 set -e
 
 rm -rf /var/lib/synthaea /run/synthaea
+# Before dropping the account, not after (review finding): /var/log/synthaea
+# is kept for its contents, not for the synthaea uid/gid — once deluser runs
+# that uid has no name, and a later system account could be assigned the
+# same one and silently inherit ownership of the kept alert log.
+chown -R root:root /var/log/synthaea
 deluser synthaea 2>/dev/null || true
 delgroup synthaea 2>/dev/null || true
 
