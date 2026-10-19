@@ -41,7 +41,8 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    client. A hunt whose stored query no longer parses is repaired by a PATCH carrying a valid
    one. A run keeps its
    counts and the newest 100 matching detection ids; the newest 100 runs per hunt are kept.
-5. **"New match" means ingested since the hunt's previous successful run started**
+5. **"New match" means ingested since the hunt's previous successful run started** (the last run
+   that finished without an error: a run still going, or one whose server died, is not it)
    (`detection.created_at`), not "first seen on the fleet". It is a count on the run. Nothing
    is notified yet; a notification channel is a separate decision.
 6. **Scheduling is a cron route**, `GET /api/cron/run-hunts` (CRON_SECRET), called every few
@@ -49,9 +50,14 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    week). A call runs at most 20 hunts and starts no new one after 30 s, so one request stays
    within a host's request limit; what is left stays due for the next call. Which hunts are
    due is one grouped query, not one per hunt. A tenant may have 200 hunts.
-7. **A tenant may start 20 runs a minute**, manual and scheduled together (a 429 with
-   `Retry-After` beyond that), read from the run history so it needs no extra state and holds
-   across server instances. It bounds how much a user can chain expensive `text` searches.
+7. **A tenant may start 20 manual runs a minute** (a 429 with `Retry-After` beyond that), read
+   from the run history so it needs no extra state and holds across server instances. A run's
+   row is written when it starts (`finished_at` null until it ends), and the count and the insert
+   are one step under a per-tenant advisory lock, so requests sent together cannot all pass the
+   check: it bounds parallel requests as well as chained ones. It bounds how much a user can
+   start of expensive `text` searches. Scheduled runs count in that minute but are not refused;
+   the cron's own limits (20 hunts a call, none started after 30 s) bound them. A run whose
+   server died stays with `finished_at` null; it ages out of the count after a minute.
 8. **`ownerId` is attribution, not authorization.** It records who made a hunt; every session
    user of the tenant may read, edit, run and delete every hunt of the tenant, like the other
    console resources (cases, rings). A per-owner rule needs roles, which the console does not
