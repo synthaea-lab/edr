@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireTenantAdmin } from "@/lib/admin-auth";
 import { EVENTS, CRON_PERIOD_SECONDS } from "@/lib/notify/outbox";
 import { sealSecret, currentKey } from "@/lib/notify/secret";
+import { resendFailed } from "@/lib/notify/outbox";
 import { channelView, newSigningSecret } from "@/lib/notify/channels";
 
 const PatchSchema = z
@@ -40,13 +41,11 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
 
     let data: Record<string, unknown> = {};
     let secret: string | undefined;
+    let resent: number | undefined;
     if (action === "resend_failed") {
-      // Failed rows stay visible; this is the console's "send again" (ADR-0036 point 7).
-      const now = new Date();
-      await prisma.notification.updateMany({
-        where: { channelId: channel.id, failedAt: { not: null } },
-        data: { failedAt: null, attempts: 0, nextAttemptAt: now, lockedUntil: null, lastError: null },
-      });
+      // The console's "send again" (ADR-0036 point 7). A failed row that a later row of the same
+      // subject has superseded stays as it is: a receiver would discard it by `seq` anyway.
+      resent = await resendFailed(prisma, channel.id, new Date());
     } else if (action === "enable") data = { status: "active" };
     else if (action === "disable") data = { status: "disabled" };
     else if (action === "rotate_secret") {
@@ -55,7 +54,15 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
       }
       secret = newSigningSecret();
       const sealed = sealSecret(secret, channel.id)!;
-      data = { secretKeyId: sealed.keyId, secretSealed: sealed.sealed };
+      // For 24 hours both secrets sign, so a receiver that has not switched yet keeps working
+      // (the header carries `v1=<new>,v1=<old>`); the delivery cron forgets the old one after.
+      data = {
+        secretKeyId: sealed.keyId,
+        secretSealed: sealed.sealed,
+        prevSecretKeyId: channel.secretKeyId,
+        prevSecretSealed: channel.secretSealed,
+        prevSecretUntil: new Date(Date.now() + 24 * 3_600_000),
+      };
     } else {
       if (huntIds && huntIds.length > 0) {
         const own = await prisma.hunt.count({ where: { tenantId, id: { in: huntIds } } });
@@ -76,10 +83,19 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
         action: `notify.channel.${action}`,
         resource: `notification_channels/${channel.id}`,
         // Never the secret or the URL path.
-        details: { events: updated.events, huntIds: updated.huntIds, status: updated.status },
+        details: {
+          events: updated.events,
+          huntIds: updated.huntIds,
+          status: updated.status,
+          ...(resent !== undefined ? { resent } : {}),
+        },
       },
     });
-    return NextResponse.json({ channel: channelView(updated), ...(secret ? { secret } : {}) });
+    return NextResponse.json({
+      channel: channelView(updated),
+      ...(secret ? { secret, previousSecretValidUntil: data.prevSecretUntil } : {}),
+      ...(resent !== undefined ? { resent } : {}),
+    });
   } catch (error) {
     console.error("Update notification channel error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
@@ -103,7 +119,7 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
         userId,
         action: "notify.channel.delete",
         resource: `notification_channels/${channel.id}`,
-        details: { host: new URL(channel.url).host },
+        details: { host: channel.host },
       },
     });
     return NextResponse.json({ status: "deleted" });

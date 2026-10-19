@@ -6,7 +6,7 @@ import { requireTenantAdmin } from "@/lib/admin-auth";
 import { getTenantId } from "@/lib/tenant";
 import { EVENTS, CHANNELS_PER_TENANT, CRON_PERIOD_SECONDS } from "@/lib/notify/outbox";
 import { guardOptionsFromEnv, NotifyBlockedError, resolvePublicTarget } from "@/lib/notify/guard";
-import { currentKey, sealSecret } from "@/lib/notify/secret";
+import { currentKey, sealSecret, sealUrl } from "@/lib/notify/secret";
 import { channelView, newSigningSecret } from "@/lib/notify/channels";
 
 const CreateSchema = z.object({
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     const { url, events, huntIds, cooldownSeconds } = parsed.data;
 
     try {
-      await resolvePublicTarget(url, guardOptionsFromEnv());
+      await resolvePublicTarget(url, { ...guardOptionsFromEnv(), tenantId });
     } catch (e) {
       if (e instanceof NotifyBlockedError) {
         // Coarse on purpose: the finer reason is not a port-scan oracle.
@@ -88,11 +88,14 @@ export async function POST(req: NextRequest) {
     const id = randomUUID();
     const secret = newSigningSecret();
     const sealed = sealSecret(secret, id)!;
+    const sealedUrl = sealUrl(url, id)!;
     const channel = await prisma.notificationChannel.create({
       data: {
         id,
         tenantId,
-        url,
+        host: new URL(url).host,
+        urlKeyId: sealedUrl.keyId,
+        urlSealed: sealedUrl.sealed,
         secretKeyId: sealed.keyId,
         secretSealed: sealed.sealed,
         events,

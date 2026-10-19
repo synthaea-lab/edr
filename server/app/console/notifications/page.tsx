@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { channelView } from "@/lib/notify/channels";
 import { currentKey } from "@/lib/notify/secret";
-import { CHANNELS_PER_TENANT } from "@/lib/notify/outbox";
+import { CHANNELS_PER_TENANT, failedCounts } from "@/lib/notify/outbox";
 import NotificationChannelActions from "@/components/NotificationChannelActions";
 
 export const dynamic = "force-dynamic";
@@ -40,15 +40,14 @@ export default async function NotificationsPage() {
   const now = Date.now();
   const [channels, failed, waiting, stuck, hunts] = await Promise.all([
     prisma.notificationChannel.findMany({ where: { tenantId }, orderBy: { createdAt: "asc" } }),
-    prisma.notification.groupBy({ by: ["channelId"], where: { tenantId, failedAt: { not: null } }, _count: true }),
+    failedCounts(prisma, tenantId),
     prisma.notification.count({ where: { tenantId, deliveredAt: null, failedAt: null } }),
     prisma.notification.count({
       where: { tenantId, deliveredAt: null, failedAt: null, attempts: 0, createdAt: { lt: new Date(now - BACKED_UP_AFTER_MS) } },
     }),
     isAdmin ? prisma.hunt.findMany({ where: { tenantId }, select: { id: true, name: true }, orderBy: { name: "asc" } }) : [],
   ]);
-  const failedBy = new Map(failed.map((f) => [f.channelId, f._count]));
-  const configured = currentKey() !== null;
+    const configured = currentKey() !== null;
 
   return (
     <div className="space-y-6">
@@ -84,7 +83,7 @@ export default async function NotificationsPage() {
             <tbody className="divide-y divide-gray-100">
               {channels.map((c) => {
                 const v = channelView(c);
-                const failedRows = failedBy.get(c.id) ?? 0;
+                const { resendable: failedRows, superseded } = failed.get(c.id) ?? { resendable: 0, superseded: 0 };
                 return (
                   <tr key={c.id} className="align-top">
                     <td className="px-4 py-2 font-mono text-xs">{v.host}</td>
@@ -98,6 +97,11 @@ export default async function NotificationsPage() {
                         </p>
                       )}
                       {failedRows > 0 && <p className="mt-1 text-xs text-gray-600">{failedRows} failed</p>}
+                      {superseded > 0 && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          {superseded} failed, superseded by a later message of the same host (not sent again)
+                        </p>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-xs text-gray-700">{v.events.join(", ") || "none"}</td>
                     <td className="px-4 py-2 text-xs text-gray-700">

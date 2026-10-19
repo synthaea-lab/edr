@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { cleanDatabase, createTestTenant } from "../helpers/db";
-import { enqueue, claimDue, deliverDue, TENANT_PER_MINUTE } from "@/lib/notify/outbox";
+import { enqueue, claimDue, deliverDue, purge, resendFailed, failedCounts, TENANT_PER_MINUTE, PER_TENANT_PER_TICK, LEASE_MS } from "@/lib/notify/outbox";
+import { sealSecret } from "@/lib/notify/secret";
 import { sendWebhook } from "@/lib/notify/send";
 import { verifySignature } from "@/lib/notify/sign";
 import { execFileSync } from "node:child_process";
@@ -9,24 +10,15 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sealSecret } from "@/lib/notify/secret";
+import { makeChannel, NOTIFY_ENV } from "../helpers/notify";
 
 const prisma = new PrismaClient();
-const KEY = "k1:" + "11".repeat(32);
-const env = { NOTIFY_SECRET_KEY: KEY };
+const env = NOTIFY_ENV;
 const T0 = new Date("2026-10-19T10:00:00Z");
 const at = (s: number) => new Date(T0.getTime() + s * 1000);
 
-async function channel(tenantId: string, over: Record<string, unknown> = {}) {
-  const id = crypto.randomUUID();
-  const sealed = sealSecret("whsec_x", id, env)!;
-  return prisma.notificationChannel.create({
-    data: {
-      id, tenantId, url: "https://hooks.example.com/x", secretKeyId: sealed.keyId, secretSealed: sealed.sealed,
-      events: ["host.degraded", "host.recovered", "hunt.new_matches"], createdBy: "u", ...over,
-    },
-  });
-}
+const channel = (tenantId: string, over: Record<string, unknown> = {}) =>
+  makeChannel(prisma, tenantId, { events: ["host.degraded", "host.recovered", "hunt.new_matches"], ...over });
 const ev = (tenantId: string, event: "host.degraded" | "host.recovered", subject = "agent-1") =>
   ({ tenantId, event, subject, data: { subject: { id: subject } } });
 
@@ -61,7 +53,7 @@ describe("notification outbox", () => {
   it("two claimers never take the same row", async () => {
     await channel(tenantId);
     for (let i = 0; i < 6; i++) await enqueue(prisma, ev(tenantId, "host.degraded", `a${i}`), T0);
-    const [a, b] = await Promise.all([claimDue(prisma, at(1), 4), claimDue(prisma, at(1), 4)]);
+    const [a, b] = await Promise.all([claimDue(prisma, at(1), { limit: 4 }), claimDue(prisma, at(1), { limit: 4 })]);
     const ids = [...a, ...b].map((r) => r.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toHaveLength(6);
@@ -153,14 +145,14 @@ describe("notification outbox", () => {
     await channel(tenantId);
     for (let i = 0; i < TENANT_PER_MINUTE + 5; i++) await enqueue(prisma, ev(tenantId, "host.degraded", `r${i}`), T0);
     const ok = async () => ({ ok: true, statusCode: 204 });
-    // The cron claims up to 50 at a time: two ticks within the same minute.
-    const a = await deliverDue(prisma, at(1), { send: ok, env });
-    const b = await deliverDue(prisma, at(2), { send: ok, env });
-    expect(a.delivered + b.delivered).toBe(TENANT_PER_MINUTE);
-    expect(a.deferred + b.deferred).toBeGreaterThan(0);
+    // A tick serves a tenant at most ten rows: eight ticks within the same minute.
+    const tallies = [];
+    for (let t = 1; t <= 8; t++) tallies.push(await deliverDue(prisma, at(t), { send: ok, env }));
+    expect(tallies.reduce((n, x) => n + x.delivered, 0)).toBe(TENANT_PER_MINUTE);
+    expect(tallies.reduce((n, x) => n + x.deferred, 0)).toBeGreaterThan(0);
     expect(await prisma.notification.count({ where: { deliveredAt: null, failedAt: null } })).toBe(5);
     // A minute later the rest goes out.
-    const c = await deliverDue(prisma, at(130), { send: ok, env });
+    const c = await deliverDue(prisma, at(200), { send: ok, env });
     expect(c.delivered).toBe(5);
   });
 
@@ -183,7 +175,7 @@ describe("notification outbox", () => {
     try {
       await channel(tenantId, { url: `https://hooks.test:${port}/hook` });
       await enqueue(prisma, ev(tenantId, "host.degraded"), new Date());
-      const guard = { resolve: async () => ["127.0.0.1"], allowedPrivateHosts: new Set(["hooks.test"]), extraPorts: new Set([port]) };
+      const guard = { resolve: async () => ["127.0.0.1"], allowedPrivateHosts: new Set([`${tenantId}:hooks.test`]), tenantId, extraPorts: new Set([port]) };
       const tally = await deliverDue(prisma, new Date(), {
         env,
         send: (u, b, h) => sendWebhook(u, b, h, guard, cert),
@@ -200,5 +192,196 @@ describe("notification outbox", () => {
       server.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("delivery outcomes, ordering and housekeeping (ADR-0036 points 3, 5, 7)", () => {
+  let tenantId: string;
+  beforeEach(async () => {
+    await cleanDatabase();
+    tenantId = (await createTestTenant()).id;
+  });
+  afterAll(() => prisma.$disconnect());
+
+  const answer = (statusCode: number, extra: object = {}) => async () => ({ ok: false, statusCode, errorClass: "http_status" as const, ...extra });
+  const one = async (send: () => Promise<object>, subject = "agent-1") => {
+    if ((await prisma.notificationChannel.count({ where: { tenantId } })) === 0) await channel(tenantId);
+    await enqueue(prisma, ev(tenantId, "host.degraded", subject), T0);
+    return deliverDue(prisma, at(1), { send: send as never, env });
+  };
+
+  it.each([400, 401, 403, 404, 301])("a %i is final: the row is failed at once, with no retry", async (status) => {
+    const tally = await one(answer(status));
+    expect(tally.failed).toBe(1);
+    const row = await prisma.notification.findFirstOrThrow();
+    expect(row.attempts).toBe(1);
+    expect(row.failedAt).not.toBeNull();
+    expect(row.lastStatus).toBe(status);
+  });
+
+  it.each([408, 425, 429, 500, 502, 503])("a %i is retried on the schedule", async (status) => {
+    const tally = await one(answer(status));
+    expect(tally.retry).toBe(1);
+    const row = await prisma.notification.findFirstOrThrow();
+    expect(row.failedAt).toBeNull();
+    expect(row.nextAttemptAt.getTime() - at(1).getTime()).toBe(60_000); // first step, 1 minute
+  });
+
+  it("a network error is retried too", async () => {
+    const tally = await one(async () => ({ ok: false, errorClass: "connect" as const }));
+    expect(tally.retry).toBe(1);
+  });
+
+  it("honours Retry-After on 429 and 503, never below the schedule, capped at six hours", async () => {
+    await one(answer(429, { retryAfterSeconds: 1200 }), "a");
+    await one(answer(503, { retryAfterSeconds: 10 }), "b");
+    await one(answer(429, { retryAfterSeconds: 10 ** 7 }), "c");
+    const byHost = Object.fromEntries((await prisma.notification.findMany()).map((r) => [r.subject, r.nextAttemptAt.getTime() - at(1).getTime()]));
+    expect(byHost.a).toBe(1_200_000);
+    expect(byHost.b).toBe(60_000);
+    expect(byHost.c).toBe(6 * 3_600_000);
+    // A Retry-After on another status is ignored.
+    await one(answer(500, { retryAfterSeconds: 3600 }), "d");
+    expect((await prisma.notification.findFirstOrThrow({ where: { subject: "d" } })).nextAttemptAt.getTime() - at(1).getTime()).toBe(60_000);
+  });
+
+  it("a 410 pauses the channel at once and keeps the row, which is not failed", async () => {
+    const ch = await channel(tenantId);
+    await one(answer(410));
+    expect((await prisma.notificationChannel.findUniqueOrThrow({ where: { id: ch.id } })).status).toBe("paused");
+    const row = await prisma.notification.findFirstOrThrow();
+    expect(row.failedAt).toBeNull();
+    expect(row.deliveredAt).toBeNull();
+    // Re-enabled, it goes out.
+    await prisma.notificationChannel.update({ where: { id: ch.id }, data: { status: "active" } });
+    const tally = await deliverDue(prisma, at(2), { send: (async () => ({ ok: true, statusCode: 204 })) as never, env });
+    expect(tally.delivered).toBe(1);
+  });
+
+  it("a row whose URL or secret cannot be opened is a blocked failure that follows the schedule", async () => {
+    await channel(tenantId);
+    await enqueue(prisma, ev(tenantId, "host.degraded"), T0);
+    const tally = await deliverDue(prisma, at(1), { send: (async () => ({ ok: true })) as never, env: { NOTIFY_SECRET_KEY: "k9:" + "22".repeat(32) } });
+    expect(tally.retry).toBe(1);
+    expect((await prisma.notification.findFirstOrThrow()).lastError).toBe("blocked");
+  });
+
+  it("a failed row no longer blocks later rows of its subject; a pending one does", async () => {
+    await channel(tenantId);
+    await enqueue(prisma, ev(tenantId, "host.degraded"), T0);
+    await enqueue(prisma, ev(tenantId, "host.recovered"), at(1));
+    // Pending first row: the second waits.
+    const first = await claimDue(prisma, at(2));
+    expect(first).toHaveLength(1);
+    await prisma.notification.updateMany({ data: { lockedUntil: null } });
+    // The first row fails: the second is now claimable.
+    await prisma.notification.updateMany({ where: { seq: 1 }, data: { failedAt: at(3), attempts: 6 } });
+    const next = await claimDue(prisma, at(4));
+    expect(next.map((r) => (r.payload as { seq: number }).seq)).toEqual([2]);
+  });
+
+  it("a failed row a later row supersedes is not sent again; the others are", async () => {
+    const ch = await channel(tenantId);
+    for (const subject of ["a", "b"]) await enqueue(prisma, ev(tenantId, "host.degraded", subject), T0);
+    await enqueue(prisma, ev(tenantId, "host.recovered", "a"), at(1)); // supersedes a's degraded
+    await prisma.notification.updateMany({ where: { event: "host.degraded" }, data: { failedAt: at(2), attempts: 6 } });
+    const counts = await failedCounts(prisma, tenantId);
+    expect(counts.get(ch.id)).toEqual({ resendable: 1, superseded: 1 });
+    expect(await resendFailed(prisma, ch.id, at(3))).toBe(1);
+    const rows = await prisma.notification.findMany({ orderBy: [{ subject: "asc" }, { seq: "asc" }] });
+    expect(rows.map((r) => [r.subject, r.event, r.failedAt === null])).toEqual([
+      ["a", "host.degraded", false], // superseded: left failed
+      ["a", "host.recovered", true],
+      ["b", "host.degraded", true], // resent
+    ]);
+  });
+
+  it("serves tenants round-robin, at most ten rows each per tick", async () => {
+    const other = (await createTestTenant()).id;
+    await channel(tenantId);
+    await channel(other);
+    for (let i = 0; i < 25; i++) await enqueue(prisma, ev(tenantId, "host.degraded", `a${i}`), T0);
+    for (let i = 0; i < 3; i++) await enqueue(prisma, ev(other, "host.degraded", `b${i}`), T0);
+    const claimed = await claimDue(prisma, at(1));
+    const perTenant = claimed.reduce<Record<string, number>>((m, r) => ({ ...m, [r.tenantId]: (m[r.tenantId] ?? 0) + 1 }), {});
+    expect(perTenant[tenantId]).toBe(PER_TENANT_PER_TICK);
+    expect(perTenant[other]).toBe(3);
+    // Interleaved: the small tenant's rows come within the first six, not after the big one's ten.
+    const order = claimed.map((r) => r.tenantId);
+    expect(order.slice(0, 6).filter((t) => t === other)).toHaveLength(3);
+  });
+
+  it("a row is leased longer than a tick can last", async () => {
+    await channel(tenantId);
+    await enqueue(prisma, ev(tenantId, "host.degraded"), T0);
+    await claimDue(prisma, at(1));
+    const row = await prisma.notification.findFirstOrThrow();
+    expect(row.lockedUntil!.getTime() - at(1).getTime()).toBe(LEASE_MS);
+    expect(LEASE_MS).toBeGreaterThan(45_000);
+    expect(await claimDue(prisma, at(60))).toHaveLength(0); // still leased a minute later
+  });
+
+  it("out of budget, a tick stops sending and gives the claimed rows back", async () => {
+    await channel(tenantId);
+    for (let i = 0; i < 3; i++) await enqueue(prisma, ev(tenantId, "host.degraded", `s${i}`), T0);
+    const tally = await deliverDue(prisma, at(1), { send: (async () => ({ ok: true, statusCode: 204 })) as never, env, budgetMs: -1 });
+    expect(tally.released).toBe(3);
+    expect(tally.delivered).toBe(0);
+    expect((await prisma.notification.findMany()).every((r) => r.lockedUntil === null)).toBe(true);
+    // The next tick takes them.
+    const next = await deliverDue(prisma, at(2), { send: (async () => ({ ok: true, statusCode: 204 })) as never, env });
+    expect(next.delivered).toBe(3);
+  });
+
+  it("each channel has its own cooldown", async () => {
+    const quick = await channel(tenantId, { cooldownSeconds: 60 });
+    const slow = await channel(tenantId, { cooldownSeconds: 3600 });
+    await enqueue(prisma, ev(tenantId, "host.degraded"), T0);
+    await deliverDue(prisma, at(1), { send: (async () => ({ ok: true, statusCode: 204 })) as never, env });
+    await enqueue(prisma, ev(tenantId, "host.degraded"), at(300)); // five minutes later
+    const rows = await prisma.notification.findMany({ where: { event: "host.degraded" } });
+    expect(rows.filter((r) => r.channelId === quick.id)).toHaveLength(2);
+    expect(rows.filter((r) => r.channelId === slow.id)).toHaveLength(1);
+  });
+
+  it("signs with both secrets during a rotation overlap, with one afterwards, and forgets the old one", async () => {
+    const ch = await channel(tenantId, { secret: "new-secret" });
+    const old = sealSecret("old-secret", ch.id, env)!;
+    await prisma.notificationChannel.update({
+      where: { id: ch.id },
+      data: { prevSecretKeyId: old.keyId, prevSecretSealed: old.sealed, prevSecretUntil: at(86_400) },
+    });
+    const headers: string[] = [];
+    const rec = async (_u: string, _b: string, h: Record<string, string>) => {
+      headers.push(h["X-Synthaea-Signature"]);
+      return { ok: true, statusCode: 204 };
+    };
+    await enqueue(prisma, ev(tenantId, "host.degraded", "a"), T0);
+    await deliverDue(prisma, at(10), { send: rec as never, env });
+    await enqueue(prisma, ev(tenantId, "host.degraded", "b"), at(86_500));
+    await deliverDue(prisma, at(86_501), { send: rec as never, env }); // 24 h over
+    expect(headers[0].match(/v1=/g)).toHaveLength(2);
+    expect(headers[1].match(/v1=/g)).toHaveLength(1);
+    expect(verifySignature("new-secret", '{}', headers[0].replace(/,v1=[0-9a-f]+$/, ""), 0, 10 ** 12)).toBe(false); // body differs: a sanity check the check is real
+    const res = await purge(prisma, at(86_502));
+    expect(res.rotationsClosed).toBe(1);
+    const after = await prisma.notificationChannel.findUniqueOrThrow({ where: { id: ch.id } });
+    expect(after.prevSecretSealed).toBeNull();
+  });
+
+  it("deletes delivered rows after 30 days and failed rows after 90, and keeps the rest", async () => {
+    const ch = await channel(tenantId);
+    const day = 86_400_000;
+    const mk = (n: number, data: object) =>
+      prisma.notification.create({ data: { tenantId, channelId: ch.id, event: "host.degraded", subject: `r${n}`, seq: 1, payload: {}, ...data } });
+    const now = new Date("2026-10-19T10:00:00Z");
+    await mk(1, { deliveredAt: new Date(now.getTime() - 31 * day) }); // gone
+    await mk(2, { deliveredAt: new Date(now.getTime() - 29 * day) }); // kept
+    await mk(3, { failedAt: new Date(now.getTime() - 91 * day) }); // gone
+    await mk(4, { failedAt: new Date(now.getTime() - 89 * day) }); // kept
+    await mk(5, {}); // pending, never purged
+    const res = await purge(prisma, now);
+    expect(res).toMatchObject({ deliveredDeleted: 1, failedDeleted: 1 });
+    expect((await prisma.notification.findMany({ orderBy: { subject: "asc" } })).map((r) => r.subject)).toEqual(["r2", "r4", "r5"]);
   });
 });

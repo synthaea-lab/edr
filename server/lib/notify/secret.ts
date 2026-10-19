@@ -40,36 +40,50 @@ function keyById(id: string, env: Env): Key | null {
   return null;
 }
 
-export function sealSecret(
-  secret: string,
-  channelId: string,
-  env: Env = process.env
-): SealedSecret | null {
+function seal(plain: string, aad: string, env: Env): SealedSecret | null {
   const key = currentKey(env);
   if (!key) return null;
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key.bytes, iv);
-  cipher.setAAD(Buffer.from(channelId));
-  const ct = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  cipher.setAAD(Buffer.from(aad));
+  const ct = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
   return { keyId: key.id, sealed: Buffer.concat([iv, cipher.getAuthTag(), ct]).toString("base64") };
 }
 
-/** Returns null when the key is gone or the ciphertext does not authenticate for this channel. */
-export function openSecret(
-  value: SealedSecret,
-  channelId: string,
-  env: Env = process.env
-): string | null {
+function open(value: SealedSecret, aad: string, env: Env): string | null {
   const key = keyById(value.keyId, env);
   if (!key) return null;
   try {
     const raw = Buffer.from(value.sealed, "base64");
     if (raw.length < 28) return null;
     const decipher = createDecipheriv("aes-256-gcm", key.bytes, raw.subarray(0, 12));
-    decipher.setAAD(Buffer.from(channelId));
+    decipher.setAAD(Buffer.from(aad));
     decipher.setAuthTag(raw.subarray(12, 28));
     return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString("utf8");
   } catch {
     return null;
   }
+}
+
+/** The signing secret: the channel id is the associated data. */
+export function sealSecret(secret: string, channelId: string, env: Env = process.env): SealedSecret | null {
+  return seal(secret, channelId, env);
+}
+
+/** Returns null when the key is gone or the ciphertext does not authenticate for this channel. */
+export function openSecret(value: SealedSecret, channelId: string, env: Env = process.env): string | null {
+  return open(value, channelId, env);
+}
+
+/**
+ * The channel URL, sealed the same way (its path is often a bearer credential). The associated
+ * data adds a label to the channel id, so a ciphertext cannot be swapped between the secret and
+ * the URL column of a row.
+ */
+export function sealUrl(url: string, channelId: string, env: Env = process.env): SealedSecret | null {
+  return seal(url, `${channelId}|url`, env);
+}
+
+export function openUrl(value: SealedSecret, channelId: string, env: Env = process.env): string | null {
+  return open(value, `${channelId}|url`, env);
 }

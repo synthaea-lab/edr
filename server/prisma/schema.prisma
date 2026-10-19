@@ -46,10 +46,6 @@ model Agent {
   ring         String   @default("prod") // Canary ring: canary_0, canary_1, canary_2, prod
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
-  // What the server last told someone about this host (ADR-0036): healthy | degraded | silent.
-  // Null until the first evaluation with a notification channel; never read to compute status.
-  notifiedStatus String? @map("notified_status")
-
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   health      AgentHealth?
   decoyTokens DecoyToken[]
@@ -537,9 +533,17 @@ model NotificationChannel {
   id                  String    @id @default(uuid())
   tenantId            String    @map("tenant_id")
   kind                String    @default("webhook")
-  url                 String
+  // The URL is sealed like the secret (its path is often a bearer credential); `host` is the
+  // only part shown anywhere (console, audit rows, logs).
+  host                String
+  urlKeyId            String    @map("url_key_id")
+  urlSealed           String    @map("url_sealed")
   secretKeyId         String    @map("secret_key_id")
   secretSealed        String    @map("secret_sealed")
+  // For 24 hours after a rotation the previous secret also signs (two v1= values).
+  prevSecretKeyId     String?   @map("prev_secret_key_id")
+  prevSecretSealed    String?   @map("prev_secret_sealed")
+  prevSecretUntil     DateTime? @map("prev_secret_until")
   events              String[]  // subscribed event names; empty means none
   huntIds             String[]  @map("hunt_ids") // hunts whose hunt.new_matches this channel receives
   status              String    @default("active") // active | paused | disabled
@@ -550,11 +554,27 @@ model NotificationChannel {
   createdBy           String    @map("created_by")
   createdAt           DateTime  @default(now()) @map("created_at")
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   notifications Notification[]
+  states        NotificationState[]
 
   @@index([tenantId])
   @@map("notification_channels")
+}
+
+// The last state a channel was told about a subject (a host): per channel, not per agent, so a
+// channel in cooldown does not make another one miss a transition (ADR-0036 point 2). It
+// advances only when a row is enqueued for that channel.
+model NotificationState {
+  channelId String   @map("channel_id")
+  subject   String // the agent id
+  state     String // healthy | degraded | silent
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, subject])
+  @@map("notification_states")
 }
 
 // The outbox: one row per (channel, event occurrence). `id` is the event id the receiver

@@ -3,7 +3,9 @@ import { NextRequest } from "next/server";
 
 const db = vi.hoisted(() => ({
   notificationChannel: { findMany: vi.fn(), findFirst: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  notification: { count: vi.fn(), updateMany: vi.fn() },
+  notification: { count: vi.fn() },
+  $executeRaw: vi.fn(),
+  $queryRaw: vi.fn(),
   hunt: { count: vi.fn() },
   auditLog: { create: vi.fn() },
   member: { findFirst: vi.fn() },
@@ -23,7 +25,7 @@ const headers = { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "appli
 const r = (method: string, body?: unknown, h: Record<string, string> = headers) =>
   new NextRequest("http://localhost/api/notify/channels", { method, headers: h, body: body === undefined ? undefined : JSON.stringify(body) });
 const ctx = { params: { id: "c1" } };
-const row = { id: "c1", tenantId: "t1", kind: "webhook", url: "https://hooks.example.com/secret/path", secretKeyId: "k1", secretSealed: "xx", events: ["host.degraded"], huntIds: [], status: "active", cooldownSeconds: 1800, lastStatusCode: null, lastError: null, lastDeliveredAt: null, createdAt: new Date() };
+const row = { id: "c1", tenantId: "t1", kind: "webhook", host: "hooks.example.com", urlKeyId: "k1", urlSealed: "uu", secretKeyId: "k1", secretSealed: "xx", prevSecretKeyId: null, prevSecretSealed: null, prevSecretUntil: null, events: ["host.degraded"], huntIds: [], status: "active", cooldownSeconds: 1800, lastStatusCode: null, lastError: null, lastDeliveredAt: null, createdAt: new Date() };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,14 +50,15 @@ describe("notification channel routes", () => {
 
   it("a member can list, and sees the host only: no path, no secret", async () => {
     db.member.findFirst.mockResolvedValue({ role: "member" });
-    db.notificationChannel.findMany.mockResolvedValue([row]);
+    db.notificationChannel.findMany.mockResolvedValue([{ ...row, url: undefined }]);
     db.notification.count.mockResolvedValue(3);
     const res = await GET(r("GET"));
     const text = JSON.stringify(await res.json());
     expect(res.status).toBe(200);
     expect(text).toContain("hooks.example.com");
-    expect(text).not.toContain("/secret/path");
+    expect(text).not.toContain("urlSealed");
     expect(text).not.toContain("secretSealed");
+    expect(text).not.toContain("prevSecret");
     expect(text).toContain('"backlog":3');
   });
 
@@ -67,6 +70,11 @@ describe("notification channel routes", () => {
     expect(JSON.stringify(body.channel)).not.toContain(body.secret);
     const stored = db.notificationChannel.create.mock.calls[0][0].data;
     expect(JSON.stringify(stored)).not.toContain(body.secret);
+    // The URL's path is a credential for many receivers: only the host is stored in clear.
+    expect(JSON.stringify(stored)).not.toContain("/x");
+    expect(stored.host).toBe("hooks.example.com");
+    expect(stored.urlKeyId).toBe("k1");
+    expect(stored.urlSealed).toEqual(expect.any(String));
     expect(stored.secretKeyId).toBe("k1");
     expect(JSON.stringify(db.auditLog.create.mock.calls[0][0])).not.toContain(body.secret);
     expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("notify.channel.create");
@@ -92,8 +100,17 @@ describe("notification channel routes", () => {
   });
 
   it("rotate returns a new secret once; disable and enable are audited", async () => {
-    const rot = await (await PATCH(r("PATCH", { action: "rotate_secret" }), ctx)).json();
+    const res = await PATCH(r("PATCH", { action: "rotate_secret" }), ctx);
+    const rot = await res.json();
     expect(rot.secret).toMatch(/^whsec_/);
+    // The previous secret keeps signing for 24 hours.
+    const upd = db.notificationChannel.update.mock.calls[0][0].data;
+    expect(upd.prevSecretSealed).toBe("xx");
+    expect(upd.prevSecretKeyId).toBe("k1");
+    const hours = (upd.prevSecretUntil.getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(23.9);
+    expect(hours).toBeLessThanOrEqual(24);
+    expect(JSON.stringify(rot)).not.toContain("prevSecretSealed");
     expect(JSON.stringify(db.auditLog.create.mock.calls[0][0])).not.toContain(rot.secret);
     await PATCH(r("PATCH", { action: "disable" }), ctx);
     await PATCH(r("PATCH", { action: "enable" }), ctx);
@@ -102,13 +119,16 @@ describe("notification channel routes", () => {
     ]);
   });
 
-  it("resend_failed requeues only this channel's failed rows and is audited", async () => {
-    db.notification.updateMany.mockResolvedValue({ count: 2 });
-    expect((await PATCH(r("PATCH", { action: "resend_failed" }), ctx)).status).toBe(200);
-    const call = db.notification.updateMany.mock.calls[0][0];
-    expect(call.where).toEqual({ channelId: "c1", failedAt: { not: null } });
-    expect(call.data).toMatchObject({ failedAt: null, attempts: 0 });
+  it("resend_failed goes through the superseded-aware requeue and is audited with the count", async () => {
+    db.$executeRaw.mockResolvedValue(2);
+    const res = await PATCH(r("PATCH", { action: "resend_failed" }), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).resent).toBe(2);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
+    const sql = JSON.stringify(db.$executeRaw.mock.calls[0][0]);
+    expect(sql).toContain("l.seq > n.seq"); // a failed row a later row supersedes is left alone
     expect(db.auditLog.create.mock.calls[0][0].data.action).toBe("notify.channel.resend_failed");
+    expect(db.auditLog.create.mock.calls[0][0].data.details.resent).toBe(2);
   });
 
   it("looks a channel up inside the caller's tenant only", async () => {

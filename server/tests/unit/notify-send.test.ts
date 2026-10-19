@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sendWebhook } from "@/lib/notify/send";
+import { parseRetryAfter, sendWebhook } from "@/lib/notify/send";
 
 // A self-signed cert for `hooks.test`, listening on 127.0.0.1: the guard's resolver says
 // `hooks.test` is 127.0.0.1 and the operator allowlist lets that one host through, so the
@@ -16,10 +16,13 @@ let cert: string;
 const seen: { host?: string; sni?: string; sig?: string; body: string }[] = [];
 let reply = { status: 204, location: "" };
 let big = false;
+let stall = false;
+let retryAfter = "";
 
 const guard = (extra: object = {}) => ({
   resolve: async () => ["127.0.0.1"],
-  allowedPrivateHosts: new Set(["hooks.test"]),
+  allowedPrivateHosts: new Set(["t1:hooks.test"]),
+  tenantId: "t1",
   extraPorts: new Set([port]),
   ...extra,
 });
@@ -41,7 +44,11 @@ beforeAll(async () => {
         sig: req.headers["x-synthaea-signature"] as string,
         body,
       });
-      res.writeHead(reply.status, reply.location ? { Location: reply.location } : {});
+      if (stall) return; // never answers: only the deadline ends this call
+      const h: Record<string, string> = {};
+      if (reply.location) h.Location = reply.location;
+      if (retryAfter) h["Retry-After"] = retryAfter;
+      res.writeHead(reply.status, h);
       res.end(big ? "x".repeat(300_000) : "");
     });
   });
@@ -97,8 +104,48 @@ describe("sendWebhook", () => {
     expect(seen.length).toBe(before);
   });
 
+  it("one total deadline ends a receiver that never answers", async () => {
+    stall = true;
+    const t0 = Date.now();
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard(), cert, 600);
+    stall = false;
+    expect(r).toEqual({ ok: false, errorClass: "timeout" });
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it("a name that does not resolve and one that resolves to a refused address are both `blocked`", async () => {
+    const dns = await sendWebhook(`https://nope.test:${port}/`, "{}", {}, guard({ resolve: async () => { throw new Error("ENOTFOUND"); } }), cert);
+    const priv = await sendWebhook(`https://other.test:${port}/`, "{}", {}, guard(), cert);
+    expect(dns).toEqual({ ok: false, errorClass: "blocked" });
+    expect(priv).toEqual({ ok: false, errorClass: "blocked" });
+  });
+
+  it("hands a Retry-After back with the status", async () => {
+    reply = { status: 429, location: "" };
+    retryAfter = "120";
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard(), cert);
+    retryAfter = "";
+    expect(r).toEqual({ ok: false, statusCode: 429, errorClass: "http_status", retryAfterSeconds: 120 });
+  });
+
+  it("does not let a tenant that is not listed reach the private host", async () => {
+    const r = await sendWebhook(`https://hooks.test:${port}/`, "{}", {}, guard({ tenantId: "t2" }), cert);
+    expect(r).toEqual({ ok: false, errorClass: "blocked" });
+  });
+
   it("reports a closed port as connect", async () => {
     const r = await sendWebhook("https://hooks.test:9/", "{}", {}, guard({ extraPorts: new Set([9]) }), cert);
     expect(r.errorClass).toBe("connect");
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("reads seconds and dates, and ignores the rest", () => {
+    expect(parseRetryAfter("90")).toBe(90);
+    expect(parseRetryAfter(" 7 ")).toBe(7);
+    expect(parseRetryAfter("Mon, 19 Oct 2026 10:02:00 GMT", Date.parse("Mon, 19 Oct 2026 10:00:00 GMT"))).toBe(120);
+    expect(parseRetryAfter("Mon, 19 Oct 2026 09:00:00 GMT", Date.parse("Mon, 19 Oct 2026 10:00:00 GMT"))).toBe(0);
+    expect(parseRetryAfter("soon")).toBeUndefined();
+    expect(parseRetryAfter(undefined)).toBeUndefined();
   });
 });

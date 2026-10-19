@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireTenantAdmin } from "@/lib/admin-auth";
 import { guardOptionsFromEnv } from "@/lib/notify/guard";
-import { openSecret } from "@/lib/notify/secret";
+import { openSecret, openUrl } from "@/lib/notify/secret";
 import { sendWebhook } from "@/lib/notify/send";
 import { signBody } from "@/lib/notify/sign";
 import { randomUUID } from "node:crypto";
@@ -23,7 +23,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!channel) return NextResponse.json({ error: "Channel not found" }, { status: 404 });
 
     const secret = openSecret({ keyId: channel.secretKeyId, sealed: channel.secretSealed }, channel.id);
-    if (secret === null) {
+    const url = openUrl({ keyId: channel.urlKeyId, sealed: channel.urlSealed }, channel.id);
+    if (secret === null || url === null) {
       return NextResponse.json({ ok: false, errorClass: "blocked" });
     }
     const now = new Date();
@@ -35,13 +36,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       seq: 0,
     });
     const result = await sendWebhook(
-      channel.url,
+      url,
       body,
       {
         "X-Synthaea-Signature": signBody(secret, body, Math.floor(now.getTime() / 1000)),
         "User-Agent": "synthaea-notify/1",
       },
-      guardOptionsFromEnv()
+      { ...guardOptionsFromEnv(), tenantId }
     );
 
     await prisma.auditLog.create({

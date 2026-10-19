@@ -8,3 +8,11 @@ export const PAUSE_AFTER_FAILED_ROWS = 5;
 export function nextDelayMs(attempts: number): number | null {
   return attempts >= 1 && attempts <= BACKOFF_MS.length ? BACKOFF_MS[attempts - 1] : null;
 }
+
+/** Longest wait between two attempts: the cap of a `Retry-After`. */
+export const MAX_DELAY_MS = BACKOFF_MS[BACKOFF_MS.length - 1];
+
+/** Delivered rows are kept this long, then deleted by the delivery cron. */
+export const RETENTION_DELIVERED_DAYS = 30;
+/** Failed rows are kept this long, then deleted by the delivery cron. */
+export const RETENTION_FAILED_DAYS = 90;

@@ -110,6 +110,8 @@ function isPrivateV6(b: number[]): boolean {
   }
   // 2002::/16 (6to4) carries an IPv4 in bytes 2..5.
   if (b[0] === 0x20 && b[1] === 0x02) return isPrivateV4(v4(2));
+  // Teredo 2001::/32 tunnels IPv4 and carries the client's address obfuscated: refused outright.
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0 && b[3] === 0) return true;
   return (
     (b[0] & 0xfe) === 0xfc || // fc00::/7 unique-local (includes the IPv6 metadata address)
     (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) || // fe80::/10 link-local
@@ -137,8 +139,14 @@ export function isPrivateAddress(address: string): boolean {
 export interface GuardOptions {
   /** Ports allowed besides 443 (the server's explicit allowlist). */
   extraPorts?: ReadonlySet<number>;
-  /** Hostnames a server operator allowed to resolve to private addresses (NOTIFY_ALLOWED_PRIVATE_HOSTS). */
+  /**
+   * `<tenant id>:<host>` entries a server operator allowed to resolve to private addresses
+   * (NOTIFY_ALLOWED_PRIVATE_HOSTS, ADR-0036 point 6): a tenant cannot aim a channel at another
+   * tenant's on-prem host, and there is no wildcard tenant.
+   */
   allowedPrivateHosts?: ReadonlySet<string>;
+  /** The tenant the channel belongs to; without it no private host is allowed. */
+  tenantId?: string;
   /** Injected for tests; defaults to the system resolver. */
   resolve?: (host: string) => Promise<string[]>;
 }
@@ -148,12 +156,20 @@ async function systemResolve(host: string): Promise<string[]> {
   return answers.map((a) => a.address);
 }
 
-/** Parses `NOTIFY_ALLOWED_PRIVATE_HOSTS` and `NOTIFY_ALLOWED_PORTS` (comma-separated). */
+/**
+ * Parses `NOTIFY_ALLOWED_PRIVATE_HOSTS` (comma-separated `<tenant id>:<host>`; an entry with no
+ * tenant, or a `*` tenant, is ignored) and `NOTIFY_ALLOWED_PORTS` (comma-separated).
+ */
 export function guardOptionsFromEnv(env: Env = process.env): GuardOptions {
   const list = (v: string | undefined) =>
     (v ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   return {
-    allowedPrivateHosts: new Set(list(env.NOTIFY_ALLOWED_PRIVATE_HOSTS)),
+    allowedPrivateHosts: new Set(
+      list(env.NOTIFY_ALLOWED_PRIVATE_HOSTS).filter((e) => {
+        const i = e.indexOf(":");
+        return i > 0 && e.slice(0, i) !== "*" && i < e.length - 1;
+      })
+    ),
     extraPorts: new Set(list(env.NOTIFY_ALLOWED_PORTS).map(Number).filter((n) => n > 0 && n < 65536)),
   };
 }
@@ -176,7 +192,7 @@ export async function resolvePublicTarget(raw: string, opts: GuardOptions = {}):
 
   // `URL` has already folded decimal, octal and hex IPv4 forms to dotted decimal.
   const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-  const allowPrivate = opts.allowedPrivateHosts?.has(host) ?? false;
+  const allowPrivate = !!opts.tenantId && (opts.allowedPrivateHosts?.has(`${opts.tenantId.toLowerCase()}:${host}`) ?? false);
 
   let addresses: string[];
   if (isIP(host)) {

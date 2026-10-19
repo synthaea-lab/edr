@@ -13,19 +13,14 @@ export function isEvent(e: string): boolean {
 
 /**
  * What a signed-in member may see of a channel (ADR-0036 point 8): that it exists and
- * whether it works. The URL is shown as its host only; the secret and its ciphertext never.
+ * whether it works. The URL is shown as its host only (it is stored sealed, its path is often a
+ * credential); the secret and the ciphertexts never.
  */
 export function channelView(c: NotificationChannel) {
-  let host = "";
-  try {
-    host = new URL(c.url).host;
-  } catch {
-    host = "";
-  }
   return {
     id: c.id,
     kind: c.kind,
-    host,
+    host: c.host,
     status: c.status,
     events: c.events,
     huntIds: c.huntIds,

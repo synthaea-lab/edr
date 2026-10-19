@@ -183,40 +183,6 @@ What exists, read from the code on 2026-10-16:
 - `server/integrations/README.md` stops promising paging in general: the webhook is built, the
   rest stay listed.
 
-## Implementation status
-
-All four slices are built (#863; `server/lib/notify/`, `server/app/api/notify/channels/`,
-`server/app/api/cron/deliver-notifications/`, `server/app/console/notifications/`). Where the code
-differs from, or settles, what the text above leaves open:
-
-- **Host transitions are found by the delivery cron, not at beacon time.** `degraded` is derived
-  on read and ends with a clock (the loss window), so no beacon marks its end; each tick of
-  `deliver-notifications` compares `fleetStatus` with the stored `notified_status` and enqueues
-  one row per change. The cost is up to one cron period of latency (a minute) on a transition.
-  `fleetStatus` is not changed. The silent-agent cron is not touched either: `host.silent`
-  comes from the same comparison, and carries the link to that cron's case **when it has opened
-  one by then** (otherwise `case_url` is null).
-- **`notified_status` is on `agents`, not `agent_health`**: an agent that never sent a beacon has
-  no health row and can still go silent.
-- **The first evaluation of a host records its state without a message** (`notified_status` was
-  null), so registering a channel does not announce every host that is already degraded: its
-  first message is its next change. Evaluation is skipped for a tenant with no channel
-  subscribed to a host event, so nothing is recorded for it.
-- `no_beacon` (alive, no health) counts as `healthy` for notification purposes.
-- **`hunt.new_matches`** is queued by `runHunt` after the run row is written; a failure there is
-  logged and never fails the run. The cooldown applies to it like to the others, so a hunt with
-  new matches on every run sends one message per cooldown and channel, not one per run (the
-  console and the run history still show every run).
-- **Console page** `/console/notifications`: any member sees the channels (host only), their state,
-  the last result, failed rows and whether the outbox is backed up (rows not attempted for over
-  5 minutes); owner/admin get send test, disable/re-enable, rotate secret, send failed again, delete
-  and add. **The navigation link is not added yet** (`app/console/layout.tsx` is being changed by
-  #858's rebase); the page is reachable at its URL.
-- The "backed up" state is also `backlog` on `GET /api/notify/channels`; the tenant limit of 60 a
-  minute is counted on `last_attempt_at`; a row of a paused or disabled channel is not claimed; a
-  row whose secret cannot be opened (key gone, ciphertext not authentic) is a `blocked` failure and
-  follows the retry schedule.
-
 ## Resolved in review
 
 - **Cooldown:** 30 minutes by default, per channel; never below the cron's period.

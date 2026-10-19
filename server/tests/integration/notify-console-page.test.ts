@@ -3,7 +3,7 @@ import React from "react";
 import { randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanDatabase, createTestTenant, prisma } from "../helpers/db";
-import { sealSecret } from "@/lib/notify/secret";
+import { makeChannel } from "../helpers/notify";
 
 (globalThis as { React?: typeof React }).React = React;
 
@@ -35,13 +35,8 @@ async function member(role: string) {
   return tenant.id;
 }
 
-async function channel(tenantId: string, over: Record<string, unknown> = {}) {
-  const id = randomUUID();
-  const sealed = sealSecret("whsec_x", id, { NOTIFY_SECRET_KEY: KEY })!;
-  return prisma.notificationChannel.create({
-    data: { id, tenantId, url: "https://hooks.example.com/very/secret/path", secretKeyId: "k1", secretSealed: sealed.sealed, events: ["host.degraded"], createdBy: "u", ...over },
-  });
-}
+const channel = (tenantId: string, over: Record<string, unknown> = {}) =>
+  makeChannel(prisma, tenantId, { url: "https://hooks.example.com/very/secret/path", events: ["host.degraded"], ...over });
 
 describe("console notifications page (real database)", () => {
   beforeEach(async () => {
@@ -68,6 +63,20 @@ describe("console notifications page (real database)", () => {
     expect(html).toContain("1 failed");
     expect(html).toContain("Send test");
     expect(html).toContain("Add a webhook");
+  });
+
+  it("shows a failed row a later one superseded as such, and counts only the resendable ones", async () => {
+    const tenantId = await member("admin");
+    const c = await channel(tenantId);
+    const mk = (subject: string, seq: number, data: object) =>
+      prisma.notification.create({ data: { tenantId, channelId: c.id, event: "host.degraded", subject, seq, payload: {}, ...data } });
+    await mk("a", 1, { failedAt: new Date(), attempts: 6 }); // superseded by a's seq 2
+    await mk("a", 2, { deliveredAt: new Date() });
+    await mk("b", 1, { failedAt: new Date(), attempts: 6 }); // resendable
+    const html = await render();
+    expect(html).toContain("1 failed");
+    expect(html).toContain("superseded by a later message");
+    expect(html).toContain("Send 1 failed again");
   });
 
   it("a plain member sees the channels but no control", async () => {

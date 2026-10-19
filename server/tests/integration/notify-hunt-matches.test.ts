@@ -1,19 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDatabase, createTestAgent, createTestDetection, createTestTenant, prisma } from "../helpers/db";
 import { runHunt } from "@/lib/hunt";
-import { sealSecret } from "@/lib/notify/secret";
+import { makeChannel } from "../helpers/notify";
 
-const env = { NOTIFY_SECRET_KEY: "k1:" + "11".repeat(32) };
 const HOUR = 3_600_000;
 
-async function channel(tenantId: string, huntIds: string[], events = ["hunt.new_matches"]) {
-  const id = crypto.randomUUID();
-  const sealed = sealSecret("whsec_x", id, env)!;
-  process.env.NOTIFY_SECRET_KEY = env.NOTIFY_SECRET_KEY;
-  return prisma.notificationChannel.create({
-    data: { id, tenantId, url: "https://hooks.example.com/x", secretKeyId: sealed.keyId, secretSealed: sealed.sealed, events, huntIds, createdBy: "u" },
-  });
-}
+const channel = (tenantId: string, huntIds: string[], events = ["hunt.new_matches"]) =>
+  makeChannel(prisma, tenantId, { events, huntIds });
 const mkHunt = (tenantId: string, name = "Encoded PowerShell") =>
   prisma.hunt.create({ data: { tenantId, ownerId: "u", name, query: { version: 1, lastHours: 24, techniques: ["T1059"] } } });
 

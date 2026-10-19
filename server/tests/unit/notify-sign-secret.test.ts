@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { signBody, verifySignature } from "@/lib/notify/sign";
-import { sealSecret, openSecret } from "@/lib/notify/secret";
+import { sealSecret, openSecret, sealUrl, openUrl } from "@/lib/notify/secret";
 
 const K1 = "k1:" + "11".repeat(32);
 const K2 = "k2:" + "22".repeat(32);
@@ -23,6 +23,38 @@ describe("signBody", () => {
 
   it("gives a different signature on each attempt for the same body", () => {
     expect(signBody("s3", "{}", 1000)).not.toBe(signBody("s3", "{}", 1001));
+  });
+});
+
+describe("signature overlap after a rotation", () => {
+  it("carries two v1= values and either secret verifies it", () => {
+    const h = signBody(["new-secret", "old-secret"], "{}", 1000);
+    expect(h.match(/v1=/g)).toHaveLength(2);
+    expect(verifySignature("new-secret", "{}", h, 1000)).toBe(true);
+    expect(verifySignature("old-secret", "{}", h, 1000)).toBe(true);
+    expect(verifySignature("third", "{}", h, 1000)).toBe(false);
+  });
+
+  it("is the single-signature header when only one secret signs", () => {
+    expect(signBody(["only"], "{}", 1000)).toBe(signBody("only", "{}", 1000));
+  });
+});
+
+describe("sealUrl / openUrl", () => {
+  it("round-trips, keeps the URL out of the ciphertext and is bound to its channel", () => {
+    const url = "https://hooks.slack.example/services/T000/B000/SECRETPATH";
+    const sealed = sealUrl(url, "chan-1", { NOTIFY_SECRET_KEY: K1 })!;
+    expect(Buffer.from(sealed.sealed, "base64").toString("utf8")).not.toContain("SECRETPATH");
+    expect(openUrl(sealed, "chan-1", { NOTIFY_SECRET_KEY: K1 })).toBe(url);
+    expect(openUrl(sealed, "chan-2", { NOTIFY_SECRET_KEY: K1 })).toBeNull();
+  });
+
+  it("a ciphertext cannot be moved between the URL and the secret column", () => {
+    const env = { NOTIFY_SECRET_KEY: K1 };
+    const asUrl = sealUrl("https://a.example/", "chan-1", env)!;
+    const asSecret = sealSecret("whsec_x", "chan-1", env)!;
+    expect(openSecret(asUrl, "chan-1", env)).toBeNull();
+    expect(openUrl(asSecret, "chan-1", env)).toBeNull();
   });
 });
 

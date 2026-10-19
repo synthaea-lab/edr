@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isPrivateAddress, resolvePublicTarget, NotifyBlockedError } from "@/lib/notify/guard";
+import { guardOptionsFromEnv, isPrivateAddress, resolvePublicTarget, NotifyBlockedError } from "@/lib/notify/guard";
 
 const pub = async () => ["93.184.216.34"];
 
@@ -10,6 +10,8 @@ describe("isPrivateAddress", () => {
     "::1", "::", "fe80::1", "fc00::1", "fd00:ec2::254", "ff02::1",
     "::ffff:127.0.0.1", "::ffff:7f00:1", "::127.0.0.1", "64:ff9b::7f00:1", "2002:7f00:1::1",
     "2001:db8::1",
+    "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo 2001::/32, refused outright
+    "2001::1",
   ])("refuses %s", (a) => expect(isPrivateAddress(a)).toBe(true));
 
   it.each(["93.184.216.34", "8.8.8.8", "172.32.0.1", "100.128.0.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"])(
@@ -70,13 +72,28 @@ describe("resolvePublicTarget", () => {
     await blocked("https://empty.example.com/", "dns", { resolve: async () => [] });
   });
 
-  it("lets an operator-listed private host through, and only that host", async () => {
-    const allowed = new Set(["soar.corp.example"]);
+  it("lets an operator-listed private host through, for the tenant it is listed for and only that host", async () => {
+    const allowed = new Set(["t1:soar.corp.example"]);
     const t = await resolvePublicTarget("https://soar.corp.example/", {
       resolve: async () => ["10.1.1.1"],
       allowedPrivateHosts: allowed,
+      tenantId: "t1",
     });
     expect(t.address).toBe("10.1.1.1");
-    await blocked("https://other.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed });
+    // Another host, another tenant, or no tenant at all: refused.
+    await blocked("https://other.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed, tenantId: "t1" });
+    await blocked("https://soar.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed, tenantId: "t2" });
+    await blocked("https://soar.corp.example/", "address", { resolve: async () => ["10.1.1.1"], allowedPrivateHosts: allowed });
+  });
+});
+
+describe("guardOptionsFromEnv", () => {
+  it("reads <tenant>:<host> entries and ignores a wildcard tenant or an entry with no tenant", () => {
+    const o = guardOptionsFromEnv({
+      NOTIFY_ALLOWED_PRIVATE_HOSTS: "T1:SOAR.corp.example, *:everyone.example, bare.example, t2:, :nohost, t3:b.example",
+      NOTIFY_ALLOWED_PORTS: "9443, 70000, x",
+    });
+    expect(Array.from(o.allowedPrivateHosts!).sort()).toEqual(["t1:soar.corp.example", "t3:b.example"]);
+    expect(Array.from(o.extraPorts!)).toEqual([9443]);
   });
 });
