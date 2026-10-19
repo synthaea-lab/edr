@@ -227,4 +227,41 @@ so it cannot be used to tamper with auditd's own configuration), and the feature
 unblocks is squarely inside this ADR's stated gap (attribution + fleet visibility, not
 concealment). Until this lands on a host, `AvcReader::open()` failing is not a crash or a
 false alert (#780's own fix: the heartbeat is registered only once `open()` succeeds), it
-is simply this one source staying off, logged once.
+is simply this one source staying off, logged once. *Superseded for hosts with SELinux by
+the amendment below (#878, #879): there the failure is reported, and the heartbeat is
+registered from the start.*
+
+### Amendment 2026-10-19 (#878, #879): a missing or lost AVC reader is a degradation, not a silent gap
+
+**What changes.** #780 made a failed `AvcReader::open()` "this one source staying off,
+logged once". On a host where SELinux is active that is the blind spot this ADR is about,
+kept invisible, so it is now reported:
+
+- **SELinux active** means any of: selinuxfs's `enforce` file exists, `selinux` is in
+  `/sys/kernel/security/lsm`, or a `selinuxfs` mount is in `/proc/self/mountinfo` (any one:
+  a container or a mount namespace may hide the others). `/proc/filesystems` is not used,
+  because generic Debian and Ubuntu kernels list `selinuxfs` there with SELinux off.
+- **On such a host, eBPF primary:** a failed first open is logged and the source is reported
+  down in the health beacon as a silent `linux-avc` sensor, which the server counts as
+  `degraded` (no schema, transport or server change). The reader's worker starts with no
+  socket and opens it like a reopen: after 1 s, then 2, 4 ... up to 60 s, forever. Its
+  heartbeat is registered and pulsed while it waits, so the silence monitor does not read a
+  reader that is alive and retrying as tampering (T1562): the beacon is what says it is down.
+- **A socket error at run time** marks the source down and reopens it on the same schedule.
+  The source is marked up, and the delay reset, only after a `drain` has succeeded on the
+  reopened socket: a socket that reopens and fails again keeps backing off and stays down.
+- **On a host with no SELinux** nothing is reported: a failed open is an `info` log and no
+  worker starts; a reader that was working and fails is retried but never reported down.
+
+**Consequence, accepted.** A host with SELinux where `CAP_AUDIT_READ` is missing for good
+(an agent started outside the packaged unit, a container) stays `degraded` for the life of
+the agent, with one open attempt a minute (a single `socket()` call, logged on a
+powers-of-two schedule). There is no setting to silence this signal: the ways out are to
+grant `CAP_AUDIT_READ` (the packaged unit does), or SELinux being off. This reverses #780's
+"not a false alert" for SELinux hosts, on the reasoning that an unprivileged agent on a
+hardened, up-to-date host with no AVC stream is exactly the visibility gap this ADR names,
+and a degraded host on the fleet page is the proportionate way to say so.
+
+**What this does not change.** The capability decision of the #780 amendment
+(`CAP_AUDIT_READ`, read-only multicast, nothing that can change auditd's configuration),
+and the posture that the agent never fails to start over this source.
