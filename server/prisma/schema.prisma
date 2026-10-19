@@ -30,6 +30,8 @@ model Tenant {
   hunts               Hunt[]
   huntRuns            HuntRun[]
   decoyTokens         DecoyToken[]
+  notificationChannels NotificationChannel[]
+  notifications       Notification[]
 
   @@map("tenants")
 }
@@ -524,4 +526,59 @@ model Invitation {
 
   @@index([organizationId])
   @@map("auth_invitation")
+}
+
+// Operator notification channel (ADR-0036, #863): a signed webhook a tenant admin registered.
+// The signing secret is sealed (AES-256-GCM, channel id as AAD); it is never returned.
+model NotificationChannel {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  kind                String    @default("webhook")
+  url                 String
+  secretKeyId         String    @map("secret_key_id")
+  secretSealed        String    @map("secret_sealed")
+  events              String[]  // subscribed event names; empty means none
+  huntIds             String[]  @map("hunt_ids") // hunts whose hunt.new_matches this channel receives
+  status              String    @default("active") // active | paused | disabled
+  cooldownSeconds     Int       @default(1800) @map("cooldown_seconds")
+  lastStatusCode      Int?      @map("last_status_code")
+  lastError           String?   @map("last_error")
+  lastDeliveredAt     DateTime? @map("last_delivered_at")
+  createdBy           String    @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+
+  @@index([tenantId])
+  @@map("notification_channels")
+}
+
+// The outbox: one row per (channel, event occurrence). `id` is the event id the receiver
+// de-duplicates on. Delivery is at least once.
+model Notification {
+  id            String    @id @default(uuid())
+  tenantId      String    @map("tenant_id")
+  channelId     String    @map("channel_id")
+  event         String
+  subject       String // agent id or hunt id
+  seq           Int // per (channel, subject), so a receiver can check order
+  payload       Json
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lockedUntil   DateTime? @map("locked_until")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  failedAt      DateTime? @map("failed_at")
+  lastStatus    Int?      @map("last_status")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, subject, seq])
+  @@index([deliveredAt, failedAt, nextAttemptAt])
+  @@index([tenantId, createdAt])
+  @@map("notifications")
 }

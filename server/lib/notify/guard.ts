@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import type { Env } from "./secret";
 import { isIP } from "node:net";
 
 /**
@@ -148,7 +149,7 @@ async function systemResolve(host: string): Promise<string[]> {
 }
 
 /** Parses `NOTIFY_ALLOWED_PRIVATE_HOSTS` and `NOTIFY_ALLOWED_PORTS` (comma-separated). */
-export function guardOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): GuardOptions {
+export function guardOptionsFromEnv(env: Env = process.env): GuardOptions {
   const list = (v: string | undefined) =>
     (v ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
   return {

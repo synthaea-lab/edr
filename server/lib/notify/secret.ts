@@ -9,6 +9,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
  * comma-separated in the same form, for decryption only. An unset key disables channel
  * creation: `currentKey()` returns null and the caller refuses, it never stores in clear.
  */
+export type Env = Record<string, string | undefined>;
+
 export interface SealedSecret {
   keyId: string;
   /** base64 of `iv(12) || tag(16) || ciphertext`. */
@@ -25,11 +27,11 @@ function parseKey(entry: string): Key | null {
   return m ? { id: m[1], bytes: Buffer.from(m[2], "hex") } : null;
 }
 
-export function currentKey(env: NodeJS.ProcessEnv = process.env): Key | null {
+export function currentKey(env: Env = process.env): Key | null {
   return env.NOTIFY_SECRET_KEY ? parseKey(env.NOTIFY_SECRET_KEY) : null;
 }
 
-function keyById(id: string, env: NodeJS.ProcessEnv): Key | null {
+function keyById(id: string, env: Env): Key | null {
   const all = [env.NOTIFY_SECRET_KEY, ...(env.NOTIFY_SECRET_KEY_PREVIOUS ?? "").split(",")];
   for (const entry of all) {
     const k = entry ? parseKey(entry) : null;
@@ -41,7 +43,7 @@ function keyById(id: string, env: NodeJS.ProcessEnv): Key | null {
 export function sealSecret(
   secret: string,
   channelId: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: Env = process.env
 ): SealedSecret | null {
   const key = currentKey(env);
   if (!key) return null;
@@ -56,7 +58,7 @@ export function sealSecret(
 export function openSecret(
   value: SealedSecret,
   channelId: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: Env = process.env
 ): string | null {
   const key = keyById(value.keyId, env);
   if (!key) return null;
