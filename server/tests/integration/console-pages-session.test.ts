@@ -24,6 +24,7 @@ vi.mock("next/headers", () => ({ headers: async () => new Headers({ cookie: "a=b
 vi.mock("@/components/GenerateNarrativeButton", () => ({ GenerateNarrativeButton: () => null }));
 vi.mock("@/components/RunHuntButton", () => ({ RunHuntButton: () => null }));
 vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: () => undefined, refresh: () => undefined }),
   redirect: (to: string) => {
     throw new Error(`redirect ${to}`);
   },
@@ -123,6 +124,8 @@ describe("console pages read the session with the request's headers (real databa
       ["ops/page", {}],
       ["hunts/page", {}],
       ["hunts/[id]/page", { params: { id: "x" } }],
+      ["hunts/new/page", {}],
+      ["hunts/[id]/edit/page", { params: { id: "x" } }],
       ["cases/[id]/page", { params: { id: "x" } }],
     ] as const) {
       expect(await render(page, props), page).toContain("No organization selected");
@@ -179,7 +182,7 @@ describe("console pages read the session with the request's headers (real databa
       const html = await render("hunts/page");
 
       expect(html).toContain("Running");
-      expect(html).toMatch(/<td[^>]*>11<\/td>/);
+      expect(html).toMatch(/<td[^>]*>11<span[^>]*>from /);
       expect(html).toContain("Failed");
     });
 
@@ -212,6 +215,70 @@ describe("console pages read the session with the request's headers (real databa
       activeOrganizationId = mine.id;
 
       await expect(render("hunts/[id]/page", { params: { id: theirs.id } })).rejects.toThrow("not found");
+    });
+
+    it("shows the numbers of the newest run that has a result, and says which run they are from", async () => {
+      const tenant = await createTestTenant();
+      const h = await hunt(tenant.id, "two failures after a result");
+      await run(h, { startedAt: minutesAgo(180), finishedAt: minutesAgo(180), matchCount: 42, newMatchCount: 9 });
+      await run(h, { startedAt: minutesAgo(120), finishedAt: minutesAgo(120), error: "the search exceeded its time limit" });
+      await run(h, { startedAt: minutesAgo(60), finishedAt: minutesAgo(60), error: "the search exceeded its time limit" });
+      const current = await hunt(tenant.id, "current result");
+      await run(current, { startedAt: minutesAgo(5), finishedAt: minutesAgo(5), matchCount: 3, newMatchCount: 1 });
+      activeOrganizationId = tenant.id;
+
+      const html = await render("hunts/page");
+
+      expect(html).toMatch(/<td[^>]*>42<span[^>]*>from /);
+      expect(html).toMatch(/<td[^>]*>9<\/td>/);
+      expect(html).toMatch(/<td[^>]*>3<\/td>/);
+      expect(html.match(/from \d{4}-/g)).toHaveLength(1);
+    });
+
+    describe("the create and edit pages", () => {
+      it("renders an empty form on the new page", async () => {
+        const tenant = await createTestTenant();
+        activeOrganizationId = tenant.id;
+        const html = await render("hunts/new/page");
+        expect(html).toContain("hunt-name");
+        expect(html).not.toContain("no longer parses");
+      });
+
+      it("fills the edit form with the hunt's name and query", async () => {
+        const tenant = await createTestTenant();
+        const h = await hunt(tenant.id, "Office children", { description: "watching Office" });
+        activeOrganizationId = tenant.id;
+
+        const html = await render("hunts/[id]/edit/page", { params: { id: h.id } });
+
+        expect(html).toContain("Office children");
+        expect(html).toContain("watching Office");
+        expect(html).toContain("T1059");
+        expect(html).toContain('value="168"');
+        expect(html).not.toContain("no longer parses");
+      });
+
+      it("answers not found for another tenant's hunt on the edit page, without its contents", async () => {
+        const mine = await createTestTenant();
+        const other = await createTestTenant();
+        const theirs = await hunt(other.id, "secret hunt name");
+        activeOrganizationId = mine.id;
+
+        await expect(render("hunts/[id]/edit/page", { params: { id: theirs.id } })).rejects.toThrow("not found");
+      });
+
+      it("warns that saving replaces a stored query that no longer parses", async () => {
+        const tenant = await createTestTenant();
+        const h = await prisma.hunt.create({
+          data: { tenantId: tenant.id, ownerId: "analyst-1", name: "narrow hunt", query: { version: 99, lastHours: 2 } },
+        });
+        activeOrganizationId = tenant.id;
+
+        const html = await render("hunts/[id]/edit/page", { params: { id: h.id } });
+
+        expect(html).toContain("no longer parses");
+        expect(html).toContain("Saving replaces the stored query");
+      });
     });
 
     it("escapes what an analyst typed in a hunt's name, description and text", async () => {

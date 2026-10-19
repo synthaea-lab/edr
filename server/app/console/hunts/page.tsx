@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { describeQuery, describeSchedule, formatTime, runState, type RunState } from "@/lib/hunt-view";
+import { describeQuery, describeSchedule, formatTime, runState, STATE_LABEL, STATE_STYLE } from "@/lib/hunt-view";
+import { newestRunsByHunt } from "@/lib/hunt-runs";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -8,20 +9,6 @@ export const dynamic = "force-dynamic";
 
 /** A tenant may have 200 hunts (ADR-0025); one more row says the list was cut. */
 const LIST_LIMIT = 200;
-
-const STATE_STYLE: Record<RunState, string> = {
-  running: "bg-blue-100 text-blue-800 border-blue-200",
-  ok: "bg-green-100 text-green-800 border-green-200",
-  failed: "bg-red-100 text-red-800 border-red-200",
-  interrupted: "bg-orange-100 text-orange-800 border-orange-200",
-};
-
-const STATE_LABEL: Record<RunState, string> = {
-  running: "Running",
-  ok: "Done",
-  failed: "Failed",
-  interrupted: "Did not finish",
-};
 
 export default async function HuntsPage() {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -38,16 +25,20 @@ export default async function HuntsPage() {
     );
   }
 
-  // The newest two runs of each hunt: the newest says what is happening, and when it has not
-  // produced a result yet (running, never finished) the one before it still has numbers to show.
   const found = await prisma.hunt.findMany({
     where: { tenantId },
     orderBy: { createdAt: "desc" },
     take: LIST_LIMIT + 1,
-    include: { runs: { orderBy: { startedAt: "desc" }, take: 2 } },
   });
   const truncated = found.length > LIST_LIMIT;
   const hunts = found.slice(0, LIST_LIMIT);
+  // The newest run of each hunt says what is happening; the newest one with a result has the
+  // numbers (they may be older than the newest run, which is then running or failed).
+  const runs = await newestRunsByHunt(
+    prisma,
+    tenantId,
+    hunts.map((hunt) => hunt.id)
+  );
   const now = new Date();
 
   return (
@@ -88,10 +79,14 @@ export default async function HuntsPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {hunts.map((hunt) => {
-                const latest = hunt.runs[0];
+                const latest = runs.get(hunt.id)?.latest ?? null;
                 const state = latest ? runState(latest, now) : null;
-                // The numbers come from the newest run that produced a result.
-                const withResult = hunt.runs.find((run) => run.finishedAt && !run.error);
+                const withResult = runs.get(hunt.id)?.result ?? null;
+                // The numbers of an older run than the newest one say where they come from.
+                const stale = withResult && latest && withResult.startedAt.getTime() !== latest.startedAt.getTime();
+                const from = stale && withResult ? (
+                  <span className="block text-xs text-gray-500">from {formatTime(withResult.startedAt)}</span>
+                ) : null;
                 return (
                   <tr key={hunt.id}>
                     <td className="px-4 py-2 font-medium text-gray-900">
@@ -113,7 +108,10 @@ export default async function HuntsPage() {
                         <span className="text-gray-500">Never run</span>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-right text-gray-900">{withResult ? withResult.matchCount : "–"}</td>
+                    <td className="px-4 py-2 text-right text-gray-900">
+                      {withResult ? withResult.matchCount : "–"}
+                      {from}
+                    </td>
                     <td className="px-4 py-2 text-right text-gray-900">{withResult ? withResult.newMatchCount : "–"}</td>
                   </tr>
                 );

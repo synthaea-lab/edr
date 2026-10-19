@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_HUNT_FORM, huntFormToBody, huntToFormValues, saveResponseMessage } from "@/lib/hunt-form";
+import { EMPTY_HUNT_FORM, huntFormToBody, huntQueryIsValid, huntToFormValues, saveResponseMessage } from "@/lib/hunt-form";
 
 const valid = { ...EMPTY_HUNT_FORM, name: "  Powershell spikes " };
 
@@ -110,5 +110,14 @@ describe("saveResponseMessage", () => {
     );
     expect(saveResponseMessage(500, {})).toBe("Request failed with status 500");
     expect(saveResponseMessage(502, null)).toBe("Request failed with status 502");
+  });
+});
+
+describe("huntQueryIsValid", () => {
+  it("is false for a stored query that no longer parses, which the form would replace with the default", () => {
+    expect(huntQueryIsValid({ version: 1, lastHours: 24 })).toBe(true);
+    expect(huntQueryIsValid({ version: 99, lastHours: 24 })).toBe(false);
+    expect(huntQueryIsValid("not a query")).toBe(false);
+    expect(huntQueryIsValid(null)).toBe(false);
   });
 });

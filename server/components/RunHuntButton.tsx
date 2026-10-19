@@ -2,23 +2,28 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { runResponseMessage } from "@/lib/hunt-view";
+import { isSignInRedirect, runResponseMessage, runSummary, SESSION_EXPIRED_MESSAGE } from "@/lib/hunt-view";
 
 export function RunHuntButton({ huntId }: { huntId: string }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
 
   async function handleClick() {
     setPending(true);
     setMessage(null);
     try {
       const res = await fetch(`/api/hunts/${huntId}/run`, { method: "POST" });
+      if (isSignInRedirect(res)) {
+        setMessage({ text: SESSION_EXPIRED_MESSAGE, ok: false });
+        return;
+      }
       const body = await res.json().catch(() => ({}));
-      setMessage(runResponseMessage(res.status, body));
+      const problem = runResponseMessage(res.status, body);
+      setMessage(problem ? { text: problem, ok: false } : { text: runSummary(body), ok: true });
       router.refresh();
     } catch {
-      setMessage("The request did not reach the server");
+      setMessage({ text: "The request did not reach the server", ok: false });
     } finally {
       setPending(false);
     }
@@ -33,7 +38,9 @@ export function RunHuntButton({ huntId }: { huntId: string }) {
       >
         {pending ? "Running…" : "Run now"}
       </button>
-      {message && <p className="mt-2 text-sm text-red-600">{message}</p>}
+      {message && (
+        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-red-600"}`}>{message.text}</p>
+      )}
     </div>
   );
 }

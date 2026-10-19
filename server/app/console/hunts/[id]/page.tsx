@@ -6,28 +6,16 @@ import {
   describeSchedule,
   formatDuration,
   formatTime,
+  ownerLabel,
   runState,
-  type RunState,
+  STATE_LABEL,
+  STATE_STYLE,
 } from "@/lib/hunt-view";
 import { RunHuntButton } from "@/components/RunHuntButton";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
-
-const STATE_STYLE: Record<RunState, string> = {
-  running: "bg-blue-100 text-blue-800 border-blue-200",
-  ok: "bg-green-100 text-green-800 border-green-200",
-  failed: "bg-red-100 text-red-800 border-red-200",
-  interrupted: "bg-orange-100 text-orange-800 border-orange-200",
-};
-
-const STATE_LABEL: Record<RunState, string> = {
-  running: "Running",
-  ok: "Done",
-  failed: "Failed",
-  interrupted: "Did not finish",
-};
 
 export default async function HuntPage({ params }: { params: { id: string } }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -90,7 +78,7 @@ export default async function HuntPage({ params }: { params: { id: string } }) {
           <dd className="mt-1 text-gray-900">{describeSchedule(hunt.scheduleMinutes, hunt.active)}</dd>
           <dt className="mt-3 text-xs uppercase text-gray-500">Created</dt>
           <dd className="mt-1 text-gray-900">
-            {formatTime(hunt.createdAt)} by <span className="font-mono text-xs">{hunt.ownerId}</span>
+            {formatTime(hunt.createdAt)} by <span title={hunt.ownerId}>{ownerLabel(hunt.ownerId, session.user?.id)}</span>
           </dd>
         </div>
       </dl>

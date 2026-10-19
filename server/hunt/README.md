@@ -17,7 +17,13 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing.
 - **Console** (`/console/hunts`): the list, a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
-  into the API body with `lib/hunt-form.ts`, which runs the same validation as the API.
+  into the API body with `lib/hunt-form.ts`, which runs the same validation as the API. The
+  list reads each hunt's newest run and its newest run with a result in one query
+  (`lib/hunt-runs.ts`, two lateral index lookups per hunt); numbers from an older run than the
+  newest say which run they come from. The edit page warns when the stored query no longer
+  parses, because saving replaces it with the form's. A "Running" run turns "Did not finish"
+  after three transaction timeouts plus a margin (`RUNNING_GRACE_MS`). Both client buttons treat
+  a redirect to the sign-in page as an expired session, not as success.
 - The query is **not SQL**: `lastHours`, `techniques`, `severities`, `agentIds`, `text`.
 
 ## Not built yet

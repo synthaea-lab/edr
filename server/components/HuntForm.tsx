@@ -9,13 +9,25 @@ import {
   saveResponseMessage,
   type HuntFormValues,
 } from "@/lib/hunt-form";
+import { isSignInRedirect, SESSION_EXPIRED_MESSAGE } from "@/lib/hunt-view";
 
 const INPUT = "mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-900";
 const LABEL = "block text-sm font-medium text-gray-700";
 const HINT = "mt-1 text-xs text-gray-500";
 
-/** Creates a hunt (`huntId` absent) or changes one (`huntId` set). */
-export function HuntForm({ huntId, initial }: { huntId?: string; initial?: HuntFormValues }) {
+/**
+ * Creates a hunt (`huntId` absent) or changes one (`huntId` set). `queryInvalid` is a stored query
+ * that no longer parses: the form then shows the default query, and saving replaces the stored one.
+ */
+export function HuntForm({
+  huntId,
+  initial,
+  queryInvalid = false,
+}: {
+  huntId?: string;
+  initial?: HuntFormValues;
+  queryInvalid?: boolean;
+}) {
   const router = useRouter();
   const [values, setValues] = useState<HuntFormValues>(initial ?? EMPTY_HUNT_FORM);
   const [pending, setPending] = useState(false);
@@ -40,6 +52,10 @@ export function HuntForm({ huntId, initial }: { huntId?: string; initial?: HuntF
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(result.body),
       });
+      if (isSignInRedirect(res)) {
+        setError(SESSION_EXPIRED_MESSAGE);
+        return;
+      }
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(saveResponseMessage(res.status, body));
@@ -57,6 +73,12 @@ export function HuntForm({ huntId, initial }: { huntId?: string; initial?: HuntF
 
   return (
     <form onSubmit={handleSubmit} className="max-w-2xl space-y-5">
+      {queryInvalid && (
+        <p className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800" role="alert">
+          The stored query of this hunt no longer parses, so the form shows the default query (last 7 days,
+          no filter). Saving replaces the stored query: set the one you want before you save.
+        </p>
+      )}
       <div>
         <label className={LABEL} htmlFor="hunt-name">Name</label>
         <input id="hunt-name" className={INPUT} value={values.name} maxLength={120} required

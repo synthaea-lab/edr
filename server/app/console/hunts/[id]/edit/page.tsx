@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { huntToFormValues } from "@/lib/hunt-form";
+import { huntQueryIsValid, huntToFormValues } from "@/lib/hunt-form";
 import { HuntForm } from "@/components/HuntForm";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -32,7 +32,7 @@ export default async function EditHuntPage({ params }: { params: { id: string } 
         ← {hunt.name}
       </a>
       <h2 className="mt-2 mb-6 text-2xl font-bold text-gray-900">Edit hunt</h2>
-      <HuntForm huntId={hunt.id} initial={huntToFormValues(hunt)} />
+      <HuntForm huntId={hunt.id} initial={huntToFormValues(hunt)} queryInvalid={!huntQueryIsValid(hunt.query)} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { HuntValidationError, parseHuntQuery } from "@/lib/hunt";
+import { HUNT_TRANSACTION_TIMEOUT_MS, HuntValidationError, parseHuntQuery } from "@/lib/hunt";
 
 /**
  * What the console shows of a saved hunt (#61). Pure functions over what the database
@@ -6,11 +6,13 @@ import { HuntValidationError, parseHuntQuery } from "@/lib/hunt";
  */
 
 /**
- * A run whose row says it has not finished is "running" for this long after it started
- * (the search itself is capped well below it), and "interrupted" after: the server that
- * started it died, and nothing will finish it.
+ * A run whose row says it has not finished is "running" for this long after it started,
+ * and "interrupted" after: the server that started it died, and nothing will finish it.
+ * `startedAt` is taken before the lock transaction (it waits up to its `maxWait`, then runs
+ * within its timeout) and the search has its own transaction: three transaction timeouts in
+ * the worst case, plus a margin, derived from the constants so that changing one moves this.
  */
-export const RUNNING_GRACE_MS = 30_000;
+export const RUNNING_GRACE_MS = 3 * HUNT_TRANSACTION_TIMEOUT_MS + 5_000;
 
 /** The query in one line: "last 7 days · T1059, T1003 · high, critical · 2 hosts · text “mimikatz”". */
 export function describeQuery(query: unknown): string {
@@ -40,6 +42,20 @@ export function describeSchedule(scheduleMinutes: number | null, active: boolean
 }
 
 export type RunState = "running" | "ok" | "failed" | "interrupted";
+
+export const STATE_STYLE: Record<RunState, string> = {
+  running: "bg-blue-100 text-blue-800 border-blue-200",
+  ok: "bg-green-100 text-green-800 border-green-200",
+  failed: "bg-red-100 text-red-800 border-red-200",
+  interrupted: "bg-orange-100 text-orange-800 border-orange-200",
+};
+
+export const STATE_LABEL: Record<RunState, string> = {
+  running: "Running",
+  ok: "Done",
+  failed: "Failed",
+  interrupted: "Did not finish",
+};
 
 export type RunLike = { startedAt: Date; finishedAt: Date | null; error: string | null };
 
@@ -75,4 +91,36 @@ export function runResponseMessage(status: number, body: unknown): string | null
   }
   if (typeof record.error === "string" && record.error) return record.error;
   return `Request failed with status ${status}`;
+}
+
+/** What the "Run now" button tells the user when the run completed: "Done: 12 matches, 3 new." */
+export function runSummary(body: unknown): string {
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const run = record.run as { matchCount?: unknown; newMatchCount?: unknown } | undefined;
+  if (typeof run?.matchCount === "number" && typeof run?.newMatchCount === "number") {
+    const matches = `${run.matchCount} match${run.matchCount === 1 ? "" : "es"}`;
+    return `Done: ${matches}, ${run.newMatchCount} new.`;
+  }
+  return "Done.";
+}
+
+/**
+ * Whether a `fetch` answer is the sign-in page and not the API's: an expired session makes the
+ * middleware redirect, `fetch` follows it, and the page comes back with status 200, which a
+ * caller that only reads `res.ok` takes for success.
+ */
+export function isSignInRedirect(res: { redirected: boolean; url: string }): boolean {
+  if (!res.redirected) return false;
+  try {
+    return new URL(res.url, "http://localhost").pathname.startsWith("/login");
+  } catch {
+    return false;
+  }
+}
+
+export const SESSION_EXPIRED_MESSAGE = "Your session has expired. Sign in again, then retry.";
+
+/** "you" for the signed-in user's own hunt, otherwise "another member": the id stays in a tooltip. */
+export function ownerLabel(ownerId: string, userId: string | null | undefined): string {
+  return userId && ownerId === userId ? "you" : "another member";
 }

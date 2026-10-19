@@ -85,7 +85,8 @@ export function huntFormToBody(values: HuntFormValues): HuntFormResult {
 
 /**
  * A stored hunt as form fields. A stored query that no longer parses (ADR-0025 point 4)
- * opens as an empty query, so saving the form repairs the hunt.
+ * opens as the default query (last 7 days, no filter), so saving the form repairs the hunt;
+ * [`huntQueryIsValid`] tells the page to warn about it.
  */
 export function huntToFormValues(hunt: {
   name: string;
@@ -112,6 +113,20 @@ export function huntToFormValues(hunt: {
     if (!(error instanceof HuntValidationError)) throw error;
   }
   return values;
+}
+
+/**
+ * Whether a stored query still parses. When it does not, [`huntToFormValues`] opens the form on
+ * the default query, and saving would replace the stored one: the edit page says so.
+ */
+export function huntQueryIsValid(query: unknown): boolean {
+  try {
+    parseHuntQuery(query);
+    return true;
+  } catch (error) {
+    if (error instanceof HuntValidationError) return false;
+    throw error;
+  }
 }
 
 /** What the form shows of the answer of the API: the API's own message, or the status. */

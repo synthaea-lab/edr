@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   RUNNING_GRACE_MS,
+  SESSION_EXPIRED_MESSAGE,
   describeQuery,
   describeSchedule,
   formatDuration,
   formatTime,
+  isSignInRedirect,
+  ownerLabel,
   runResponseMessage,
   runState,
+  runSummary,
 } from "@/lib/hunt-view";
+import { HUNT_TRANSACTION_TIMEOUT_MS } from "@/lib/hunt";
 
 describe("describeQuery", () => {
   it("says the window in days when it is a whole number of days, in hours otherwise", () => {
@@ -102,5 +107,39 @@ describe("runResponseMessage", () => {
     expect(runResponseMessage(500, {})).toBe("Request failed with status 500");
     expect(runResponseMessage(404, null)).toBe("Request failed with status 404");
     expect(runResponseMessage(502, "<html>bad gateway</html>")).toBe("Request failed with status 502");
+  });
+});
+
+describe("RUNNING_GRACE_MS", () => {
+  it("covers the worst case of a run: the lock wait, the lock transaction and the search transaction", () => {
+    // `startedAt` is taken before the lock transaction (maxWait + timeout), then the search has its own.
+    expect(RUNNING_GRACE_MS).toBeGreaterThan(3 * HUNT_TRANSACTION_TIMEOUT_MS);
+  });
+});
+
+describe("runSummary", () => {
+  it("says what a run found, and just \"Done.\" when the answer has no counts", () => {
+    expect(runSummary({ run: { matchCount: 12, newMatchCount: 3 } })).toBe("Done: 12 matches, 3 new.");
+    expect(runSummary({ run: { matchCount: 1, newMatchCount: 0 } })).toBe("Done: 1 match, 0 new.");
+    expect(runSummary({})).toBe("Done.");
+    expect(runSummary(null)).toBe("Done.");
+  });
+});
+
+describe("isSignInRedirect", () => {
+  it("is true for an answer that came from the sign-in page after a redirect, and only then", () => {
+    expect(isSignInRedirect({ redirected: true, url: "https://edr.example/login?next=/console/hunts" })).toBe(true);
+    expect(isSignInRedirect({ redirected: true, url: "https://edr.example/api/hunts" })).toBe(false);
+    expect(isSignInRedirect({ redirected: false, url: "https://edr.example/login" })).toBe(false);
+    expect(isSignInRedirect({ redirected: true, url: "" })).toBe(false);
+    expect(SESSION_EXPIRED_MESSAGE).toMatch(/session has expired/);
+  });
+});
+
+describe("ownerLabel", () => {
+  it("says \"you\" for the signed-in user's own hunt and \"another member\" otherwise", () => {
+    expect(ownerLabel("u1", "u1")).toBe("you");
+    expect(ownerLabel("u1", "u2")).toBe("another member");
+    expect(ownerLabel("u1", null)).toBe("another member");
   });
 });
