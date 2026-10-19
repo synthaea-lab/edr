@@ -337,6 +337,67 @@ fn a_recycled_pid_does_not_inherit_the_service_provenance() {
     assert!(!engine.is_service_main_process(805, Some(2)));
 }
 
+#[test]
+fn a_reexec_to_an_untrusted_image_clears_the_service_main_entry() {
+    // Review of #755 (Sollykhan, 2026-10-19): `service_mains` was insert-only, so a
+    // service main later compromised and `exec`'d into something else (same pid,
+    // same generation — this is not a fork) kept the kill-gate refusal on its new
+    // image forever. A pid stays a service main only as of its most recent exec.
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(stamped(
+        exec_with_meta(meta_full(806, 1, "crond", 0), "/usr/sbin/crond"),
+        1,
+    ));
+    assert!(engine.is_service_main_process(806, Some(1)));
+
+    engine.on_event(stamped(
+        exec_with_meta(meta_full(806, 1, "crond", 1), "/tmp/payload"),
+        1,
+    ));
+    assert!(
+        !engine.is_service_main_process(806, Some(1)),
+        "an exec to an untrusted image on the same pid/generation must drop the \
+         service-main entry, not keep protecting the new image"
+    );
+}
+
+#[test]
+fn a_shell_or_interpreter_started_by_init_is_not_a_service_main_process() {
+    // Review of #755 (Sollykhan, 2026-10-19): a systemd unit's `ExecStart` can be a
+    // shell or interpreter (`ExecStart=/usr/bin/python3 /var/tmp/x.py`) just as
+    // easily as a real daemon's own binary. The interpreter, not the script, is
+    // what execs with ppid 1 — without this exclusion every payload run that way
+    // would be permanently immune to the BAYES kill gate.
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(exec_with_meta(
+        meta_full(807, 1, "python3", 0),
+        "/usr/bin/python3",
+    ));
+    engine.on_event(exec_with_meta(
+        meta_full(808, 1, "bash", 0),
+        "/usr/bin/bash",
+    ));
+    assert!(!engine.is_service_main_process(807, None));
+    assert!(!engine.is_service_main_process(808, None));
+}
+
+#[test]
+fn opt_and_usr_local_are_not_service_main_paths() {
+    // Review of #755 (Sollykhan, 2026-10-19): /opt/ and /usr/local/ host
+    // third-party and admin-installed software as easily as a root attacker's own
+    // unit — being under either is not evidence of being the package-owned
+    // service the broader name-exclusion check was designed to rule out a
+    // masquerade for.
+    let mut engine = CorrelationEngine::new();
+    engine.on_event(exec_with_meta(
+        meta_full(809, 1, "kworkerd", 0),
+        "/usr/local/bin/kworkerd",
+    ));
+    engine.on_event(exec_with_meta(meta_full(810, 1, "x", 0), "/opt/x/x"));
+    assert!(!engine.is_service_main_process(809, None));
+    assert!(!engine.is_service_main_process(810, None));
+}
+
 // ── BAYES_NAME_EXCLUSIONS (issue #212) ──────────────────────────────────────
 
 #[test]

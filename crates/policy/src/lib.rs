@@ -91,6 +91,82 @@ pub fn name_exclusion_applies(image_path: Option<&str>) -> bool {
     }
 }
 
+/// Whether `path` plausibly belongs to a system service's own binary — stricter
+/// than [`is_trusted_system_path`], and for a different question. That check asks
+/// "is this a legitimate place for a *named* process to live" (ruling out a
+/// masquerade); this one asks "should a process started here, by init, ever be
+/// exempted from a correlator kill on Bayesian evidence alone" (#652, ADR-0028).
+/// Two gaps a masquerade check doesn't need to care about matter a lot here
+/// (review of #755, Sollykhan 2026-10-19, each reproduced with a probe at the
+/// time):
+/// - `/opt/` and `/usr/local/` host third-party and admin-installed software as
+///   easily as any attacker-created systemd unit's `ExecStart` can — being
+///   under one is not evidence of being *the* service a package manager put
+///   there.
+/// - A unit that runs a shell or interpreter (`ExecStart=/usr/bin/python3
+///   /var/tmp/x.py`) has that interpreter, not the script, as its own trusted
+///   image — so without this exclusion, every payload run through a system
+///   interpreter would be permanently immune to the BAYES kill gate. Same
+///   list `config::load::is_interpreter` rejects for `allow_exe` (ADR-0029);
+///   duplicated rather than shared because `correlator` (a detection crate)
+///   cannot depend on `config` (a leaf crate — the dependency only runs the
+///   other way, see `tools/check-deps.py`). Keep the two lists in sync by
+///   hand if either changes.
+#[must_use]
+pub fn service_main_path_is_trusted(path: &str) -> bool {
+    if !is_trusted_system_path(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    // `is_trusted_system_path` is a raw `starts_with`, and the eBPF sensor reports
+    // `bprm->filename` as given — `/usr/../tmp/payload` passes it (non-blocking
+    // review finding; reaching `ppid == 1` still needs a unit, so this mostly
+    // overlaps the shell/interpreter and /opt//usr/local gaps above, but costs one
+    // line to close outright rather than rely on those alone).
+    if lower.split(['/', '\\']).any(|component| component == "..") {
+        return false;
+    }
+    if lower.starts_with("/usr/local/") || lower.starts_with("/opt/") {
+        return false;
+    }
+    const EXACT: &[&str] = &[
+        "sh",
+        "bash",
+        "dash",
+        "ash",
+        "zsh",
+        "ksh",
+        "csh",
+        "tcsh",
+        "fish",
+        "busybox",
+        "env",
+        "xargs",
+        "find",
+        "awk",
+        "gawk",
+        "mawk",
+        "sed",
+        "lua",
+        "luajit",
+        "tclsh",
+        "wish",
+        "expect",
+        "gdb",
+        "sudo",
+        "su",
+        "nsenter",
+        "chroot",
+        "pwsh",
+        "powershell",
+    ];
+    const FAMILIES: &[&str] = &[
+        "python", "perl", "ruby", "node", "php", "java", "bun", "deno",
+    ];
+    let name = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
+    !(EXACT.contains(&name) || FAMILIES.iter().any(|family| name.starts_with(family)))
+}
+
 /// The port of the address-selection probe `sshd-session`/`sshd-auth` run on every
 /// login: a `connect()` to the unspecified address (`0.0.0.0`, `::`) on this port
 /// reaches no remote peer (#525).

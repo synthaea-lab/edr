@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Runs INSIDE the fedora41 VM (repo in /synthaea, build in /var/synthaea/target); see
 # lab/vagrant-hyperv/README.md to bring the VM up and put the checkout in /synthaea.
-# Validated 2026-10-07 on Fedora 41, kernel 6.17.7, SELinux Enforcing: 8 pass, 0 fail.
+# Last run 2026-10-16 on Fedora 43, kernel 7.2.10, SELinux Enforcing: 7 pass, 1 fail
+# (scenario A's BAYES crossing didn't happen inside this run's timing window on that
+# VM — not a regression, A only exercises the generic, pre-existing non-service kill
+# path; see PR #755's comments). The 2026-10-07 Fedora 41 run (8/8) predates the #82
+# rebase that this header used to claim.
 # #652: the kill gate refuses a system service's main process (image under a trusted
 # path, ppid 1), still kills the implant.
 #   A  enforce, response.sh implant (bash child of a shell)      -> SIGKILLed, RESPONSE-KILL "killed"

@@ -262,12 +262,23 @@ impl CorrelationEngine {
             }
         }
 
-        if let Event::Exec(exec) = &event
-            && ppid == 1
-            && !exec.image_path.is_empty()
-            && policy::name_exclusion_applies(Some(exec.image_path.as_str()))
-        {
-            self.service_mains.insert(pid, generation);
+        if let Event::Exec(exec) = &event {
+            if ppid == 1
+                && !exec.image_path.is_empty()
+                && policy::service_main_path_is_trusted(exec.image_path.as_str())
+            {
+                self.service_mains.insert(pid, generation);
+            } else {
+                // Re-exec clears a stale entry (#755 review, Sollykhan 2026-10-19):
+                // `service_mains` was insert-only, so a pid once recorded as a
+                // service main (e.g. NetworkManager) kept that status on `self`
+                // forever, even after an `Exec` to an image that no longer
+                // qualifies — a compromised daemon's `execve("/tmp/x")` stayed
+                // immune to the BAYES kill on its new image. Any exec that does
+                // not (re-)qualify drops the pid's entry; a no-op when it was
+                // never a service main (`BoundedMap::remove` on an absent key).
+                self.service_mains.remove(&pid);
+            }
         }
 
         self.bus.push(event);

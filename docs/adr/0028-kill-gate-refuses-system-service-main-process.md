@@ -30,9 +30,17 @@ the implant from `NetworkManager` is provenance, not the amount of evidence.
 
 1. **A system service's main process is never terminated on a `BAYES` crossing.** The
    correlator records, at the `ExecEvent`, that a pid is a *service main process*: its image
-   is under a trusted system path (`policy::name_exclusion_applies`, with a non-empty path)
-   **and** its parent is init (`ppid == 1`). The sink reads that verdict for the pid and
-   generation (`CorrelationEngine::is_service_main_process`) when the gate fires.
+   is under a trusted system path, outside `/opt/` and `/usr/local/`, not a shell or
+   interpreter, and has no `..` path component (`policy::service_main_path_is_trusted` —
+   stricter than the name-exclusion masquerade check `policy::name_exclusion_applies`
+   reviewed PRs reuse, see its own doc comment for why: review of #755, Sollykhan
+   2026-10-19, reproduced that `/usr/bin/python3`, `/usr/local/bin/kworkerd` and `/opt/x/x`
+   all passed the broader check, each making every payload run under them permanently
+   immune to the kill gate) **and** its parent is init (`ppid == 1`). The sink reads that
+   verdict for the pid and generation (`CorrelationEngine::is_service_main_process`) when
+   the gate fires. An exec that stops qualifying clears any prior entry for that pid (same
+   review): `service_mains` used to be insert-only, so a service main that was later
+   compromised and `exec`'d something else kept the refusal on its new image forever.
 2. **The refusal is a `KillOutcome::Refused`**, audited as `RESPONSE-KILL` like the existing
    refusals, in observe mode too (the audit line says "refused", not "would have been
    killed"). The `BAYES` alert and the `RESPONSE-ESCALATE` it feeds are unchanged: the
@@ -65,8 +73,17 @@ the implant from `NetworkManager` is provenance, not the amount of evidence.
 - **Limits.** Only services started directly by pid 1 qualify. User-session services
   (`systemd --user`) and container processes (parent is a container shim) are outside the
   rule and stay killable; whether they should be protected is open. The pid-1 test assumes
-  the sensor reports the real parent, as the Linux eBPF sensor does.
-- Not validated on a real Fedora kernel yet: the in-process tests reproduce the crossing,
-  not the host. A lab rerun of `lab/scenarios/response.sh` with `EXPECT=enforce` (implant
-  killed) plus an observe-mode run on Fedora (NetworkManager refused) is the check.
+  the sensor reports the real parent, as the Linux eBPF sensor does. Non-systemd init
+  (OpenRC's `start-stop-daemon`, forking daemons in general) never gives their main process
+  `ppid == 1`, so they are not protected either — the safe direction, same #652 false-kill
+  risk just stays open there. A subreaper or a pid namespace also breaks the `ppid == 1`
+  assumption; not evaluated.
+- `lab/validate-652.sh` ran on Fedora 41 (2026-10-07, 8/8, before the #82 rebase) and again
+  on Fedora 43 (2026-10-16, 7/8: scenario A's `BAYES` crossing missed this run's timing
+  window on that VM, unrelated to this guard). Scenarios B and C — the guard itself, in
+  enforce and observe mode — passed both times.
+- The refusal is visible only locally (the `RESPONSE-KILL` audit line in `alerts.ndjson`);
+  nothing distinguishes a withheld kill from an ordinary refusal over the transport, so the
+  control plane cannot yet tell a fleet operator "a service main was spared" versus any
+  other reason a kill didn't happen.
 - The ADR changes the kill contract, so it needs the correlator calibration owner's review.
