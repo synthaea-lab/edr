@@ -3609,11 +3609,15 @@ const SINGLE_ID_OFFSET: usize = 12;
 /// its call sites under a forced `-O2` build (abuild's default.conf was
 /// overriding Cargo's resolved opt-level for the Alpine package — see
 /// packaging/linux/alpine/APKBUILD; the real fix was unsetting that
-/// override, not this). Kept anyway as cheap hardening: one read instead of
-/// three is less verifier state regardless of optimization level, and
-/// `raw_sys_enter` (ebpf/src/raw.rs) is one shared verifier unit across
-/// every `sys_enter_*` branch — a rejection anywhere in it loses all syscall
-/// telemetry, not just this probe.
+/// override, not this). Kept anyway as cheap hardening, same spirit as
+/// `emit_mount_event`'s own note: `raw_sys_enter` (ebpf/src/raw.rs) is one
+/// shared verifier unit across every `sys_enter_*` branch, so a rejection
+/// anywhere in it loses all syscall telemetry, not just this probe. The
+/// function is also `#[inline(always)]` now — confirmed live that this
+/// alone (still with the original three reads) was already enough to pass
+/// the verifier: the real mechanism is the BPF-to-BPF call/return, not the
+/// read count. Both are kept: one less thing to re-diagnose if a future
+/// change makes LLVM decide not to inline it anyway.
 #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
 const RES_ID_REAL_OFFSET: usize = 16;
 /// i686: inferred, not independently verified.
@@ -3624,6 +3628,11 @@ const RES_ID_REAL_OFFSET: usize = 12;
 /// fields into `IDENTITY_CHANGE_SCRATCH`, then emits. Mirrors
 /// `emit_kernel_module_event`'s shape (#264) — one assembly helper for a
 /// family of syscalls that share almost all of their event fields.
+///
+/// Always inlined, same reasoning as `emit_mount_event`: a real BPF-to-BPF
+/// call hands the verifier a return/argument path it can't always prove,
+/// and this has several call sites (one per probe below).
+#[inline(always)]
 fn emit_identity_change_event(
     ctx: &TracePointContext,
     kind: u8,
@@ -3671,6 +3680,11 @@ fn emit_identity_change_event(
 /// Reads a single 32-bit `uid_t`/`gid_t` syscall argument at `SINGLE_ID_OFFSET`,
 /// shared by `setuid`/`setgid`/`setfsuid`/`setfsgid` — the four probes below
 /// differ only in which `IDENTITY_KIND_*` they pass through.
+///
+/// Always inlined, same reasoning as `emit_mount_event`: four call sites,
+/// and a real BPF-to-BPF call here would hand the verifier a return path
+/// it can't always prove.
+#[inline(always)]
 fn read_single_id(ctx: &TracePointContext) -> Result<u32, u32> {
     #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
     let id: u64 = unsafe { ctx.read_at(SINGLE_ID_OFFSET).map_err(|_| 1u32)? };
@@ -3739,6 +3753,7 @@ pub fn sys_enter_setresgid(ctx: TracePointContext) -> u32 {
     }
 }
 
+#[inline(always)]
 fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> {
     // One `bpf_probe_read_kernel` over all three contiguous arguments, not
     // three separate reads with three early returns — see the
