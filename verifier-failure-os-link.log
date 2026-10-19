@@ -1,0 +1,1585 @@
+[watchdog] loaded configuration (schema_version=1, log.dir=/var/log/synthaea)
+[watchdog] supervising /var/lib/synthaea/current/agent → alerts in /var/log/synthaea/alerts.ndjson
+[watchdog] Ctrl+C / SIGTERM stops the watchdog (the agent will be stopped too)
+[watchdog] starting the agent...
+[2m2026-10-17T11:17:40.658674Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:17:40.661935Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:17:40.662033Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:17:40.944442Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:17:40.950921Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:17:40.985475Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:17:41.411700Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:17:41.494015Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m128
+[2m2026-10-17T11:17:41.495723Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:17:44.188276Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5864 parent=5653 inserted=1
+[2m2026-10-17T11:17:44.194052Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5865 parent=5864 inserted=1
+[2m2026-10-17T11:17:44.200100Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5866 parent=5865 inserted=1
+[2m2026-10-17T11:17:44.201432Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5867 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.206073Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5868 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.206101Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5869 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.207808Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5870 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.208614Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5871 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.210730Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5872 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.212584Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5873 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.214102Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5874 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.216973Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5875 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.219165Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5876 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.221893Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5877 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.224081Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5878 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.231075Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5879 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.238593Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5880 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.240804Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5881 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.242859Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5882 parent=5866 inserted=1
+[2m2026-10-17T11:17:44.250276Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5883 parent=5653 inserted=1
+[2m2026-10-17T11:17:44.255049Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5884 parent=5653 inserted=1
+[2m2026-10-17T11:17:44.255818Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5885 parent=5653 inserted=1
+[2m2026-10-17T11:17:49.499049Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d26f020000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d3279cc13c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d3258fa000     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2367428 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1). Restarting in 5s...
+[watchdog] starting the agent...
+[2m2026-10-17T11:18:00.799383Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:18:00.801759Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:18:00.802395Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:18:02.335077Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:18:02.335919Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:18:02.345826Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:18:02.685608Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:18:02.846051Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m124
+[2m2026-10-17T11:18:02.847032Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:18:04.068597Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5918 parent=2510 inserted=1
+[2m2026-10-17T11:18:04.079646Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5919 parent=5918 inserted=1
+[2m2026-10-17T11:18:04.157753Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5920 parent=5918 inserted=1
+[2m2026-10-17T11:18:04.171812Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5921 parent=5920 inserted=1
+[2m2026-10-17T11:18:04.176713Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5922 parent=5921 inserted=1
+[2m2026-10-17T11:18:04.182127Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5923 parent=5922 inserted=1
+[2m2026-10-17T11:18:04.186925Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5924 parent=5921 inserted=1
+[2m2026-10-17T11:18:04.190952Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5925 parent=5924 inserted=1
+[2m2026-10-17T11:18:04.197072Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5926 parent=5921 inserted=1
+[2m2026-10-17T11:18:04.197950Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5927 parent=5921 inserted=1
+[2m2026-10-17T11:18:04.200276Z[0m [32m INFO[0m [2msensor_linux_ebpf::raw[0m[2m:[0m sensor-linux-ebpf: fork child=5928 parent=5921 inserted=1
+[2m2026-10-17T11:18:10.254027Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d307444000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d26eae713c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d325915e00     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2132686 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1). Restarting in 5s...
+[watchdog] starting the agent...
+[2m2026-10-17T11:18:21.827563Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:18:21.831562Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:18:21.831631Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:18:21.959277Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:18:21.961005Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:18:21.968008Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:18:22.288228Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:18:22.380850Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m124
+[2m2026-10-17T11:18:22.381786Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:18:30.328808Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d31f058000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d31b93613c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d26f3c2a00     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2373619 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1). Restarting in 5s...
+[watchdog] starting the agent...
+[2m2026-10-17T11:18:38.430603Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:18:38.439122Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:18:38.439240Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:18:38.577656Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:18:38.583283Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:18:38.592124Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:18:38.943542Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:18:39.039995Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m124
+[2m2026-10-17T11:18:39.040891Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:18:47.103475Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d324a98000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d357f1c13c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d3258f7e00     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2422661 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1) after 9.0s — fast crash, backing off 5s...
+[watchdog] starting the agent...
+[2m2026-10-17T11:18:52.591839Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:18:52.597578Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:18:52.598326Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:18:53.081115Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:18:53.088421Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:18:53.089962Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:18:53.440154Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:18:53.529881Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m124
+[2m2026-10-17T11:18:53.530576Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:19:01.142967Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d317798000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d3259b613c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d32590aa00     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2298335 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1) after 9.6s — fast crash, backing off 10s...
+[watchdog] starting the agent...
+[2m2026-10-17T11:19:12.425915Z[0m [33m WARN[0m [2magent::sink[0m[2m:[0m ML correlation scorer unavailable — agent works without ML [3mmodel_dir[0m[2m=[0m/var/lib/synthaea/ml/registry/correlation-iforest-linux/0.1.0 [3merror[0m[2m=[0mNo such file or directory (os error 2)
+Synthaea agent — UPLOAD DISABLED: not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found
+[1;31m[ALERT] UPLOAD-DISABLED — not uploading to https://localhost:9999: transport client: configuration error: failed to parse cert: No pem encoded cert found[0m
+Synthaea agent — detection active (Ctrl-C to stop)
+alerts: /var/log/synthaea/alerts.ndjson · events: off
+[2m2026-10-17T11:19:12.434067Z[0m [32m INFO[0m [2magent::ipc_handler[0m[2m:[0m IPC: serving the local control channel [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock
+[2m2026-10-17T11:19:12.435822Z[0m [33m WARN[0m [2magent::ipc_handler[0m[2m:[0m IPC: server stopped — `cli` will not reach this agent, detection continues [3mendpoint[0m[2m=[0m/var/run/synthaea-agent.sock [3merror[0m[2m=[0mfailed to bind IPC listener at `/var/run/synthaea-agent.sock`: Permission denied (os error 13)
+[2m2026-10-17T11:19:12.538717Z[0m [32m INFO[0m [2magent::commands::linux[0m[2m:[0m Using eBPF sensor (primary)
+[2m2026-10-17T11:19:12.539218Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon started [3minterval[0m[2m=[0m30s
+[2m2026-10-17T11:19:12.545964Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m journal tail: journalctl unavailable, skipping [3merror[0m[2m=[0mfailed to spawn or read from journalctl: No such file or directory (os error 2)
+[2m2026-10-17T11:19:12.893509Z[0m [33m WARN[0m [2magent::commands::linux[0m[2m:[0m lsm: file_open BPF-LSM hook did not attach [3merror[0m[2m=[0mfailed to attach LSM hook `file_open`: `bpf_raw_tracepoint_open` failed
+[2m2026-10-17T11:19:12.989179Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed processes into PROC_LINEAGE [3mprimed[0m[2m=[0m124
+[2m2026-10-17T11:19:12.990410Z[0m [32m INFO[0m [2msensor_linux::sensor[0m[2m:[0m sensor-linux: primed process images for parent_image_path [3mprimed[0m[2m=[0m2
+[2m2026-10-17T11:19:20.510869Z[0m [32m INFO[0m [2magent::health[0m[2m:[0m health beacon stopped
+Error: sensor failed: kernel verifier rejected `raw_sys_enter`: the BPF_PROG_LOAD syscall returned Permission denied (os error 13). Verifier output: 0: R1=ctx() R10=fp0
+; #[raw_tracepoint(tracepoint = "sys_enter")] @ raw.rs:210
+0: (bf) r6 = r1                       ; R1=ctx() R6=ctx()
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+1: (79) r7 = *(u64 *)(r6 +8)          ; R6=ctx() R7=scalar()
+2: (b7) r1 = 0                        ; R1=0
+; if syscall_id < 0 || syscall_id >= MAX_SYSCALL_ID as i64 { @ raw.rs:213
+3: (6d) if r1 s> r7 goto pc+1420      ; R1=0 R7=scalar(smin=0,umax=0x7fffffffffffffff,var_off=(0x0; 0x7fffffffffffffff))
+4: (65) if r7 s> 0x3ff goto pc+1419   ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+5: (63) *(u32 *)(r10 -152) = r7       ; R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R10=fp0 fp-152=????scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+6: (bf) r2 = r10                      ; R2=fp0 R10=fp0
+7: (07) r2 += -152                    ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+8: (18) r1 = 0xffff98d31c954000       ; R1=map_ptr(map=SYSCALL_DISPATC,ks=4,vs=4)
+10: (85) call bpf_map_lookup_elem#1   ; R0=map_value_or_null(id=2,map=SYSCALL_DISPATC,ks=4,vs=4)
+; let Some(action) = SYSCALL_DISPATCH.get(syscall_id as u32) else { @ raw.rs:216
+11: (15) if r0 == 0x0 goto pc+1412    ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4)
+; if *action == 0 { @ raw.rs:219
+12: (61) r1 = *(u32 *)(r0 +0)         ; R0=map_value(map=SYSCALL_DISPATC,ks=4,vs=4) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+13: (7b) *(u64 *)(r10 -200) = r1      ; R1=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+14: (15) if r1 == 0x0 goto pc+1409    ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; T::from_register(unsafe { *ptr }) @ args.rs:307
+15: (79) r6 = *(u64 *)(r6 +0)         ; R6=scalar()
+; intrinsics::volatile_load(src) @ mod.rs:2163
+16: (18) r1 = 0xffff98d3069c713c      ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4)
+18: (61) r9 = *(u32 *)(r1 +4)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R9=104
+19: (67) r9 <<= 32                    ; R9=0x6800000000
+20: (61) r2 = *(u32 *)(r1 +0)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=112
+21: (4f) r9 |= r2                     ; R2=112 R9=0x6800000070
+22: (61) r8 = *(u32 *)(r1 +8)         ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R8=96
+23: (61) r2 = *(u32 *)(r1 +12)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=56
+24: (7b) *(u64 *)(r10 -208) = r2      ; R2=56 R10=fp0 fp-208=56
+25: (61) r2 = *(u32 *)(r1 +16)        ; R1=map_value(map=.rodata,ks=4,vs=2303,off=4) R2=72
+26: (7b) *(u64 *)(r10 -216) = r2      ; R2=72 R10=fp0 fp-216=72
+27: (61) r1 = *(u32 *)(r1 +20)        ; R1=64
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+28: (7b) *(u64 *)(r10 -224) = r1      ; R1=64 R10=fp0 fp-224=64
+29: (bf) r1 = r9                      ; R1=0x6800000070 R9=0x6800000070
+30: (67) r1 <<= 32                    ; R1=0x7000000000
+31: (77) r1 >>= 32                    ; R1=112
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+32: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+33: (0f) r3 += r1                     ; R1=112 R3=scalar(id=4+112)
+34: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+35: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+36: (b7) r2 = 8                       ; R2=8
+37: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[0] as usize).cast::<u64>()) }.ok()?, @ raw.rs:374
+38: (55) if r0 != 0x0 goto pc+1385    ; R0=0
+39: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; intrinsics::volatile_load(src) @ mod.rs:2163
+40: (7b) *(u64 *)(r10 -232) = r1      ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+41: (77) r9 >>= 32                    ; R9=104
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+42: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+43: (0f) r3 += r9                     ; R3=scalar(id=4+104) R9=104
+44: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+45: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+46: (b7) r2 = 8                       ; R2=8
+47: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[1] as usize).cast::<u64>()) }.ok()?, @ raw.rs:375
+48: (55) if r0 != 0x0 goto pc+1375    ; R0=0
+49: (79) r1 = *(u64 *)(r10 -208)      ; R1=56 R10=fp0 fp-208=56
+50: (67) r1 <<= 32                    ; R1=0x3800000000
+51: (4f) r1 |= r8                     ; R1=0x3800000060 R8=96
+52: (79) r2 = *(u64 *)(r10 -152)      ; R2=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+53: (7b) *(u64 *)(r10 -240) = r2      ; R2=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+54: (67) r1 <<= 32                    ; R1=0x6000000000
+55: (77) r1 >>= 32                    ; R1=96
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+56: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+57: (0f) r3 += r1                     ; R1=96 R3=scalar(id=4+96)
+58: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+59: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+60: (b7) r2 = 8                       ; R2=8
+61: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[2] as usize).cast::<u64>()) }.ok()?, @ raw.rs:376
+62: (55) if r0 != 0x0 goto pc+1361    ; R0=0
+63: (79) r1 = *(u64 *)(r10 -216)      ; R1=72 R10=fp0 fp-216=72
+64: (67) r1 <<= 32                    ; R1=0x4800000000
+65: (79) r2 = *(u64 *)(r10 -208)      ; R2=56 R10=fp0 fp-208=56
+66: (4f) r2 |= r1                     ; R1=0x4800000000 R2=0x4800000038
+67: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+68: (7b) *(u64 *)(r10 -208) = r1      ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+69: (67) r2 <<= 32                    ; R2=0x3800000000
+70: (77) r2 >>= 32                    ; R2=56
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+71: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+72: (0f) r3 += r2                     ; R2=56 R3=scalar(id=4+56)
+73: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+74: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+75: (b7) r2 = 8                       ; R2=8
+76: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[3] as usize).cast::<u64>()) }.ok()?, @ raw.rs:377
+77: (55) if r0 != 0x0 goto pc+1346    ; R0=0
+78: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+79: (67) r1 <<= 32                    ; R1=0x4000000000
+80: (79) r2 = *(u64 *)(r10 -216)      ; R2=72 R10=fp0 fp-216=72
+81: (4f) r1 |= r2                     ; R1=0x4000000048 R2=72
+82: (79) r8 = *(u64 *)(r10 -152)      ; R8=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+83: (67) r1 <<= 32                    ; R1=0x4800000000
+84: (77) r1 >>= 32                    ; R1=72
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+85: (bf) r3 = r6                      ; R3=scalar(id=4) R6=scalar(id=4)
+86: (0f) r3 += r1                     ; R1=72 R3=scalar(id=4+72)
+87: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+88: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+89: (b7) r2 = 8                       ; R2=8
+90: (85) call bpf_probe_read_kernel#113       ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[4] as usize).cast::<u64>()) }.ok()?, @ raw.rs:378
+91: (55) if r0 != 0x0 goto pc+1332    ; R0=0
+92: (79) r1 = *(u64 *)(r10 -152)      ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; unsafe { intrinsics::offset(self, count) } @ const_ptr.rs:872
+93: (7b) *(u64 *)(r10 -216) = r1      ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+94: (79) r1 = *(u64 *)(r10 -224)      ; R1=64 R10=fp0 fp-224=64
+95: (0f) r6 += r1                     ; R1=64 R6=scalar(id=4+64)
+96: (bf) r1 = r10                     ; R1=fp0 R10=fp0
+97: (07) r1 += -152                   ; R1=fp-152
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+98: (b7) r2 = 8                       ; R2=8
+99: (bf) r3 = r6                      ; R3=scalar(id=9) R6=scalar(id=9)
+100: (85) call bpf_probe_read_kernel#113      ; R0=scalar() fp-152=mmmmmmmm
+; unsafe { bpf_probe_read_kernel(regs.add(offsets[5] as usize).cast::<u64>()) }.ok()?, @ raw.rs:379
+101: (55) if r0 != 0x0 goto pc+1322   ; R0=0
+102: (79) r1 = *(u64 *)(r10 -152)     ; R1=scalar() R10=fp0 fp-152=mmmmmmmm
+; fun() @ helpers.rs:134
+103: (7b) *(u64 *)(r10 -224) = r1     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+104: (85) call bpf_get_current_pid_tgid#14    ; R0=scalar()
+105: (7b) *(u64 *)(r10 -248) = r0     ; R0=scalar(id=11) R10=fp0 fp-248=scalar(id=11)
+106: (b7) r9 = 0                      ; R9=0
+107: (63) *(u32 *)(r10 -152) = r9     ; R9=0 R10=fp0 fp-152=mmmm0
+108: (bf) r2 = r10                    ; R2=fp0 R10=fp0
+109: (07) r2 += -152                  ; R2=fp-152
+; fun(map, key) @ helpers.rs:10
+110: (18) r1 = 0xffff98d326c86a00     ; R1=map_ptr(map=SYSCALL_ENTER_S,ks=4,vs=64)
+112: (85) call bpf_map_lookup_elem#1          ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+113: (bf) r6 = r0                     ; R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; let Some(record) = SYSCALL_ENTER_SCRATCH.get_ptr_mut(0) else { @ raw.rs:229
+114: (15) if r6 == 0x0 goto pc+1309   ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; crate::intrinsics::write_bytes(dst, val, count) @ mod.rs:736
+115: (73) *(u8 *)(r6 +7) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+116: (73) *(u8 *)(r6 +6) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+117: (73) *(u8 *)(r6 +5) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+118: (73) *(u8 *)(r6 +4) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+119: (73) *(u8 *)(r6 +3) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+120: (73) *(u8 *)(r6 +2) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+121: (73) *(u8 *)(r6 +1) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+122: (73) *(u8 *)(r6 +0) = r9         ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0
+; (*record).args = args; @ raw.rs:246
+123: (79) r1 = *(u64 *)(r10 -224)     ; R1=scalar(id=10) R10=fp0 fp-224=scalar(id=10)
+124: (7b) *(u64 *)(r6 +56) = r1       ; R1=scalar(id=10) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+125: (79) r1 = *(u64 *)(r10 -216)     ; R1=scalar(id=8) R10=fp0 fp-216=scalar(id=8)
+126: (7b) *(u64 *)(r6 +48) = r1       ; R1=scalar(id=8) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+127: (7b) *(u64 *)(r6 +40) = r8       ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=scalar()
+128: (79) r1 = *(u64 *)(r10 -208)     ; R1=scalar(id=7) R10=fp0 fp-208=scalar(id=7)
+129: (7b) *(u64 *)(r6 +32) = r1       ; R1=scalar(id=7) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+130: (79) r1 = *(u64 *)(r10 -240)     ; R1=scalar(id=6) R10=fp0 fp-240=scalar(id=6)
+131: (7b) *(u64 *)(r6 +24) = r1       ; R1=scalar(id=6) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+132: (79) r1 = *(u64 *)(r10 -232)     ; R1=scalar(id=5) R10=fp0 fp-232=scalar(id=5)
+133: (7b) *(u64 *)(r6 +16) = r1       ; R1=scalar(id=5) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; (*record).id = syscall_id; @ raw.rs:245
+134: (7b) *(u64 *)(r6 +8) = r7        ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff))
+; (*record).args = args; @ raw.rs:246
+135: (bf) r4 = r6                     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+136: (07) r4 += 48                    ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+137: (bf) r2 = r6                     ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+138: (07) r2 += 40                    ; R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40)
+139: (bf) r9 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+140: (07) r9 += 32                    ; R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32)
+141: (bf) r8 = r6                     ; R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+142: (07) r8 += 24                    ; R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24)
+143: (bf) r3 = r6                     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+144: (07) r3 += 16                    ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+145: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R10=fp0 fp-200=scalar(id=3,smin=umin=umin32=1,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))
+; match *action { @ raw.rs:255
+146: (65) if r1 s> 0x16 goto pc+24 171: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=23,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+171: (65) if r1 s> 0x21 goto pc+26 198: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=umin32=34,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) fp-208=scalar(id=7) fp-216=scalar(id=8) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; } @ main.rs:3138
+198: (7b) *(u64 *)(r10 -216) = r4     ; R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0 fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48)
+199: (7b) *(u64 *)(r10 -208) = r3     ; R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R10=fp0 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+; match *action { @ raw.rs:255
+200: (65) if r1 s> 0x27 goto pc+52    ; R1=scalar(id=3,smin=umin=smin32=umin32=34,smax=umax=smax32=umax32=39,var_off=(0x20; 0x7))
+201: (65) if r1 s> 0x24 goto pc+186 388: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match *action { @ raw.rs:255
+388: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=37,smax=umax=smax32=umax32=39,var_off=(0x24; 0x3))
+389: (15) if r1 == 0x25 goto pc+366   ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+390: (79) r1 = *(u64 *)(r10 -200)     ; R1=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1)) R10=fp0 fp-200=scalar(id=3,smin=umin=smin32=umin32=38,smax=umax=smax32=umax32=39,var_off=(0x26; 0x1))
+391: (15) if r1 == 0x26 goto pc+630 1022: R0=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R1=38 R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1022: (bf) r1 = r6                    ; R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+1023: (85) call pc+8073
+caller:
+ R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+callee:
+ frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+9097: frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R2=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=40) R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) R4=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) R10=fp0
+; fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> { @ main.rs:3738
+9097: (bf) r7 = r1                    ; frame1: R1=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+; unsafe { intrinsics::offset(self, count) } @ mut_ptr.rs:971
+9098: (bf) r3 = r7                    ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64)
+9099: (07) r3 += 16                   ; frame1: R3=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16)
+9100: (bf) r1 = r10                   ; frame1: R1=fp0 R10=fp0
+9101: (07) r1 += -8                   ; frame1: R1=fp-8
+; fun(dst, size, unsafe_ptr) @ helpers.rs:1178
+9102: (b7) r2 = 8                     ; frame1: R2=8
+9103: (85) call bpf_probe_read_kernel#113     ; frame1: R0=scalar() fp-8=mmmmmmmm
+9104: (bf) r6 = r0                    ; frame1: R0=scalar(id=413) R6=scalar(id=413)
+9105: (b7) r9 = 0                     ; frame1: R9=0
+; match self { @ result.rs:2176
+9106: (15) if r6 == 0x0 goto pc+2     ; frame1: R6=scalar(id=413,umin=1)
+9107: (18) r9 = 0x100000001           ; frame1: R9=0x100000001
+; let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? }; @ main.rs:3740
+9109: (bf) r1 = r9                    ; frame1: R1=0x100000001 R9=0x100000001
+9110: (57) r1 &= 1                    ; frame1: R1=1
+9111: (15) if r1 == 0x0 goto pc+3     ; frame1: R1=1
+9112: (b7) r0 = 1                     ; frame1: R0=1
+9113: (77) r9 >>= 32                  ; frame1: R9=1
+9114: (05) goto pc+38
+; } @ main.rs:3758
+9153: (67) r9 <<= 32                  ; frame1: R9=0x100000000
+9154: (4f) r0 |= r9                   ; frame1: R0=0x100000001 R9=0x100000000
+9155: (95) exit
+returning from callee:
+ frame1: R0=0x100000001 R1=1 R6=scalar(id=413,umin=1) R7=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R9=0x100000000 R10=fp0 fp-8=mmmmmmmm
+to caller at 1024:
+ R0=0x100000001 R6=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64) R7=scalar(id=1,smin=smin32=0,smax=umax=smax32=umax32=1023,var_off=(0x0; 0x3ff)) R8=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=24) R9=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=32) R10=fp0 fp-152=mmmm0 fp-200=38 fp-208=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=16) fp-216=map_value(map=SYSCALL_ENTER_S,ks=4,vs=64,off=48) fp-224=scalar(id=10) fp-232=scalar(id=5) fp-240=scalar(id=6) fp-248=scalar(id=11)
+; match try_sys_enter_setres(&ctx) { @ main.rs:3727
+1024: (bf) r3 = r2
+R2 !read_ok
+verification time 2243837 usec
+stack depth 336+200+0+0+0+0+0+0+208+0+0+0+192+0+0+200+0+0+8+0+0+0+216+0+0+224+0+0+208+0+0+216+0+0+24+176+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0+0
+processed 186851 insns (limit 1000000) max_states_per_insn 8 total_states 10109 peak_states 2124 mark_read 0
+
+[watchdog] agent exited (exit status: 1) after 9.3s — fast crash, backing off 20s...
+[watchdog] stopped.

@@ -3599,22 +3599,21 @@ const SINGLE_ID_OFFSET: usize = 16;
 #[cfg(bpf_target_arch = "x86")]
 const SINGLE_ID_OFFSET: usize = 12;
 
-/// Offsets of `setresuid(2)`/`setresgid(2)`'s three `uid_t`/`gid_t`
-/// arguments (real, effective, saved) — identical shape for both, assumed
-/// standard layout, same posture as `SINGLE_ID_OFFSET`.
+/// Offset of `setresuid(2)`/`setresgid(2)`'s first `uid_t`/`gid_t` argument
+/// (real) — identical shape for both, assumed standard layout, same posture
+/// as `SINGLE_ID_OFFSET`. effective and saved sit immediately after it, one
+/// register width apart each, and `try_sys_enter_setres` reads all three in
+/// a single `read_at::<[_; 3]>` instead of three separate reads at three
+/// separate offsets: three reads, each with its own early-return `?`, was
+/// enough extra verifier state that bpf-linker's `-O2` fallback (upstream
+/// dropped `-Os`, see lab/provisioning/alpine-toolchain.sh) rejected this
+/// function with "R2 !read_ok" at its call sites, where it had verified
+/// fine under `-Os`.
 #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
 const RES_ID_REAL_OFFSET: usize = 16;
-#[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
-const RES_ID_EFFECTIVE_OFFSET: usize = 24;
-#[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
-const RES_ID_SAVED_OFFSET: usize = 32;
 /// i686: inferred, not independently verified.
 #[cfg(bpf_target_arch = "x86")]
 const RES_ID_REAL_OFFSET: usize = 12;
-#[cfg(bpf_target_arch = "x86")]
-const RES_ID_EFFECTIVE_OFFSET: usize = 16;
-#[cfg(bpf_target_arch = "x86")]
-const RES_ID_SAVED_OFFSET: usize = 20;
 
 /// Shared by all six probes below: fills `EventMeta` and the kind-specific id
 /// fields into `IDENTITY_CHANGE_SCRATCH`, then emits. Mirrors
@@ -3736,25 +3735,21 @@ pub fn sys_enter_setresgid(ctx: TracePointContext) -> u32 {
 }
 
 fn try_sys_enter_setres(ctx: &TracePointContext) -> Result<(u32, u32, u32), u32> {
+    // One `bpf_probe_read_kernel` over all three contiguous arguments, not
+    // three separate reads with three early returns — see the
+    // `RES_ID_REAL_OFFSET` doc comment for why.
     #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
-    let real: u64 = unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? };
+    {
+        let [real, effective, saved]: [u64; 3] =
+            unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? };
+        Ok((real as u32, effective as u32, saved as u32))
+    }
     #[cfg(bpf_target_arch = "x86")]
-    let real: u64 = unsafe { ctx.read_at::<u32>(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? as u64 };
-
-    #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
-    let effective: u64 = unsafe { ctx.read_at(RES_ID_EFFECTIVE_OFFSET).map_err(|_| 1u32)? };
-    #[cfg(bpf_target_arch = "x86")]
-    let effective: u64 = unsafe {
-        ctx.read_at::<u32>(RES_ID_EFFECTIVE_OFFSET)
-            .map_err(|_| 1u32)? as u64
-    };
-
-    #[cfg(any(bpf_target_arch = "x86_64", bpf_target_arch = "aarch64"))]
-    let saved: u64 = unsafe { ctx.read_at(RES_ID_SAVED_OFFSET).map_err(|_| 1u32)? };
-    #[cfg(bpf_target_arch = "x86")]
-    let saved: u64 = unsafe { ctx.read_at::<u32>(RES_ID_SAVED_OFFSET).map_err(|_| 1u32)? as u64 };
-
-    Ok((real as u32, effective as u32, saved as u32))
+    {
+        let [real, effective, saved]: [u32; 3] =
+            unsafe { ctx.read_at(RES_ID_REAL_OFFSET).map_err(|_| 1u32)? };
+        Ok((real, effective, saved))
+    }
 }
 
 // --- Capability set change (issue #266) ---------------------------------------
