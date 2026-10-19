@@ -125,7 +125,7 @@ impl ExecImages {
         self.image_of_not_after(pid, generation, u64::MAX)
     }
 
-    /// [`Self::image_of`], but only an exec at or before `not_after_ns` (the time of the touch
+    /// The image `pid` was seen to execute, but only an exec at or before `not_after_ns` (the time of the touch
     /// being judged) counts: the newest entry of a process that exec'd again *after* the touch
     /// is not what made it, and its earlier image was replaced, so nothing is known.
     pub(crate) fn image_of_not_after(
@@ -236,7 +236,7 @@ impl CanaryAllow {
     }
 
     /// Whether the process `pid` runs an allowed executable. `seen` is what the agent recorded
-    /// when this incarnation of the pid executed ([`ExecImages::image_of`], already checked
+    /// when this incarnation of the pid executed ([`ExecImages::image_of_not_after`], already checked
     /// against the pid's incarnation), if anything; with none, the `/proc` route decides.
     /// The caller passes a clone and holds no lock: the `/proc` read below can be slow.
     pub(crate) fn allows(&self, pid: u32, seen: Option<&ExecImage>) -> bool {
