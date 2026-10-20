@@ -10,16 +10,16 @@ export type RingAction = "halt" | "rollback";
 
 /**
  * Which actions make sense for a ring in this state. A halt needs a serving release. A rollback
- * works on a serving or a halted ring (the route refuses when there is no earlier release, and
- * says so); there is nothing to roll back when nothing was released or the latest release was
- * already rolled back.
+ * needs a serving or halted ring *and* an earlier release to go back to (`hasEarlierRelease`):
+ * the route answers 404 without one, so the button is not offered. Nothing is offered when
+ * nothing was released or the latest release was already rolled back.
  */
-export function availableActions(rollout: RolloutState): RingAction[] {
+export function availableActions(rollout: RolloutState, hasEarlierRelease: boolean): RingAction[] {
   switch (rollout) {
     case "serving":
-      return ["halt", "rollback"];
+      return hasEarlierRelease ? ["halt", "rollback"] : ["halt"];
     case "halted":
-      return ["rollback"];
+      return hasEarlierRelease ? ["rollback"] : [];
     default:
       return [];
   }

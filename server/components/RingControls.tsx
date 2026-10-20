@@ -6,7 +6,7 @@ import { endedSession } from "@/lib/session-redirect";
 import { availableActions, confirmation, confirmationMatches, type RingAction } from "@/lib/ring-actions";
 import type { Ring, RolloutState } from "@/lib/rings";
 
-type Props = { ring: Ring; rollout: RolloutState; servedVersion: number | null };
+type Props = { ring: Ring; rollout: RolloutState; servedVersion: number | null; hasEarlierRelease: boolean };
 
 /**
  * Halt and roll back for one ring, for an owner or admin (the page does not render this for
@@ -14,7 +14,7 @@ type Props = { ring: Ring; rollout: RolloutState; servedVersion: number | null }
  * confirmation, which says what the action does and does not do. A rollback also asks for the
  * ring's name. The page only calls `POST /api/content/halt` and `/rollback`.
  */
-export default function RingControls({ ring, rollout, servedVersion }: Props) {
+export default function RingControls({ ring, rollout, servedVersion, hasEarlierRelease }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState<RingAction | null>(null);
   const [reason, setReason] = useState("");
@@ -23,7 +23,7 @@ export default function RingControls({ ring, rollout, servedVersion }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [advice, setAdvice] = useState<string | null>(null);
 
-  const actions = availableActions(rollout);
+  const actions = availableActions(rollout, hasEarlierRelease);
   if (actions.length === 0) return null;
 
   const close = () => {
@@ -43,11 +43,14 @@ export default function RingControls({ ring, rollout, servedVersion }: Props) {
         body: JSON.stringify({ ring, ...(reason.trim() ? { reason: reason.trim() } : {}) }),
       });
       if (endedSession(res)) {
+        // Open here too: what was typed is kept for the retry after signing in again.
         setMessage("Your session has ended: sign in again, then retry.");
         return;
       }
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // The confirmation stays open on a failure, on purpose: the reason and the typed ring name
+        // are kept so the operator can retry or cancel. Only a success closes it.
         setMessage(json.error ?? `Failed (${res.status})`);
         return;
       }

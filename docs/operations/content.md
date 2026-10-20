@@ -147,9 +147,11 @@ user): the console adds no authority of its own.
 
 | Ring state | Buttons | What it does |
 |---|---|---|
-| serving | Halt, Roll back | Halt: agents of the ring stop being offered content until a new release is published or the ring is rolled back; what an agent already applied stays applied. Roll back: see below |
-| halted | Roll back | The earlier release is offered again |
+| serving | Halt, Roll back (Roll back only when an earlier release exists) | Halt: agents of the ring stop being offered content until a new release is published or the ring is rolled back; what an agent already applied stays applied. Roll back: see below |
+| halted | Roll back, only when an earlier release exists | The earlier release is offered again |
 | rolled back, or no release | none | Nothing to halt or roll back |
+
+A ring with a single release is never offered a rollback (the route would answer 404 with no release to go back to). The confirmation stays open when the call fails, with the reason and the typed ring name kept, and closes only on success.
 
 A click opens a confirmation, it does not act. The confirmation says what the action does and does not
 do, takes an optional reason (kept in the audit row) and, for a rollback, asks for the ring's name. A

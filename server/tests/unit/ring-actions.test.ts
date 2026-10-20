@@ -4,14 +4,18 @@ import { endedSession } from "@/lib/session-redirect";
 
 describe("availableActions", () => {
   it("offers halt and rollback on a serving ring, rollback only on a halted one, nothing otherwise", () => {
-    expect(availableActions("serving")).toEqual(["halt", "rollback"]);
-    expect(availableActions("halted")).toEqual(["rollback"]);
-    expect(availableActions("rolled_back")).toEqual([]);
-    expect(availableActions("no_release")).toEqual([]);
+    expect(availableActions("serving", true)).toEqual(["halt", "rollback"]);
+    expect(availableActions("halted", true)).toEqual(["rollback"]);
+    expect(availableActions("rolled_back", true)).toEqual([]);
+    expect(availableActions("no_release", true)).toEqual([]);
+  });
+  it("does not offer a rollback that has no earlier release to go to: it could only answer 404", () => {
+    expect(availableActions("serving", false)).toEqual(["halt"]);
+    expect(availableActions("halted", false)).toEqual([]);
   });
   it("never offers a release: who may publish is undecided (#898)", () => {
     for (const s of ["serving", "halted", "rolled_back", "no_release"] as const) {
-      expect(availableActions(s)).not.toContain("release" as never);
+      expect(availableActions(s, true)).not.toContain("release" as never);
     }
   });
 });

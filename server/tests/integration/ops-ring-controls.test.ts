@@ -58,8 +58,10 @@ describe("ring controls on /console/ops (#898)", () => {
   it("an admin sees halt and roll back on a serving ring, only roll back on a halted one, nothing on the others", async () => {
     const { tenantId } = await actor("admin");
     await release(tenantId, "canary_0", 1, "rolled_back");
-    await release(tenantId, "canary_1", 1, "active");
-    await release(tenantId, "canary_2", 1, "halted");
+    await release(tenantId, "canary_1", 1, "rolled_back");
+    await release(tenantId, "canary_1", 2, "active");
+    await release(tenantId, "canary_2", 1, "active");
+    await release(tenantId, "canary_2", 2, "halted");
     // `prod` has no release.
     const html = await renderOps();
     const buttons = (ring: string) => {
@@ -77,15 +79,26 @@ describe("ring controls on /console/ops (#898)", () => {
     expect(html).not.toContain("Only an organization owner or admin");
   });
 
+  it("offers no rollback on a ring with a single release: the route could only answer 404", async () => {
+    const { tenantId } = await actor("admin");
+    await release(tenantId, "canary_1", 1, "active");
+    await release(tenantId, "canary_2", 1, "halted");
+    const html = await renderOps();
+    expect(html).toContain("Halt…"); // canary_1 can still be halted
+    expect(html).not.toContain("Roll back…");
+  });
+
   it("an owner sees the controls too; a plain member sees the state and is told who can act", async () => {
     const { tenantId } = await actor("owner");
     await release(tenantId, "prod", 1, "active");
+    await release(tenantId, "prod", 2, "active");
     expect(await renderOps()).toContain("Halt…");
 
     const member = await actor("member");
     await release(member.tenantId, "prod", 1, "active");
+    await release(member.tenantId, "prod", 2, "active");
     const html = await renderOps();
-    expect(html).toContain("v1");
+    expect(html).toContain("v2");
     expect(html).not.toContain("Halt…");
     expect(html).not.toContain("Roll back…");
     expect(html).toContain("Only an organization owner or admin can halt or roll back a ring.");
