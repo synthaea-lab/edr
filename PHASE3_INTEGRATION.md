@@ -1,6 +1,6 @@
 # Phase 3 Integration Guide (Issue #46)
 
-**Status:** Blocked by #13 (ML scorer integration), #14 (cmdline scorer), #47 (agent integration)
+**Status:** Blocked by #13 (ML scorer integration), #14 (cmdline scorer)
 
 This document describes how to complete Phase 3 of issue #46 (correlator no-score handling) once the ML scorer is integrated into the agent.
 
@@ -150,7 +150,7 @@ fn test_update_belief_ml_none_skipped() {
 }
 ```
 
-#### End-to-End Verification (After #47)
+#### End-to-End Verification
 
 1. **Run agent with ML scorer on benign baseline**
    - Check telemetry: no OOD rejections on training-distribution data
@@ -169,7 +169,9 @@ fn test_update_belief_ml_none_skipped() {
 ## Backward Compatibility
 
 - Legacy models (no `model_metadata.json`) → `bounds = None` → no OOD validation
-- Existing correlator code → pass `ml_llr = None` until agent wiring is complete
+- `on_event` always calls `update_belief` with `ml_llr = None` — permanent, not transitional
+  (see "Changes Required", point 2, above); the ML term is added afterward by
+  `update_belief_with_ml`
 - Graceful degradation: system works without ML scorer, just missing that evidence term
 
 ## Migration Checklist
@@ -177,7 +179,7 @@ fn test_update_belief_ml_none_skipped() {
 - [ ] Update `bayes::update_belief` signature (add `ml_llr` parameter)
 - [ ] Update all `update_belief` call sites in `engine.rs` (pass `None` initially)
 - [ ] Expose `update_belief_with_ml` or similar in correlator public API (for agent)
-- [ ] Implement agent sink wiring (#47)
+- [x] Implement agent sink wiring (shipped, #47)
 - [ ] Add unit tests for `ml_llr = Some(...)` and `ml_llr = None`
 - [ ] End-to-end test: benign baseline (no OOD), OOD injection, low event count
 - [ ] Update `docs/detection/ml.md` with Phase 3 semantics
@@ -186,7 +188,7 @@ fn test_update_belief_ml_none_skipped() {
 
 Phase 3 can proceed once:
 1. ML scorer is integrated into agent (#13, #14)
-2. Agent has access to `CorrelationScorer` (#47)
+2. Agent has access to `CorrelationScorer` (shipped, #47)
 3. Correlator exposes an API to pass `ml_llr` from agent sink
 
 Estimated effort: 1-2 hours for correlator changes + agent wiring, 1-2 hours for tests.
