@@ -123,8 +123,12 @@ are provisional until slice 6. The judgements are counted, not only logged (ADR-
 snapshot or an evicted belief is visible on the fleet rather than silent
 (`docs/architecture/control-plane.md`).
 
-Slices 5 and 6 have not started: they wait on the signing and ring questions above (a proposal
-that frames them for a decision is open as #819).
+Slice 5, as ADR-0033 re-shaped it (a manifest of its own, not a content-manifest entry): the
+server half is built: the signed `SnapshotManifest`, the builder with its guards, the cron, the two
+agent endpoints and the public test signer (`common-set-snapshot-format.md`, "Delivery"). The agent
+half (verification against a `snapshot` key, freshness, the fetch loop) is the next PR. Slice 6
+(lab run and calibration) follows it. Production use waits on the custody of the `snapshot` key
+(#753) and on tenant binding.
 
 ## Not in this plan
 

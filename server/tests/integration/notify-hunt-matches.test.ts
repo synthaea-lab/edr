@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanDatabase, createTestAgent, createTestDetection, createTestTenant, prisma } from "../helpers/db";
-import { runHunt } from "@/lib/hunt";
+import { runHunt } from "@/lib/hunt-runner";
 import { makeChannel } from "../helpers/notify";
 
 const HOUR = 3_600_000;

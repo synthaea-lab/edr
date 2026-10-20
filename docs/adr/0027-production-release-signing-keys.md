@@ -16,9 +16,12 @@ it, `--allow-test-key` only in a `test-key` build and now also required by
 `apply-content-manifest`, a build without the feature or a key refusing with a clear error, and
 `tools/check-no-test-key.sh` in CI. Not implemented: the `recovery` verification and the rotation
 release (a separate PR with golden fixtures), `release-tool` custody backends, the custody and
-holder decisions below, the runbook and the lab drills. Windows and macOS packaging still build
-with the default features, so they carry the test set until they get the same `--no-default-features`
-treatment.
+holder decisions below, the runbook and the lab drills. Windows and macOS got the same
+`--no-default-features` treatment in #855: the MSI build command in `packaging/windows/README.md`,
+a scan of `agent.exe` and `watchdog.exe` in `packaging/windows/build.ps1` (not run by any CI job,
+it needs WiX), a `tools/assert-no-test-key.sh` step in the two static-agent workflows, and
+`tools/check-no-test-key.sh` checking that those flags leave `updater/test-key` off for both
+targets. macOS has no package script yet, so its check covers the CI build only.
 
 ## Context
 

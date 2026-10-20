@@ -43,10 +43,15 @@ function stubDb(
       ),
     },
     contentRelease: {
-      findFirst: vi.fn(({ where }: { where: { ring: string; status?: string } }) =>
-        Promise.resolve(
-          (releases[where.ring] ?? []).find((r) => !where.status || r.status === where.status) ?? null
-        )
+      findFirst: vi.fn(
+        ({ where }: { where: { ring: string; status?: string; releaseVersion?: { lt: number } } }) =>
+          Promise.resolve(
+            (releases[where.ring] ?? []).find(
+              (r) =>
+                (!where.status || r.status === where.status) &&
+                (!where.releaseVersion || r.releaseVersion < where.releaseVersion.lt)
+            ) ?? null
+          )
       ),
     },
   };
@@ -73,6 +78,26 @@ describe("loadRings (issue #83)", () => {
       latestVersion: 2,
       servedVersion: null,
     });
+  });
+
+  it("says whether a serving or halted ring has an earlier release to roll back to, and nothing else does", async () => {
+    const db = stubDb(
+      {
+        canary_0: [release(2, "active"), release(1, "rolled_back")],
+        canary_1: [release(1, "active")],
+        canary_2: [release(3, "halted"), release(2, "active")],
+        prod: [release(2, "rolled_back"), release(1, "active")],
+      },
+      []
+    );
+    const { rings } = await loadRings(db as never, "t1", NOW);
+    const has = (ring: string) => rings.find((r) => r.ring === ring)?.hasEarlierRelease;
+    expect(has("canary_0")).toBe(true); // an earlier release of any status is a target, as in the route
+    expect(has("canary_1")).toBe(false); // a single release
+    expect(has("canary_2")).toBe(true);
+    expect(has("prod")).toBe(false); // already rolled back: nothing to offer
+    const empty = await loadRings(stubDb({}, []) as never, "t1", NOW);
+    expect(empty.rings.every((r) => r.hasEarlierRelease === false)).toBe(true);
   });
 
   it("counts each ring's agents by health status and keeps the rings apart", async () => {

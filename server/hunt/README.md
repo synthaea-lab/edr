@@ -19,6 +19,7 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   Postgres. A row has ids, times, technique, severity, the case title and the rule title, never
   the rest of the stored event. The console has `/console/hunts/search` (a GET form, so a search
   is a link) and `/console/hunts/[id]/matches`.
+- **Server-only part** (`lib/hunt-runner.ts`): `runHunt`, `runHuntWithinLimit`, `dueHunts`, `pruneHuntRuns`. They reach the notification outbox (`node:crypto`), so they live apart from `lib/hunt.ts`, which client components import (the form, `lib/hunt-view.ts`). `tests/unit/client-bundle-imports.test.ts` fails when a `"use client"` file reaches a Node built-in or Prisma (#926).
 - **Scheduler**: `GET /api/cron/run-hunts` (CRON_SECRET) runs the due scheduled hunts and
   prunes history.
 - **Graduation** (#618): `POST /api/hunts/[id]/graduate` (`lib/hunt-graduation.ts`) answers a
@@ -26,7 +27,8 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing. A hunt's
   page has a "Draft Sigma rule" button (`components/GraduateHuntButton.tsx`) that calls it and
   shows the files to copy or download, and what a person still has to do.
-- **Console** (`/console/hunts`): the list, a hunt's run history with Run now, and a create
+- **Console** (`/console/hunts`): the list (with a Delete button per hunt: it asks first, and
+  the run history goes with the hunt), a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
   into the API body with `lib/hunt-form.ts`, which runs the same validation as the API. The
   list reads each hunt's newest run and its newest run with a result in one query
@@ -39,7 +41,6 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 
 ## Not built yet
 
-- Deleting a hunt from the console (the API has `DELETE`).
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - The raw event archive as a further source (needs `server/datalake`, #77).
 - Graduation beyond the assisted Sigma draft: the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
