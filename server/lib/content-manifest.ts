@@ -28,7 +28,11 @@ export type ContentType = z.infer<typeof ContentType>;
 export const ContentEntry = z.object({
   path: z.string(),           // Relative path: rules/beacon.sigma, models/cmdline-iforest-linux.pkl
   type: ContentType,          // Content type for validation
-  sha256: z.string(),         // SHA-256 hash (hex) for integrity verification
+  // The artifact store's own key since #804 (`storage/artifacts/<sha256>`), not only an
+  // integrity check against `path` any more — regex-validated for the same reason
+  // `isSafeArtifactPath` guards `path`: a signed manifest's entries are still not trusted
+  // as filesystem path components.
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
   size: z.number(),           // File size in bytes
   metadata: z.record(z.any()).optional(), // Optional metadata (e.g., model version, MITRE technique)
 });
@@ -213,11 +217,14 @@ export async function loadManifestBytes(manifestUrl: string): Promise<Buffer> {
 }
 
 /**
- * Content artifact storage path pattern
- * Example: artifacts/rules/beacon.sigma
+ * Content artifact storage path pattern — keyed by hash, not by `path` (#804): every
+ * release's bytes stay available under their own hash for as long as any release still
+ * references them, so a corrective release over a path a later release modified needs
+ * no manual restoration step.
+ * Example: artifacts/<sha256 of the file's bytes>
  */
 export function contentArtifactPath(entry: ContentEntry): string {
-  return `artifacts/${entry.path}`;
+  return `artifacts/${entry.sha256}`;
 }
 
 /**
