@@ -51,6 +51,8 @@ describe("middleware identity headers", () => {
       "/api/release/artifact",
       "/api/content/manifest/canary_0",
       "/api/content/artifact",
+      "/api/snapshot/manifest",
+      "/api/snapshot/artifact",
       "/api/v1/ingest/events",
       "/api/v1/ingest/heartbeat",
       "/api/cron/detect-silent-agents",
@@ -97,6 +99,21 @@ describe("middleware identity headers", () => {
       "/api/content/manifest",
       "/api/content/manifest/canary_0/extra",
     ]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
+  });
+
+  it("serves the two agent snapshot paths without a session and nothing else under /api/snapshot", async () => {
+    // Regression (#76 lab run): the snapshot endpoints were not on the public list, so behind
+    // nginx an agent got a 307 to /login and no snapshot was ever delivered. The handlers were
+    // tested directly and never met the middleware.
+    getSession.mockResolvedValue(null);
+    for (const path of ["/api/snapshot/manifest", "/api/snapshot/artifact"]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toBeNull();
+    }
+    for (const path of ["/api/snapshot", "/api/snapshot/other", "/api/snapshot/manifest/extra", "/api/snapshots/manifest"]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }
