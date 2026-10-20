@@ -24,7 +24,9 @@ export default function RingControls({ ring, rollout, servedVersion, hasEarlierR
   const [advice, setAdvice] = useState<string | null>(null);
 
   const actions = availableActions(rollout, hasEarlierRelease);
-  if (actions.length === 0) return null;
+  // After a rollback no action is left, but the answer (and the corrective release number it
+  // names) must stay on the page: hide the component only when there is nothing to show either.
+  if (actions.length === 0 && message === null && advice === null) return null;
 
   const close = () => {
     setOpen(null);
