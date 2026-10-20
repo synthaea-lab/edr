@@ -10,6 +10,7 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   history. Code: `lib/hunt.ts` (validate, compile, run), `lib/hunt-input.ts` (request bodies).
 - **API** (session, tenant-scoped): `GET/POST /api/hunts`, `GET/PATCH/DELETE /api/hunts/[id]`,
   `POST /api/hunts/[id]/run`.
+- **Server-only part** (`lib/hunt-runner.ts`): `runHunt`, `runHuntWithinLimit`, `dueHunts`, `pruneHuntRuns`. They reach the notification outbox (`node:crypto`), so they live apart from `lib/hunt.ts`, which client components import (the form, `lib/hunt-view.ts`). `tests/unit/client-bundle-imports.test.ts` fails when a `"use client"` file reaches a Node built-in or Prisma (#926).
 - **Scheduler**: `GET /api/cron/run-hunts` (CRON_SECRET) runs the due scheduled hunts and
   prunes history.
 - **Graduation** (#618): `POST /api/hunts/[id]/graduate` (`lib/hunt-graduation.ts`) answers a

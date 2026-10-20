@@ -127,8 +127,9 @@ Slice 5, as ADR-0033 re-shaped it (a manifest of its own, not a content-manifest
 server half is built: the signed `SnapshotManifest`, the builder with its guards, the cron, the two
 agent endpoints and the public test signer (`common-set-snapshot-format.md`, "Delivery"). The agent
 half is built too: `updater::snapshot` (the `snapshot` key role, verification, freshness, maximum
-age) and the fetch loop in `agent run`, off unless the build embeds a `snapshot` key. Slice 6
-(lab run and calibration) is what is left. Production use waits on the custody of the `snapshot` key
+age) and the fetch loop in `agent run`, off unless the build embeds a `snapshot` key. Slice 6's lab
+run was done on 2026-10-20 (two hosts, the test key, comment on #76); the calibration on fleet
+data is what is left. Production use waits on the custody of the `snapshot` key
 (#753) and on tenant binding.
 
 ## Not in this plan
