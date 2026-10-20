@@ -54,3 +54,31 @@ written cannot drift from the events it is a projection of. `tests/unit/graph.te
 still proves the "rebuild from events" property the issue's acceptance criteria
 ask for — computing the same facts twice, or in a different order, is identical
 — because there is nothing to drop and replay in the first place.
+
+## Decision, 2026-10-20: the graph stays computed on read (#72 box 3)
+
+The third "Done when" box of #72 asked for "rebuild-from-events proven (drop projection, replay,
+identical graph)". With nothing persisted there is no projection to drop, so the box is read as
+what the design guarantees: **the graph is a pure function of the stored detections and
+sightings, and recomputing it is identical, whatever the order the rows are read in.** That is
+what `tests/unit/graph.test.ts` ("caseSubgraph and hashPivot are rebuildable") shows; no
+integration test is added, since it would only repeat it against a database.
+
+Why not a materialized store now:
+
+- **It needs the event archive first.** Replaying "from events" requires events to be kept, and an
+  accepted event is counted and then dropped until `server/datalake` (#77) exists.
+- **A store that is never written cannot drift.** A projection adds state that has to be kept
+  consistent, bounded by a retention policy and proven against its source; nothing consumes that
+  guarantee today. The four consumers (case subgraph, blast radius for #62, hunt pivots, ADR-0035's
+  neighbours) are all served by the read-time functions, and boxes 1 and 2 passed on two live hosts
+  that way.
+- **Cost against benefit:** a schema, a retention rule, a continuous ingestion path and a replay
+  test, for a property no consumer reads.
+
+What this gives up, stated plainly: the graph is only as complete as what is stored (an event that
+fired no rule is absent, apart from the prevalence counts), and **it cannot be rebuilt as of a past
+date**. Reopen the question, as the issue "materialize the entity graph", when one of these holds:
+`server/datalake` (#77) exists; a consumer needs the graph as of a past time (historical hunts in
+#61, a training set built from fleet history in #640); or the read-time cost becomes a problem, for
+example a pivot that keeps hitting `MAX_PIVOT_HOSTS`.

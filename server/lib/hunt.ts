@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { notifyHuntNewMatches } from "@/lib/notify/hunt-matches";
 
 /**
  * Saved hunts (issue #61, ADR-0025).
@@ -193,54 +194,111 @@ export function describeRunError(error: unknown): string {
 
 export type RunTrigger = "manual" | "schedule";
 
+type HuntToRun = { id: string; tenantId: string; version: number; query: unknown };
+
 /**
  * Runs a hunt and appends its HuntRun. A failing query (timeout, database error) is
  * recorded on the run, not thrown: the history says the hunt could not run, which is
  * itself worth knowing on a schedule.
+ *
+ * The run's row is written when it starts (`finishedAt` null) and completed when it
+ * ends, so a run in flight is visible in the history and counted against the tenant's
+ * allowance. A run whose server died is left with `finishedAt` null; it is never taken
+ * for the previous run (see `newSince` below).
  */
 export async function runHunt(
   prisma: PrismaClient,
-  hunt: { id: string; tenantId: string; version: number; query: unknown },
+  hunt: HuntToRun,
   trigger: RunTrigger,
   now: Date = new Date(),
   options: ExecuteOptions = {}
 ) {
+  // With no limit a run is always started, so this is never null.
+  return (await startAndExecute(prisma, hunt, trigger, now, options, undefined))!;
+}
+
+/**
+ * Like `runHunt`, but starts the run only if `tenantId` has started fewer than `limit`
+ * runs in the last minute, and returns null when it has. The check and the insert of the
+ * run's row are one step under a per-tenant lock, so requests sent together cannot all
+ * see "below the limit" and all run: the limit holds for parallel requests, not only for
+ * runs chained one after another.
+ */
+export async function runHuntWithinLimit(
+  prisma: PrismaClient,
+  hunt: HuntToRun,
+  trigger: RunTrigger,
+  limit: number = MAX_RUNS_PER_TENANT_PER_MINUTE,
+  now: Date = new Date(),
+  options: ExecuteOptions = {}
+) {
+  return startAndExecute(prisma, hunt, trigger, now, options, limit);
+}
+
+async function startAndExecute(
+  prisma: PrismaClient,
+  hunt: HuntToRun,
+  trigger: RunTrigger,
+  now: Date,
+  options: ExecuteOptions,
+  limit: number | undefined
+) {
+  // The previous run is the last one that produced a result: a run that is still going,
+  // or that never finished, has nothing to compare with and must not move the baseline.
   const previous = await prisma.huntRun.findFirst({
-    where: { huntId: hunt.id, tenantId: hunt.tenantId, error: null },
+    where: { huntId: hunt.id, tenantId: hunt.tenantId, error: null, finishedAt: { not: null } },
     orderBy: { startedAt: "desc" },
     select: { startedAt: true },
   });
-  const base = {
-    huntId: hunt.id,
-    tenantId: hunt.tenantId,
-    startedAt: now,
-    queryVersion: hunt.version,
-    query: (hunt.query ?? {}) as Prisma.InputJsonValue,
-    trigger,
-  };
+  const started = await prisma.$transaction(
+    async (tx) => {
+      if (limit !== undefined) {
+        // Serializes the count and the insert for this tenant only. Held until the
+        // transaction ends, which is a few milliseconds: the search runs after it.
+        await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`hunt_runs:${hunt.tenantId}`}))`);
+        const recent = await tx.huntRun.count({
+          where: { tenantId: hunt.tenantId, startedAt: { gt: new Date(now.getTime() - 60_000) } },
+        });
+        if (recent >= limit) return null;
+      }
+      return tx.huntRun.create({
+        data: {
+          huntId: hunt.id,
+          tenantId: hunt.tenantId,
+          startedAt: now,
+          queryVersion: hunt.version,
+          query: (hunt.query ?? {}) as Prisma.InputJsonValue,
+          sampleDetectionIds: [],
+          trigger,
+        },
+      });
+    },
+    { timeout: HUNT_TRANSACTION_TIMEOUT_MS, maxWait: HUNT_TRANSACTION_TIMEOUT_MS }
+  );
+  if (!started) return null;
   try {
     // Validated here, inside the try, so one hunt whose stored query no longer parses
     // is a failed run in its history and not an error that stops the cron's batch.
     const query = parseHuntQuery(hunt.query);
     const result = await executeHunt(prisma, hunt.tenantId, query, now, previous?.startedAt ?? null, options);
-    return prisma.huntRun.create({
+    const run = await prisma.huntRun.update({
+      where: { id: started.id },
       data: {
-        ...base,
         finishedAt: new Date(),
         matchCount: result.matchCount,
         newMatchCount: result.newMatchCount,
         sampleDetectionIds: result.sample,
       },
     });
+    // After the run is recorded. `notifyHuntNewMatches` does not throw: a notification problem
+    // is logged, never a second (failed) run row for the same run (ADR-0036, #863).
+    await notifyHuntNewMatches(prisma, hunt, run);
+    return run;
   } catch (error) {
     console.error("Hunt run failed:", hunt.id, error);
-    return prisma.huntRun.create({
-      data: {
-        ...base,
-        finishedAt: new Date(),
-        sampleDetectionIds: [],
-        error: describeRunError(error),
-      },
+    return prisma.huntRun.update({
+      where: { id: started.id },
+      data: { finishedAt: new Date(), sampleDetectionIds: [], error: describeRunError(error) },
     });
   }
 }
@@ -264,18 +322,6 @@ export async function dueHunts(prisma: PrismaClient, now: Date = new Date()) {
     const intervalMs = (hunt.scheduleMinutes as number) * 60_000;
     return !lastStart || now.getTime() - lastStart.getTime() >= intervalMs;
   });
-}
-
-/**
- * True when `tenantId` has already started `MAX_RUNS_PER_TENANT_PER_MINUTE` runs in the
- * last minute. Read from the history table, so it needs no extra state and holds across
- * server instances; it bounds the cost of chaining manual runs of expensive searches.
- */
-export async function runLimitReached(prisma: PrismaClient, tenantId: string, now: Date = new Date()): Promise<boolean> {
-  const recent = await prisma.huntRun.count({
-    where: { tenantId, startedAt: { gt: new Date(now.getTime() - 60_000) } },
-  });
-  return recent >= MAX_RUNS_PER_TENANT_PER_MINUTE;
 }
 
 /** Deletes all but the newest `keep` runs of every hunt; returns how many went. */

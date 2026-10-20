@@ -87,7 +87,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1071 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/reverse_shell.yml` |
-| T1071.004 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1071.004 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/stateless.rs` |
 | T1105 | 1, 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs`, `yara:rules/yara/lab/synthaea_lab_payload.yar` |
 | T1571 | 3 | `rules:crates/rules/src/state.rs` |
 

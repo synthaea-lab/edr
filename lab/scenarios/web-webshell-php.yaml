@@ -25,8 +25,42 @@ notes: >
   `executed directly by ... php-fpm8.4 (service)`. Seen once in a longer run that sent other
   signature requests first: the alert paired the shell with an earlier 404 request 11 s away
   instead of this one, which the log line (written after the response) reaches the agent just
-  after the shell. Not reproduced when the scenario runs alone.
+  after the shell. Not reproduced when the scenario runs alone. Fixed by #807 (merged 2026-10-14): a shell
+  is paired only with a request read from its time through 3 s after it, so an earlier 404 can no
+  longer be named; see the #807 re-run below.
   Validated 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68 + PHP-FPM 8.4.26 (workers run as `apache`, the
-  shell answers as `httpd_t`), access log /var/log/httpd/access_log: T1505.003 names the request
+  shell answers as `httpd_t`; agent `665dc8d`, #820, with inline-fix.diff, before #807), access log /var/log/httpd/access_log: T1505.003 names the request
   (GET /uploads/c99.php param=cmd, status 200, 0 s), T1059 reports `executed directly by ...
   php-fpm (service)`. No change to the stock SELinux policy was needed.
+  Validated 2026-10-15 on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main `b28935b` plus #845's diff, php-fpm 8.0.30 (workers as `apache`, httpd_t),
+  access log /var/log/httpd/access_log: T1505.003 names the request (GET /uploads/c99.php param=cmd,
+  status 200, 0 s), T1059 reports `executed directly by ... php-fpm (service)`.
+  The #807 lab re-run (this scenario run after other signature requests, here after
+  web-webshell.sh) on Fedora 43 and on Rocky 9.8, agent of main (`b28935b` plus #845, the static build; no
+  separate Fedora hash was kept): the alert names the status-200 request
+  (0 s) on both, not an earlier 404.
+  Not a scenario, a manual run on Fedora 43 (2026-10-15): a web server in a container. Rootful podman
+  5.8.8, agent `665dc8d` (#820, with inline-fix.diff: a build from before #807), image docker.io/library/php:8.4-apache, port 8090, /var/www/html and /var/log/apache2 bind-mounted
+  from the host (with `CustomLog /var/log/apache2/access.log combined`), `access_combined` source on the
+  mounted log, the same one-line PHP shell. T1059 `executed directly by ppid=... comm=apache2 (service)` and
+  T1505.003 `0s from a WebshellLike request (GET /uploads/c99.php param=cmd, status 200, client
+  10.88.0.1)` fire (the client is the podman bridge, not 127.0.0.1). That wording is the one of the
+  `665dc8d` build; since #807 main words the same alert `<delta>s after a WebshellLike request`
+  (crates/correlator/src/rules.rs), so the quote is not what a current agent prints. The missing
+  attribution was tracked as #894 and is fixed on main by #904. In that first run the exec event
+  carried no container attribution: the container's cgroup is `machine.slice/libpod-<id>.scope/container`,
+  and the id extraction in crates/sensors/linux/userspace/src/container.rs (where the exec events are
+  attributed, sensor.rs:325; the uprobes copy has the same logic) only knew `docker-<id>.scope` and
+  `cri-containerd-<id>.scope`.
+  Re-run with a current agent, 2026-10-20 (Fedora 43, kernel 7.2.9, SELinux Enforcing, rootful podman
+  5.8.8, `php:8.4-apache` on port 8090 with the same two bind mounts; the agent is the VM's lab tree
+  built 2026-10-19 with #904's change, binary sha256 `aa7ee4f6...`; `rules.rs` and `sensor.rs` of that
+  tree are identical to main's and the two `container.rs` differ only in test formatting; run as a
+  root script, local mode, no `--enable-kill`): T1059 `pid=... comm=sh executed directly by ppid=...
+  comm=apache2 (service)` and T1505.003 `shell spawned by a web server 0s after a WebshellLike
+  request (GET /uploads/c99.php param=cmd, status 200, client 10.88.0.1)` fire, so the quote above is
+  now the current wording. The exec events of the web server's `sh` (`sh -c -- id`) and of its `id`
+  carry `meta.container.id`, equal to the id in the container's cgroup (`libpod-2a41b9f6...`). The
+  alerts themselves do not name the container: the id is on the events only. The apache2 process was
+  started before the agent, so its own exec is not in the run. Not covered: rootless podman, a build
+  with a recorded commit hash (the lab tree has no `.git`), Rocky.

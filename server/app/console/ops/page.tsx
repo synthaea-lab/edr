@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { loadFleet, type FleetAgent } from "@/lib/fleet";
 import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
 import type { FleetStatus } from "@/lib/fleet-health";
+import { loadIngestHealth, type AgentIngestHealth } from "@/lib/ingest-stats";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -39,6 +40,7 @@ export default async function FleetHealthPage() {
 
   const agents = await loadFleet(prisma, tenantId);
   const { rings, truncated } = await loadRings(prisma, tenantId);
+  const ingest = await loadIngestHealth(prisma, tenantId, new Date());
 
   return (
     <div>
@@ -80,6 +82,7 @@ export default async function FleetHealthPage() {
           </table>
         </div>
       )}
+      <IngestPanel agents={agents} ingest={ingest} />
     </div>
   );
 }
@@ -179,4 +182,81 @@ function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boole
       )}
     </section>
   );
+}
+
+/**
+ * Ingest health (#899), in its own table so that it stays apart from `fleetStatus`: a refusal rate
+ * or a stale kind of data does not make a host degraded (that is an open question in the issue).
+ */
+function IngestPanel({
+  agents,
+  ingest,
+}: {
+  agents: FleetAgent[];
+  ingest: Map<string, AgentIngestHealth>;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <section className="mt-8" aria-label="Ingest health">
+      <h3 className="mb-1 text-lg font-semibold text-gray-900">Ingest health</h3>
+      <p className="mb-2 text-xs text-gray-600">
+        What the server took from each agent, by kind of data. Refused and late are counted over the
+        current and previous hour. Shown, not alerted on, and it does not change a host's status.
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
+            <tr>
+              <th className="px-4 py-2">Host</th>
+              <th className="px-4 py-2">Last events batch</th>
+              <th className="px-4 py-2">Last detection</th>
+              <th className="px-4 py-2">Last beacon</th>
+              <th
+                className="px-4 py-2"
+                title="Requests refused after the agent was identified, and entries dropped as malformed. The 5xx count is best effort: it under-counts exactly when the database is down, because the count is written to the same database."
+              >
+                Refused / skipped (1 h)
+              </th>
+              <th
+                className="px-4 py-2 text-right"
+                title="Ingest time minus event time. A reconnecting agent uploads events it spooled while offline, so a high worst case right after a reconnection is expected, not a server fault."
+              >
+                Ingest lag (1 h)
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {agents.map((a) => {
+              const h = ingest.get(a.id);
+              return (
+                <tr key={a.id}>
+                  <td className="px-4 py-2 font-medium text-gray-900">{a.hostname ?? a.id}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.events)}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.detection)}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.beacon)}</td>
+                  <td className="px-4 py-2 text-gray-700">
+                    {h ? `${h.refused4xx} 4xx, ${h.refused5xx} 5xx, ${h.skipped} skipped` : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {h?.lagMaxMs == null || h.lagMeanMs == null
+                      ? "—"
+                      : `${seconds(h.lagMeanMs)} mean, ${seconds(h.lagMaxMs)} max`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** "never" is a fact (no accepted request retained), "—" would read as unknown. */
+function when(iso: string | null | undefined): string {
+  return iso ? new Date(iso).toLocaleString() : "never";
+}
+
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)} s`;
 }
