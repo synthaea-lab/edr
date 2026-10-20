@@ -27,6 +27,7 @@ model Tenant {
   corpusVersions      CorpusVersion[]
   corpusSamples       CorpusSample[]
   prevalenceSightings PrevalenceSighting[]
+  ingestStats         IngestStat[]
   hunts               Hunt[]
   huntRuns            HuntRun[]
   decoyTokens         DecoyToken[]
@@ -338,6 +339,34 @@ model PrevalenceSighting {
   @@unique([tenantId, kind, key, agentId])
   @@index([tenantId, kind, key])
   @@map("prevalence_sightings")
+}
+
+// Ingest health (issue #899, lib/ingest-stats.ts): what /api/ingest/* took, skipped and refused
+// per agent, kind (events | detection | beacon) and hour. Best-effort counters; hourly rows are
+// pruned by the prune-prevalence cron.
+model IngestStat {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  agentId        String    @map("agent_id")
+  kind           String
+  bucket         DateTime
+  received       Int       @default(0)
+  accepted       Int       @default(0)
+  skipped        Int       @default(0)
+  refused4xx     Int       @default(0) @map("refused_4xx")
+  refused5xx     Int       @default(0) @map("refused_5xx")
+  // Event lag (ingest time minus event time), ms. BigInt: a reconnecting agent uploads events
+  // weeks old. Sum and count give the mean; a bucket row cannot give a median.
+  lagSumMs       BigInt    @default(0) @map("lag_sum_ms")
+  lagCount       Int       @default(0) @map("lag_count")
+  lagMaxMs       BigInt?   @map("lag_max_ms")
+  lastAcceptedAt DateTime? @map("last_accepted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, agentId, kind, bucket])
+  @@index([tenantId, bucket])
+  @@map("ingest_stats")
 }
 
 // Saved hunt (issue #61): a versioned, structured query over the tenant's

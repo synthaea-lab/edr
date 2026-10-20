@@ -5,8 +5,13 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { extractObservations, recordObservations } from "@/lib/prevalence";
 import { parseDetectionPayload } from "@/lib/detection-payload";
+import { acceptedOutcome, recordIngest, refusedOutcome, lagOf } from "@/lib/ingest-stats";
 
 export async function POST(req: NextRequest) {
+  // Known once the certificate is checked: a refusal or failure after that is counted for it (#899).
+  let known: { id: string; tenantId: string } | null = null;
+  const count = (outcome: ReturnType<typeof acceptedOutcome>, now = new Date()) =>
+    known ? recordIngest(prisma, known.tenantId, known.id, "detection", outcome, now) : Promise.resolve();
   try {
     // SECURITY: Verify request came through nginx proxy
     // Prevents header spoofing attacks
@@ -54,6 +59,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    known = agent;
+
     // Parse and validate detection payload
     const body = await req.json();
     const detection = parseDetectionPayload(body);
@@ -85,6 +92,7 @@ export async function POST(req: NextRequest) {
         select: { ingestPayloadHash: true },
       });
       if (!existing || existing.ingestPayloadHash !== ingestPayloadHash) {
+        await count(refusedOutcome(409, 1));
         return NextResponse.json(
           { error: "Idempotency key reused for a different detection" },
           { status: 409 }
@@ -94,6 +102,8 @@ export async function POST(req: NextRequest) {
         where: { id: agent.id },
         data: { lastSeen: new Date() },
       });
+      // A replay the server already had: taken, and not late (it was counted the first time).
+      await count(acceptedOutcome(1, 0, null));
       return NextResponse.json({ status: "accepted" });
     }
 
@@ -118,17 +128,21 @@ export async function POST(req: NextRequest) {
       data: { lastSeen: new Date() },
     });
 
+    const now = new Date();
+    await count(acceptedOutcome(1, 0, lagOf([detection.timestamp], now)), now);
     return NextResponse.json({ status: "accepted" });
   } catch (error) {
     console.error("Detection ingest error:", error);
 
     if (error instanceof z.ZodError) {
+      await count(refusedOutcome(400, 1));
       return NextResponse.json(
         { error: "Invalid payload", details: error.errors },
         { status: 400 }
       );
     }
 
+    await count(refusedOutcome(500, 1));
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

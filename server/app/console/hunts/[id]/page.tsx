@@ -12,6 +12,7 @@ import {
   STATE_STYLE,
 } from "@/lib/hunt-view";
 import { RunHuntButton } from "@/components/RunHuntButton";
+import { GraduateHuntButton } from "@/components/GraduateHuntButton";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
@@ -88,6 +89,8 @@ export default async function HuntPage({ params }: { params: { id: string } }) {
           </dd>
         </div>
       </dl>
+
+      <GraduateHuntButton huntId={hunt.id} />
 
       <h3 className="mb-2 text-lg font-semibold text-gray-900">History</h3>
       {runs.length === 0 ? (
