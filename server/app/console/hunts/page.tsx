@@ -1,3 +1,4 @@
+import { DeleteHuntButton } from "@/components/DeleteHuntButton";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { describeQuery, describeSchedule, formatTime, runState, STATE_LABEL, STATE_STYLE } from "@/lib/hunt-view";
@@ -75,6 +76,7 @@ export default async function HuntsPage() {
                 <th className="px-4 py-2">Last run</th>
                 <th className="px-4 py-2 text-right">Matches</th>
                 <th className="px-4 py-2 text-right">New</th>
+                <th className="px-4 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -113,6 +115,9 @@ export default async function HuntsPage() {
                       {from}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-900">{withResult ? withResult.newMatchCount : "–"}</td>
+                    <td className="px-4 py-2 text-right">
+                      <DeleteHuntButton huntId={hunt.id} name={hunt.name} />
+                    </td>
                   </tr>
                 );
               })}

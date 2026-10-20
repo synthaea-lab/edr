@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   RUNNING_GRACE_MS,
+  deleteConfirmation,
+  deleteResponseMessage,
   draftDownloadName,
   graduationBody,
   graduationResult,
@@ -205,5 +207,26 @@ describe("draftDownloadName", () => {
   it("is the file's own name, never a path", () => {
     expect(draftDownloadName("rules/sigma/linux/x.yml")).toBe("x.yml");
     expect(draftDownloadName("x.yml")).toBe("x.yml");
+  });
+});
+
+describe("deleteConfirmation", () => {
+  it("names the hunt and says its history goes with it and that it cannot be undone", () => {
+    const text = deleteConfirmation("PowerShell from Office");
+    expect(text).toContain("“PowerShell from Office”");
+    expect(text).toMatch(/run history/);
+    expect(text).toMatch(/cannot be undone/);
+  });
+});
+
+describe("deleteResponseMessage", () => {
+  it("is null when the hunt is gone, whether this request or an earlier one removed it", () => {
+    expect(deleteResponseMessage(204, null)).toBeNull();
+    expect(deleteResponseMessage(404, { error: "Hunt not found" })).toBeNull();
+  });
+
+  it("gives the server's reason for any other answer, else the status", () => {
+    expect(deleteResponseMessage(500, { error: "Internal server error" })).toBe("Internal server error");
+    expect(deleteResponseMessage(502, null)).toBe("Request failed with status 502");
   });
 });
