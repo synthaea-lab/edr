@@ -25,12 +25,17 @@ export async function GET(req: NextRequest) {
 
     // Create cases for silent agents
     for (const agent of silentAgents) {
-      // Check if we already have an open case for this agent
+      // Check if we already have an open case for this agent. The title carries the host
+      // name when there is one, so it cannot be searched by id (#901): the description
+      // always ends with the enrollment id, which is unique per agent.
       const existingCase = await prisma.case.findFirst({
         where: {
           tenantId: agent.tenantId,
-          title: { contains: agent.id },
           status: "open",
+          OR: [
+            { title: { contains: agent.id } },
+            { description: { contains: `Enrollment ID: ${agent.enrollmentId}` } },
+          ],
         },
       });
 

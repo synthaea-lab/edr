@@ -1,5 +1,5 @@
 name: dns-exfil
-platform: windows
+platform: linux
 script: dns-exfil.sh
 simulates: >
   Many DNS queries in one correlation window under a single parent domain, each with
@@ -7,16 +7,34 @@ simulates: >
   iodine/dnscat2/DNSExfiltrator tunnelling data through DNS.
 expected_detections:
   - technique: "T1048.003/T1071.004"
-    rule: rule_dns_exfil   # crates/correlator/src/rules.rs — source-agnostic, but only
-                           # Windows ETW DNS-Client (EID 3008) feeds it today
+    rule: rule_dns_exfil   # crates/correlator/src/rules.rs — source-agnostic; fed by the
+                           # Windows ETW DNS-Client (EID 3008) and, since #397, the Linux
+                           # getaddrinfo(3) uprobe (issue #267 Phase 1)
     min_count: 1
     tolerance: 0
 notes: >
-  No-op on Linux: there is no Linux DNS sensor yet, so this scenario only produces a
-  detection when run with the agent on a Windows lab host (lab/MATRIX.md) — the script
-  itself is POSIX (dig/nslookup/getent) and portable, but the observing agent must be
-  Windows. Tagged platform: windows for that reason, not because the driving script
-  needs it. Will apply unchanged once a Linux DNS sensor exists.
+  Retagged platform: linux (was windows) and the driving script rewritten, 2026-10-20 —
+  the Linux getaddrinfo uprobe (#397, merged 2026-09-24) made the old "no Linux DNS
+  sensor yet" rationale for the windows tag stale, and a live run on fedora-lab the same
+  day turned up two independent bugs in the old script, neither related to that sensor:
 
-  Confirmed 2026-09-18 (WSL2, kernel 6.6.114-microsoft-standard-WSL2): ran the script
-  against a live agent, zero alerts produced — matches the no-op expectation above.
+  1. `rand_label`'s `tr <$'/dev/urandom' | head -c 36` died from SIGPIPE under
+     `set -o pipefail` on the very first call — the script never sent a single query.
+  2. Once that was fixed, none of `dig`/`nslookup`/`getent hosts` (the old `resolve`'s
+     fallback chain) produced a single captured event: none of the three call glibc's
+     public `getaddrinfo(3)`, which is the only symbol the uprobe hooks. Separately, even
+     if one of them had, forking a fresh process per query split the 16 queries across 16
+     pids, and `rule_dns_exfil` aggregates per (pid, generation) — never enough under any
+     one pid to cross `DNS_TUNNEL_MIN_QUERIES` (10).
+
+  The script now runs every query from one `python3` process (`socket.getaddrinfo`, which
+  CPython implements via that same libc symbol). Confirmed live, fedora-lab, 2026-10-20,
+  agent built from this branch with `--enable-dns-capture`: 16/16 queries captured as
+  `DnsQuery` events under one pid, `rule_dns_exfil` fired at the 10th
+  ("T1048.003/T1071.004 — pid=14507 comm=python3: 10 distinct high-entropy subdomains of
+  example.invalid within the window").
+
+  Not re-validated against a native Windows resolver + Windows agent since this platform
+  switch — the 2026-09-18 WSL2 run this replaced drove its DNS calls through WSL2's own
+  Linux network stack, never through the Windows resolver the ETW sensor watches, so it
+  never actually exercised the Windows path either; that confirmation is still open.

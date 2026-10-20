@@ -125,6 +125,65 @@ export function ownerLabel(ownerId: string, userId: string | null | undefined): 
   return userId && ownerId === userId ? "you" : "another member";
 }
 
+/** What the graduation form holds (#618): the platform, and an optional benign lookalike. */
+export type GraduationForm = {
+  platform: "linux" | "windows" | "macos";
+  negativeImage: string;
+  negativeCmdline: string;
+  negativeNote: string;
+};
+
+/**
+ * The body of `POST /api/hunts/[id]/graduate` from the form. A negative sample needs both its
+ * image and its command line: with one of them it is refused here, not dropped, because a
+ * draft made without the negative the person typed would look checked and not be.
+ */
+export function graduationBody(
+  form: GraduationForm
+): { ok: true; body: Record<string, unknown> } | { ok: false; message: string } {
+  const image = form.negativeImage.trim();
+  const cmdline = form.negativeCmdline.trim();
+  const note = form.negativeNote.trim();
+  if (!image && !cmdline) return { ok: true, body: { platform: form.platform } };
+  if (!image || !cmdline) {
+    return { ok: false, message: "A benign lookalike needs both the image and the command line, or neither." };
+  }
+  return { ok: true, body: { platform: form.platform, negative: { image, cmdline, ...(note && { note }) } } };
+}
+
+export type DraftFile = { path: string; content: string };
+
+/** What the draft button shows of the server's answer. */
+export type GraduationResult =
+  | { ok: true; files: DraftFile[]; todo: string[] }
+  | { ok: false; message: string; problems: string[] };
+
+/** The answer of the graduate endpoint: a draft's files and to-do list, or why there is none. */
+export function graduationResult(status: number, body: unknown): GraduationResult {
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  if (status >= 200 && status < 300) {
+    const files = record.files;
+    const todo = record.todo;
+    const wellFormed =
+      Array.isArray(files) &&
+      files.length > 0 &&
+      files.every((f) => typeof f?.path === "string" && typeof f?.content === "string") &&
+      Array.isArray(todo) &&
+      todo.every((t) => typeof t === "string");
+    return wellFormed
+      ? { ok: true, files: files as DraftFile[], todo: todo as string[] }
+      : { ok: false, message: "The server's answer was not a draft", problems: [] };
+  }
+  const problems = Array.isArray(record.problems) ? record.problems.filter((p): p is string => typeof p === "string") : [];
+  const message = typeof record.error === "string" && record.error ? record.error : `Request failed with status ${status}`;
+  return { ok: false, message, problems };
+}
+
+/** The name a downloaded draft file gets: the file's own, not its path in the content repo. */
+export function draftDownloadName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1);
+}
+
 /** What the browser asks before a hunt is deleted: the run history goes with it (ADR-0025). */
 export function deleteConfirmation(name: string): string {
   return `Delete the hunt “${name}” and its run history? This cannot be undone.`;

@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 
 const db = vi.hoisted(() => ({
   prevalenceSighting: { groupBy: vi.fn(), deleteMany: vi.fn() },
+  ingestStat: { deleteMany: vi.fn() },
   case: { findFirst: vi.fn() },
   caseNarrative: { findFirst: vi.fn() },
   $executeRaw: vi.fn(),
@@ -169,6 +170,7 @@ describe("GET /api/cases/[id] prevalence", () => {
     vi.clearAllMocks();
     db.caseNarrative.findFirst.mockResolvedValue(null);
     db.prevalenceSighting.groupBy.mockResolvedValue([]);
+    db.ingestStat.deleteMany.mockResolvedValue({ count: 0 });
   });
 
   const call = (tenant = "t1") =>

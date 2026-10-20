@@ -3,6 +3,9 @@ import {
   RUNNING_GRACE_MS,
   deleteConfirmation,
   deleteResponseMessage,
+  draftDownloadName,
+  graduationBody,
+  graduationResult,
   SESSION_EXPIRED_MESSAGE,
   describeQuery,
   describeSchedule,
@@ -143,6 +146,67 @@ describe("ownerLabel", () => {
     expect(ownerLabel("u1", "u1")).toBe("you");
     expect(ownerLabel("u1", "u2")).toBe("another member");
     expect(ownerLabel("u1", null)).toBe("another member");
+  });
+});
+
+describe("graduationBody", () => {
+  it("sends the platform alone when no negative sample is given", () => {
+    expect(graduationBody({ platform: "linux", negativeImage: "", negativeCmdline: "", negativeNote: "" })).toEqual({
+      ok: true,
+      body: { platform: "linux" },
+    });
+  });
+
+  it("sends the negative sample when both its fields are given, trimmed, with the note only if there is one", () => {
+    expect(
+      graduationBody({ platform: "windows", negativeImage: " C:\\a.exe ", negativeCmdline: " a /x ", negativeNote: " " })
+    ).toEqual({ ok: true, body: { platform: "windows", negative: { image: "C:\\a.exe", cmdline: "a /x" } } });
+    expect(
+      graduationBody({ platform: "macos", negativeImage: "/bin/a", negativeCmdline: "a", negativeNote: "admin script" })
+    ).toEqual({ ok: true, body: { platform: "macos", negative: { image: "/bin/a", cmdline: "a", note: "admin script" } } });
+  });
+
+  it("refuses a negative sample with only one of its two fields instead of dropping it silently", () => {
+    for (const [image, cmdline] of [["/bin/a", ""], ["", "a"]]) {
+      const r = graduationBody({ platform: "linux", negativeImage: image, negativeCmdline: cmdline, negativeNote: "" });
+      expect(r).toEqual({ ok: false, message: expect.stringMatching(/both the image and the command line/) });
+    }
+  });
+});
+
+describe("graduationResult", () => {
+  const files = [
+    { path: "rules/sigma/linux/x.yml", content: "title: x\n" },
+    { path: "rules/sigma/linux/x.samples.json", content: "{}\n" },
+  ];
+
+  it("reads the files and the to-do list of a draft", () => {
+    expect(graduationResult(200, { files, todo: ["write falsepositives"] })).toEqual({
+      ok: true,
+      files,
+      todo: ["write falsepositives"],
+    });
+  });
+
+  it("gives the problems of a hunt that cannot be drafted, after the reason", () => {
+    const r = graduationResult(422, { error: "No draft rule can be made from this hunt", problems: ["no exec detection", "no text"] });
+    expect(r).toEqual({ ok: false, message: "No draft rule can be made from this hunt", problems: ["no exec detection", "no text"] });
+  });
+
+  it("falls back to the status when the answer says nothing, and ignores files of the wrong shape", () => {
+    expect(graduationResult(500, null)).toEqual({ ok: false, message: "Request failed with status 500", problems: [] });
+    expect(graduationResult(200, { files: [{ path: 3 }], todo: "x" })).toEqual({
+      ok: false,
+      message: "The server's answer was not a draft",
+      problems: [],
+    });
+  });
+});
+
+describe("draftDownloadName", () => {
+  it("is the file's own name, never a path", () => {
+    expect(draftDownloadName("rules/sigma/linux/x.yml")).toBe("x.yml");
+    expect(draftDownloadName("x.yml")).toBe("x.yml");
   });
 });
 
