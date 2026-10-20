@@ -75,6 +75,8 @@ recorded in the manifest entry's metadata (ADR-0020).
 - The file is read whole, capped at 64 MiB (the manifest allows 100 MiB per artifact; the
   server caps the snapshot it builds well below that), and swapped as one value.
 
-The path is fixed on the agent. The artifact store on the server is keyed by path and shared
-across tenants (slice 5 of `fleet-prevalence-snapshot-plan.md`), so slice 5 has to deliver a
-per-tenant artifact at this agent-side path, not a per-tenant path.
+The path is fixed on the agent: every tenant's manifest can use the same `path` for its own
+snapshot entry, because the server's artifact store is keyed by content hash, not path, and
+shared across tenants (#804) — two tenants' snapshots land under their own hash automatically,
+since their bytes differ, with no tenant-unique naming needed on either side (slice 5 of
+`fleet-prevalence-snapshot-plan.md`).

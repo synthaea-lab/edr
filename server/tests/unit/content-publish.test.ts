@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -42,12 +42,15 @@ function manifestFor(overrides: Record<string, unknown> = {}) {
   );
 }
 
-/** Puts a manifest at storage://manifests/<name> and the given artifacts under storage/artifacts. */
+/**
+ * Puts a manifest at storage://manifests/<name> and the given artifacts' bytes in
+ * storage/artifacts, under their own hash (#804) — the map's keys are only there to make
+ * call sites at tests below readable, the store itself does not key on them.
+ */
 function store(manifest: Buffer, artifacts: Record<string, Buffer>, name = "content-canary_0-v5.json") {
   writeFileSync(join(sandbox, "storage", "manifests", name), manifest);
-  for (const [p, bytes] of Object.entries(artifacts)) {
-    mkdirSync(join(sandbox, "storage", "artifacts", p, ".."), { recursive: true });
-    writeFileSync(join(sandbox, "storage", "artifacts", p), bytes);
+  for (const bytes of Object.values(artifacts)) {
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(bytes)), bytes);
   }
 }
 
@@ -156,26 +159,17 @@ describe("POST /api/content/release: nothing is published that an agent could no
     expect(db.contentRelease.create).not.toHaveBeenCalled();
   });
 
-  it("refuses a corrective release over a modified path until the earlier bytes are back in the store", async () => {
-    // Release 4 changed rules/x.sigma. The store is keyed by path and shared across releases,
-    // so it holds release 4's bytes; the corrective release lists release 2's hash for that
-    // path. Published anyway, every agent on release 4 would get a 502 on that fetch, pruning
-    // would never run and the bad rule would stay (review of #782).
+  it("publishes a corrective release over a modified path with nothing restored first (#804)", async () => {
+    // Release 2 uploaded RULE_V2 under its own hash; release 4 later changed rules/x.sigma
+    // and uploaded RULE_V4 under ITS hash — content-addressed, so this never touched RULE_V2's
+    // bytes. A corrective release naming RULE_V2's hash for rules/x.sigma again (ADR-0032)
+    // needs nothing put back: those bytes never moved.
     const manifest = manifestFor(); // lists RULE_V2's hash for rules/x.sigma
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
+    store(manifest, GOOD_ARTIFACTS); // RULE_V2 and OTHER, as release 2 (or the test fixture) uploaded them
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(RULE_V4)), RULE_V4); // release 4's separate upload
     const res = await publish(post(publishBody(manifest)));
-    expect(res.status).toBe(422);
-    const { error } = await res.json();
-    expect(error).toContain("rules/x.sigma");
-    expect(error).toMatch(/earlier bytes|put .* back/i);
-    expect(db.contentRelease.create).not.toHaveBeenCalled();
-  });
-
-  it("publishes that corrective release once the earlier bytes have been put back", async () => {
-    const manifest = manifestFor();
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules/x.sigma"), RULE_V2); // restored
-    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.create).toHaveBeenCalledOnce();
   });
 
   it("refuses an entry path that would leave the store", async () => {
@@ -184,6 +178,43 @@ describe("POST /api/content/release: nothing is published that an agent could no
     });
     store(manifest, {});
     expect((await publish(post(publishBody(manifest)))).status).toBe(422);
+  });
+
+  it("refuses an entry sha256 that is not 64 lowercase hex characters, before it ever reaches the filesystem", async () => {
+    // The store now reads an entry by its sha256 as a path component (#804): without the
+    // schema's regex, a crafted manifest could point that read outside storage/artifacts
+    // (review of #835). An empty store already answers 422 "not in the store" for ANY
+    // sha256, traversal or not, which made the original version of this test pass whether
+    // or not the regex existed (SherlockOmss's review): removing the regex left all tests
+    // green. A file genuinely readable at the path the traversal targets, outside
+    // storage/artifacts, makes the two cases diverge: without the regex, the read would
+    // succeed and the loop would move on to the next entry; with it,
+    // `ContentManifest.safeParse` rejects the manifest before any file lookup runs. The
+    // error text is schema wording ("does not match the content manifest schema"), not the
+    // store's ("is not in the store") — asserting on it is what actually pins the regex.
+    // A per-run unique name, not a fixed one: `sandbox`'s parent is the real project
+    // directory (`originalCwd`), shared by every test file and worker, not a sandbox
+    // of its own — a fixed name would collide under parallel test execution, and a
+    // crash before the `finally` below would leave a stray file for the next run to
+    // trip over (review of #835).
+    const traversalName = `escaped-by-835-test-${randomBytes(8).toString("hex")}.txt`;
+    const traversalTarget = join(sandbox, "..", traversalName);
+    writeFileSync(traversalTarget, "should never be read as an artifact");
+    try {
+      const manifest = manifestFor({
+        entries: [
+          { path: "rules/x.sigma", type: "rule", sha256: `../../../${traversalName}`, size: 1 },
+        ],
+      });
+      store(manifest, {});
+      const res = await publish(post(publishBody(manifest)));
+      const body = await res.json();
+      expect(res.status).toBe(422);
+      expect(body.error).toContain("does not match the content manifest schema");
+      expect(body.error).not.toContain("is not in the store");
+    } finally {
+      rmSync(traversalTarget, { force: true });
+    }
   });
 
   it("answers 409, not 500, when a concurrent publish took the number first", async () => {
