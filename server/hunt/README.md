@@ -14,7 +14,9 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   prunes history.
 - **Graduation** (#618): `POST /api/hunts/[id]/graduate` (`lib/hunt-graduation.ts`) answers a
   draft Sigma rule and its samples file from the hunt's newest finished run, for a person to
-  review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing.
+  review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing. A hunt's
+  page has a "Draft Sigma rule" button (`components/GraduateHuntButton.tsx`) that calls it and
+  shows the files to copy or download, and what a person still has to do.
 - **Console** (`/console/hunts`): the list, a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
   into the API body with `lib/hunt-form.ts`, which runs the same validation as the API. The
@@ -31,6 +33,6 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 - Deleting a hunt from the console (the API has `DELETE`).
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - The raw event archive as a second source (needs `server/datalake`, #77).
-- Graduation beyond the assisted Sigma draft: a console button, the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
+- Graduation beyond the assisted Sigma draft: the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
 - Live endpoint queries (ask one host "what is running right now?") ride the
   `response::live` channel with its policy gates, not a separate mechanism.

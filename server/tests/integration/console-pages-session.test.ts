@@ -208,6 +208,17 @@ describe("console pages read the session with the request's headers (real databa
       expect(html).toMatch(/<td[^>]*>5<\/td>/);
     });
 
+    it("offers to draft a Sigma rule from the hunt, for each platform", async () => {
+      const tenant = await createTestTenant();
+      const h = await hunt(tenant.id, "graduating");
+      activeOrganizationId = tenant.id;
+
+      const html = await render("hunts/[id]/page", { params: { id: h.id } });
+
+      expect(html).toContain("Draft Sigma rule");
+      for (const platform of ["linux", "windows", "macos"]) expect(html).toContain(`value="${platform}"`);
+    });
+
     it("answers not found for another tenant's hunt, without any of its contents", async () => {
       const mine = await createTestTenant();
       const other = await createTestTenant();
