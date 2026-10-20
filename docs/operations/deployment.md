@@ -28,11 +28,16 @@ lost, together with the command to run by hand.
 If a Group Policy manages the advanced audit policy, it can reset these subcategories
 at its next refresh. Include them in that policy.
 
+Three more events need nothing from you: the Event Log service writes them whatever
+the audit policy says.
+- Security 1102: the Security log was cleared.
+- System 104: another log was cleared.
+- System 7045: a service was installed.
+
 ### What you must enable
 
 The sensor reads these Operational channels:
 
-- `System` (7045, service installed)
 - `Microsoft-Windows-AppLocker/EXE and DLL`, `/MSI and Script`, `/Packaged app-Execution`, `/Packaged app-Deployment`
 - `Microsoft-Windows-CodeIntegrity/Operational` (WDAC)
 - `Microsoft-Windows-Windows Defender/Operational`
