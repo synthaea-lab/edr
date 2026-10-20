@@ -72,37 +72,48 @@ Find all calls to `update_belief` and add the `ml_llr` parameter:
 update_belief(&mut belief, bv, now_ns);
 
 // NEW:
-update_belief(&mut belief, bv, None, now_ns);  // Temporarily pass None until agent wiring
+update_belief(&mut belief, bv, None, now_ns);
 ```
 
-Once agent integration (#47) is complete, the agent sink will compute `ml_llr` and pass it through the correlator's public API.
+This `None` is not a placeholder waiting on agent wiring — it is permanent:
+`on_event` always calls `update_belief` with `None` (`engine.rs:286`), and the
+ML term is added separately, after `on_event` returns, by
+`update_belief_with_ml` (point 3 below). Computing the ML score needs the
+belief state `on_event` just built, so it cannot happen inside the same call
+without restructuring the belief update itself — adding it as a second,
+optional call keeps `on_event` usable with no ML scorer loaded at all. See
+`update_belief_with_ml`'s own doc (`engine.rs:470-479`): calling
+`update_belief` a second time here, instead, used to double-count the
+hand-calibrated feature evidence (PR #345 review).
 
-#### 3. Agent Integration Point (Pending #47)
+#### 3. Agent Integration Point (shipped, #47)
 
-**File:** `agent/src/sink.rs` (future work)
+**File:** `agent/src/sink.rs`'s `correlate()`, right after `engine.on_event(event)`.
 
-Wiring pattern:
+Wiring pattern, matching what is actually there:
 
 ```rust
-// After engine.on_event(event)
-if let Some(bv) = engine.behavior_vector_for_pid(pid) {
-    // Try to get ML score
-    let ml_llr = match ml_scorer.score(&engine.bus, pid) {
-        Ok(Some(score)) => Some(ml::correlation::score_to_llr(score)),
+let pid = event.meta().pid;
+let generation = event.meta().process_generation;
+if let Some(ref mut scorer) = *self.ml_scorer.lock().unwrap() {
+    let ml_llr = match scorer.score(engine.bus(), pid, generation) {
+        Ok(Some(score)) => Some(ml::score_to_llr(score)),
         Ok(None) => None,  // Gated (< MIN_EVENT_COUNT)
-        Err(ScorerError::FeatureOutOfBounds { .. }) => {
+        Err(ml::ScorerError::FeatureOutOfBounds { .. }) => {
             // Log OOD rejection for telemetry
-            tracing::warn!("ML scorer rejected OOD vector for pid {pid}");
+            tracing::warn!(pid = pid, "ML scorer OOD rejection");
             None  // Treat OOD as no score
         }
         Err(e) => {
-            tracing::error!("ML scorer error: {e}");
+            tracing::error!(pid = pid, error = %e, "ML scorer error");
             None  // Fail open: skip ML contribution
         }
     };
 
     // Update belief with optional ML LLR
-    engine.update_belief_with_ml(entity_key, bv, ml_llr)?;
+    if let Err(()) = engine.update_belief_with_ml(pid, generation, ml_llr) {
+        // No behavior vector yet for this pid — normal for its first events.
+    }
 }
 ```
 
