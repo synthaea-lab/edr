@@ -248,4 +248,4 @@ entity seen on more than 20 agents joins nothing (software that is everywhere is
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.
-Not run against a lab: only the tests, on one Postgres.
+A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. The join is proven only by its tests, on one Postgres; whether an agent built from `main` sends the hash on exec detections is not checked. Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.
