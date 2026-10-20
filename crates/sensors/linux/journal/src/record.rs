@@ -31,9 +31,15 @@ pub struct JournalRecord {
     /// (`"sshd"`, `"sudo"`, `"su"`, ...). Absent on structured-only sources.
     pub syslog_identifier: Option<String>,
     /// `_COMM` — the emitting process's own name, stamped by journald from the
-    /// kernel's view of the sender (a client cannot set or override a `_`-prefixed
-    /// field). Unlike `SYSLOG_IDENTIFIER`, which the logging client picks freely
-    /// (`logger -t sudo ...`), this says what actually wrote the line (#838 review).
+    /// kernel's view of the sender, which is `/proc/<pid>/comm` — unlike
+    /// `SYSLOG_IDENTIFIER`, the logging client cannot pick this through the log
+    /// *content* (`logger -t sudo ...` still gets `_COMM=logger`). It is **not**
+    /// a full identity guarantee, though: a client still controls what
+    /// `/proc/<pid>/comm` says by what it execs as (`cp /usr/bin/logger
+    /// /tmp/sudo` gets `_COMM=sudo` with no `prctl` needed) — see
+    /// `auth::emitted_by`'s doc and `rules::sudo`'s for where that gap actually
+    /// matters and how it's closed (review of #838, Sollykhan 2026-10-19,
+    /// point 1 — a correction to this comment's own prior overclaim).
     pub comm: Option<String>,
     /// `_UID` — numeric UID of the process that emitted the record (the logger, not
     /// necessarily the account being authenticated — that's parsed from `message`

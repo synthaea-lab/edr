@@ -49,6 +49,41 @@ fn success(target_user: &str, kind: AuthKind, ts: u64) -> AuthEvent {
     }
 }
 
+/// Like [`failure`]/[`success`] but with an overridden invoker uid — needed
+/// for any test about *sudo's* own join, which keys on `meta.user`'s uid, not
+/// on `target_user` (review of #838, Sollykhan 2026-10-19, point 1; every
+/// other test in this file shares `meta()`'s fixed uid 1000, which is fine
+/// for them since none of them assert on sudo-side identity separation).
+fn sudo_failure_as(uid: u32, ts: u64) -> AuthEvent {
+    AuthEvent {
+        meta: EventMeta {
+            timestamp_ns: ts,
+            comm: "sudo".to_string(),
+            user: User::Unix { uid, gid: uid },
+            ..meta()
+        },
+        outcome: AuthOutcome::Failure,
+        kind: AuthKind::LogonFailure,
+        target_user: "root".to_string(),
+        ..fixtures::auth()
+    }
+}
+
+fn sudo_success_as(uid: u32, kind: AuthKind, ts: u64) -> AuthEvent {
+    AuthEvent {
+        meta: EventMeta {
+            timestamp_ns: ts,
+            comm: "sudo".to_string(),
+            user: User::Unix { uid, gid: uid },
+            ..meta()
+        },
+        outcome: AuthOutcome::Success,
+        kind,
+        target_user: "root".to_string(),
+        ..fixtures::auth()
+    }
+}
+
 #[test]
 fn privileged_session_after_five_failures_alerts_once_per_window() {
     let mut state = RuleState::new();
@@ -60,7 +95,9 @@ fn privileged_session_after_five_failures_alerts_once_per_window() {
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts[0].technique, "T1548.003");
     assert_eq!(alerts[0].severity, schema::detection::Severity::Medium);
-    assert!(alerts[0].message.contains("sudo invoker=root"));
+    // `meta()`'s fixed test uid, not `target_user` — sudo's join keys on the
+    // trusted invoker uid (review of #838, Sollykhan 2026-10-19, point 1).
+    assert!(alerts[0].message.contains("sudo invoker_uid=1000"));
     assert!(alerts[0].message.contains("5 failed authentications"));
     assert!(
         state
@@ -132,16 +169,38 @@ fn failures_from_a_windows_identity_do_not_feed_the_local_join() {
 }
 
 #[test]
-fn distinct_target_accounts_do_not_share_the_burst() {
+fn distinct_sudo_invokers_do_not_share_the_burst() {
+    // Sudo's own join keys on the trusted invoker uid, not `target_user`
+    // (review of #838, Sollykhan 2026-10-19, point 1) — same `target_user`
+    // ("root") on both sides, but a different invoker uid, must not join.
     let mut state = RuleState::new();
     for i in 0..THRESHOLD {
-        state.on_auth(&failure("root", i * SEC));
+        state.on_auth(&sudo_failure_as(1000, i * SEC));
     }
     assert!(
         state
-            .on_auth(&success("alice", AuthKind::ExplicitCredentials, 10 * SEC))
-            .is_empty()
+            .on_auth(&sudo_success_as(
+                2000,
+                AuthKind::ExplicitCredentials,
+                10 * SEC
+            ))
+            .is_empty(),
+        "a different invoker uid must not inherit uid 1000's sudo failures"
     );
+}
+
+#[test]
+fn distinct_su_targets_do_not_share_the_burst() {
+    // Unlike `sudo`, `su` still keys on the target name, unaffected by the
+    // #838 point-1 fix (same invoker uid on both sides here, per `failure`/
+    // `success`'s shared `meta()`) — see `crate::sudo`'s module doc for why.
+    let mut state = RuleState::new();
+    for i in 0..THRESHOLD {
+        state.on_auth(&failure_from("su", "root", i * SEC));
+    }
+    let mut alice = success("alice", AuthKind::ExplicitCredentials, 10 * SEC);
+    alice.meta.comm = "su".to_string();
+    assert!(state.on_auth(&alice).is_empty());
 }
 
 #[test]

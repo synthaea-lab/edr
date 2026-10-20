@@ -120,21 +120,25 @@ pub(crate) const RDP_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// five-minute interval includes slower interactive guessing while limiting
 /// stale failures that are no longer meaningful evidence for a later success.
 pub(crate) const RDP_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
-/// T1548.003 — a local privilege-escalation success (`sudo`/`su`) for an
-/// account after this many authentication failures that joined the same
-/// `(service, account)` key (`crates/rules/src/sudo.rs`'s module doc: that key
-/// is the invoker for `sudo`, the real target for `su` — not necessarily "the
-/// account escalated to" in either case). Same reasoning as
-/// [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a human mistyping their
-/// password a couple of times before getting it right, catches a scripted or
-/// sustained guess that eventually succeeds.
+/// T1548.003 — a local privilege-escalation success (`sudo`/`su`) after this
+/// many authentication failures joined to it (`crates/rules/src/sudo.rs`'s
+/// module doc: `sudo` joins on the trusted invoker uid, `su` on the real
+/// target name — not necessarily "the account escalated to" in either case).
+/// Same reasoning as [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a
+/// human mistyping their password a couple of times before getting it right,
+/// catches a scripted or sustained guess that eventually succeeds.
 ///
-/// Known noise source: `pam_unix` logs one failure per wrong
-/// password and `sudo` itself allows up to three per invocation, so this
-/// counts per *attempt*, not per invocation — two fumbled commands (3
-/// failures each) followed by a correct third easily reach 6 with no attack
-/// involved. Not re-tuned here; a per-invocation count (keyed by `_PID` or the
-/// failed `COMMAND=` line) would be the fix if this proves noisy in practice.
+/// The opposite of a noise source, confirmed live (Fedora 43, sudo 1.9.17p2,
+/// review of #838, Sollykhan 2026-10-19): `pam_unix` logs exactly **one**
+/// `authentication failure` line per sudo *invocation*, however many of the
+/// (default `passwd_tries=3`) password prompts within it were wrong — three
+/// wrong passwords at one prompt is one failure here, not three. So this
+/// counts per invocation, the opposite of what a prior version of this
+/// comment claimed, and the real effect is lower sensitivity, not alert
+/// noise: an attacker needs 5 separate sudo invocations (up to 15 wrong
+/// passwords) to cross this threshold, not 5 wrong passwords. Not re-tuned
+/// here; lowering the threshold would be the fix if this proves insensitive
+/// in practice.
 pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// Sliding look-back window for [`SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD`].
 pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s

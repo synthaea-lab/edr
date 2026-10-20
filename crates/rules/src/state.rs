@@ -241,8 +241,10 @@ pub struct RuleState {
     /// by event time (T1021.001, #285); see the `rdp` module.
     rdp_success: RdpSuccessAfterFailures,
     /// Local privilege-escalation successes (`sudo`/`su`) joined to the
-    /// authentication failures for the same target account, by event time
-    /// (T1548.003, #381); see the `sudo` module.
+    /// authentication failures for the same account, by event time (T1548.003,
+    /// #381) — "same account" means the same invoker uid for `sudo`, the same
+    /// target name for `su`; see the `sudo` module's own doc for why they
+    /// differ.
     sudo_success: SudoSuccessAfterFailures,
     /// pid → sliding counter for RANSOMWARE-RENAME (T1486, issue #262): renames by
     /// this pid where `new_path` is `old_path` plus an appended suffix. LRU-bounded:
@@ -1187,16 +1189,22 @@ impl RuleState {
             // `ExplicitCredentials` are only ever produced for `sudo`/`su`
             // (`auth::to_auth_event`), so `event.meta.comm` is already one of
             // the two here; the explicit match is defense in depth, not a new
-            // restriction.
-            return if matches!(event.meta.user, User::Unix { .. })
-                && matches!(
-                    event.kind,
-                    AuthKind::PrivilegedSession | AuthKind::ExplicitCredentials
-                )
-                && matches!(event.meta.comm.as_str(), "sudo" | "su")
-            {
-                self.sudo_success
-                    .on_success(&event.meta.comm, &event.target_user, ts)
+            // restriction. `sudo` joins on the trusted uid, not a name, and
+            // `su` still joins on the target `AuthEvent::target_user` names —
+            // see `crate::sudo`'s module doc for why they differ (review of
+            // #838, Sollykhan 2026-10-19, point 1).
+            let User::Unix { uid, .. } = event.meta.user else {
+                return Vec::new();
+            };
+            return if matches!(
+                event.kind,
+                AuthKind::PrivilegedSession | AuthKind::ExplicitCredentials
+            ) {
+                match event.meta.comm.as_str() {
+                    "sudo" => self.sudo_success.on_sudo_success(uid, ts),
+                    "su" => self.sudo_success.on_su_success(&event.target_user, ts),
+                    _ => Vec::new(),
+                }
             } else {
                 Vec::new()
             };
@@ -1224,21 +1232,20 @@ impl RuleState {
         // stream feeds both sides of it), but still joins by event time, not
         // arrival order — see the `sudo` module's doc. Gated on `comm`, not
         // just `User::Unix`: an sshd failure (`LogonFailure` from `SshFailed`)
-        // is also a Unix identity, and an attacker-controlled sshd username
-        // must never reach this join at all — it would pollute another
-        // account's sudo/su history, or, at volume, evict real sudo/su
-        // history out of the bounded per-account cache before the matching
-        // success arrives. `comm` is the syslog identifier, which a logging client
-        // chooses: `sensor-linux-journal::to_auth_event` has already dropped a line
-        // whose trusted `_COMM` is not `sudo`/`su` (`logger -t sudo ...`), so the
-        // match below is only as good as that check, and only for journal records.
-        if matches!(event.meta.user, User::Unix { .. })
-            && matches!(event.meta.comm.as_str(), "sudo" | "su")
-        {
-            alerts.extend(
-                self.sudo_success
-                    .on_failure(&event.meta.comm, &event.target_user, ts),
-            );
+        // is also a Unix identity and must never reach this join. For `su`
+        // this still only guards against the wrong *category* of event
+        // reaching the join, same as before (an attacker-controlled sshd
+        // username could still pollute `su`'s own target-name history by
+        // other means — see `crate::sudo`'s doc on that residual gap); for
+        // `sudo` the join itself now keys on the trusted uid below, not on
+        // anything parsed from the message (review of #838, Sollykhan
+        // 2026-10-19, point 1).
+        if let User::Unix { uid, .. } = event.meta.user {
+            match event.meta.comm.as_str() {
+                "sudo" => alerts.extend(self.sudo_success.on_sudo_failure(uid, ts)),
+                "su" => alerts.extend(self.sudo_success.on_su_failure(&event.target_user, ts)),
+                _ => {}
+            }
         }
         let entry = self
             .auth_failures

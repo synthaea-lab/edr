@@ -26,14 +26,23 @@ use schema::{AuthEvent, AuthKind, AuthOutcome, EventMeta, User};
 use crate::{JournalEvent, JournalRecord};
 
 /// Whether `record` was written by the program `program` (`"sudo"`/`"su"`), going
-/// by the trusted `_COMM` journald stamps from the sender's process rather than by
-/// `SYSLOG_IDENTIFIER`, which the logging client chooses (`logger -t sudo
-/// 'pam_unix(sudo:auth): authentication failure; ... user=root'` is a line any local
-/// user can write; its `_COMM` is `logger`). Without this check a local user could
-/// inject sudo/su failures to fill another account's history, or a success to join
-/// real failures (#838 review). A record with no `_COMM` is accepted: journald
-/// stamps it on every record that comes from a process, so only a fixture built
-/// by hand lacks it.
+/// by `_COMM` rather than `SYSLOG_IDENTIFIER`, which the logging client chooses
+/// freely (`logger -t sudo 'pam_unix(sudo:auth): authentication failure; ...
+/// user=root'` is a line any local user can write; its `_COMM` is `logger`).
+/// This stops that trivial case, but **`_COMM` is not a full identity check**
+/// (review of #838, Sollykhan 2026-10-19, point 1 — a correction to this
+/// comment's own prior claim that it was "trusted"): journald stamps it
+/// kernel-side from `/proc/<pid>/comm`, which the client cannot set through the
+/// log *content*, but can still set by what it execs as, or via
+/// `prctl(PR_SET_NAME)` — `cp /usr/bin/logger /tmp/sudo; /tmp/sudo -t sudo
+/// '...'` gets `_COMM=sudo` for free. This check is still worth keeping (it is
+/// free, and it blocks the common case), but the real security boundary for
+/// `sudo`'s own join is `rules::sudo` keying on the trusted `_UID` instead of
+/// any name — see that module's doc. `su`'s join stays on the target name
+/// (narrower exposure, see the same doc), so this check is still its only
+/// line of defense there. A record with no `_COMM` is accepted: journald
+/// stamps it on every record that comes from a process, so only a fixture
+/// built by hand lacks it.
 fn emitted_by(record: &JournalRecord, program: &str) -> bool {
     record.comm.as_deref().is_none_or(|comm| comm == program)
 }
@@ -56,11 +65,7 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             user.clone()?,
             parse_addr(source_addr),
         ),
-        JournalEvent::SudoCommand {
-            invoking_user,
-            target_user,
-            ..
-        } => {
+        JournalEvent::SudoCommand { target_user, .. } => {
             if !emitted_by(record, "sudo") {
                 return None;
             }
@@ -73,19 +78,24 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
             } else {
                 AuthKind::ExplicitCredentials
             };
-            // `target_user` here is the invoking account, not `real_target` above.
-            // `sudo`'s PAM check authenticates the *invoker's own* password (unless
-            // the host sets `rootpw`/`targetpw`, not assumed here) — a failed
-            // attempt's `pam_unix(sudo:auth)` line (`PamAuthFailure` below) never
-            // names the `-u` target the invoker was trying to reach, only the
-            // invoker. Reporting the real target here would make a sudo success
-            // un-joinable with the failures that preceded it: the two sides would
-            // key on different strings. Falls back to `real_target` if
-            // `logname=`/the `user :` prefix couldn't be read, rather than dropping
-            // the event. `su` needs no such swap: there PAM authenticates the real
-            // target's password, so its `user=`/session-open line already is it.
-            let target_user = invoking_user.clone().unwrap_or(real_target);
-            (AuthOutcome::Success, kind, target_user, None)
+            // Reports the real `-u` target, per `AuthEvent::target_user`'s own
+            // contract ("the account being authenticated as/into" — differing
+            // from `meta.user` "is the whole signal"). A prior version of this
+            // mapping swapped in the invoking account instead, so a sudo success
+            // would key identically to the `pam_unix(sudo:auth)` failures that
+            // preceded it (PAM only ever authenticates *sudo's invoker*, never
+            // learning the `-u` target on a failure) — but `target_user` is also
+            // what an analyst reads as "who this event is about", and silently
+            // meaning the invoker there, for every ordinary `sudo -u x` success,
+            // was wrong (review of #838, Sollykhan 2026-10-19, point
+            // 4: `sudo -u postgres psql` reported `target_user="solka"`, the
+            // invoker, with `postgres` nowhere in the event). The join this swap
+            // existed for now keys on `meta.user`'s uid instead (trusted, from
+            // `_UID` — confirmed by a live capture, same for the PAM failure line
+            // and this `COMMAND=` line, across a real wrong-then-right sudo on
+            // Fedora 43/sudo 1.9.17p2 — see `rules::sudo`), so this field is free
+            // to mean what the schema says again.
+            (AuthOutcome::Success, kind, real_target, None)
         }
         JournalEvent::PamSessionOpened {
             service,
@@ -113,15 +123,19 @@ pub fn to_auth_event(record: &JournalRecord, event: &JournalEvent) -> Option<Aut
         // `classify` only emits this for the "sudo"/"su" services (sshd's own PAM
         // auth failure would double-count `SshFailed`), so no service guard is
         // needed here beyond the sender check. The account is `classify_pam`'s
-        // `" user="` field, which already is the right join key for both services:
-        // for `su` it is the real target (PAM checks the target's own password); for
-        // `sudo` it is the invoker (PAM checks the invoker's own password) — the
-        // same value the `SudoCommand` arm above swaps in for its own
-        // `target_user`, so a sudo failure and the success after it key identically
-        // (#838). For `sudo` a line without `user=` still names the invoker through
-        // `logname=` (the same account there), so it is not dropped; `su` has no
-        // such stand-in (`logname=` is who typed the password, not whose it was),
-        // so a `su` failure with no `user=` is skipped, not fabricated.
+        // `" user="` field: for `su` the real target (PAM checks the target's own
+        // password); for `sudo` the invoker (PAM checks the invoker's own
+        // password, never learning the `-u` target on a failure) — in both
+        // cases the only account PAM actually checked, so reporting it here
+        // matches `target_user`'s "account being authenticated as/into"
+        // contract even for `sudo` (unlike the `SudoCommand` success arm,
+        // nothing is swapped here). `rules::sudo`'s join no longer depends on
+        // this matching the success side's `target_user` for `sudo` — see that
+        // module. For `sudo` a line without `user=` still names the invoker
+        // through `logname=` (the same account there), so it is not dropped;
+        // `su` has no such stand-in (`logname=` is who typed the password, not
+        // whose it was), so a `su` failure with no `user=` is skipped, not
+        // fabricated.
         JournalEvent::PamAuthFailure {
             service,
             invoking_user,
@@ -244,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn sudo_to_root_is_privileged_session_keyed_on_the_invoker() {
+    fn sudo_to_root_is_privileged_session_naming_the_real_target() {
         let record = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             ("_PID", "100"),
@@ -257,14 +271,22 @@ mod tests {
             command: Some("/bin/echo hi".into()),
         };
         let auth = to_auth_event(&record, &event).expect("should map");
-        // `kind` still reflects the real target (root) — only the join key
-        // (`target_user`) swaps to the invoker, see the mapping's own comment.
         assert_eq!(auth.kind, AuthKind::PrivilegedSession);
-        assert_eq!(auth.target_user, "lab");
+        // `target_user` is the real `-u` target, not the invoker (review of
+        // #838, Sollykhan 2026-10-19, point 4) — `rules::sudo` keys its join
+        // on `meta.user`'s uid instead, not on this field.
+        assert_eq!(auth.target_user, "root");
+        assert_eq!(
+            auth.meta.user,
+            User::Unix {
+                uid: 1001,
+                gid: 1001
+            }
+        );
     }
 
     #[test]
-    fn sudo_to_other_user_is_explicit_credentials_keyed_on_the_invoker() {
+    fn sudo_to_other_user_is_explicit_credentials_naming_the_real_target() {
         let record = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             ("_PID", "100"),
@@ -278,36 +300,20 @@ mod tests {
         };
         let auth = to_auth_event(&record, &event).expect("should map");
         assert_eq!(auth.kind, AuthKind::ExplicitCredentials);
-        assert_eq!(auth.target_user, "lab");
+        assert_eq!(auth.target_user, "deploy");
     }
 
     #[test]
-    fn a_sudo_success_with_no_invoking_user_falls_back_to_the_real_target() {
-        // `invoking_user` comes from a `" :"` split on the command line (#838);
-        // if that ever fails to parse, keying on the real target still produces
-        // a usable (if unjoinable) event instead of dropping it.
-        let record = record_with(&[
-            ("SYSLOG_IDENTIFIER", "sudo"),
-            ("_PID", "100"),
-            ("_UID", "1001"),
-            ("_GID", "1001"),
-        ]);
-        let event = JournalEvent::SudoCommand {
-            invoking_user: None,
-            target_user: Some("root".into()),
-            command: Some("/bin/echo hi".into()),
-        };
-        let auth = to_auth_event(&record, &event).expect("should map");
-        assert_eq!(auth.target_user, "root");
-    }
-
-    #[test]
-    fn a_sudo_failure_and_the_success_after_it_key_on_the_same_invoker() {
-        // The invoker (`omss`) fails sudo, then succeeds as `root`. The PAM
-        // failure line never names
-        // `root` — `pam_unix(sudo:auth)` only authenticates the invoker — so
-        // the two sides must key on the invoker, not on the escalation target,
-        // or a real success-after-failures join can never fire for `sudo`.
+    fn a_sudo_failure_and_the_success_after_it_share_the_same_trusted_uid() {
+        // The invoker (uid 1000) fails sudo, then succeeds as root. The PAM
+        // failure line never names `root` — `pam_unix(sudo:auth)` only
+        // authenticates the invoker — and `target_user` no longer tries to
+        // make the two sides match on a parsed name (#838 point 4): confirmed
+        // live on Fedora 43/sudo 1.9.17p2 (a real wrong-then-right sudo), the
+        // trusted `_UID` is 1001 (the test invoker there) on both the
+        // `pam_unix(sudo:auth)` failure line and the `COMMAND=` success line,
+        // which `rules::sudo` now keys its join on instead of either side's
+        // `target_user` — see that module.
         let failure_record = record_with(&[
             ("SYSLOG_IDENTIFIER", "sudo"),
             ("_PID", "6805"),
@@ -334,8 +340,19 @@ mod tests {
         };
         let success_auth = to_auth_event(&success_record, &success).expect("should map");
 
-        assert_eq!(failure_auth.target_user, success_auth.target_user);
+        assert_eq!(failure_auth.meta.user, success_auth.meta.user);
+        assert_eq!(
+            failure_auth.meta.user,
+            User::Unix {
+                uid: 1000,
+                gid: 1000
+            }
+        );
+        // Not a join key any more, but still correct per `target_user`'s own
+        // contract: the failure names who PAM actually checked (the invoker,
+        // `omss`); the success names the real escalation target (`root`).
         assert_eq!(failure_auth.target_user, "omss");
+        assert_eq!(success_auth.target_user, "root");
     }
 
     #[test]
@@ -457,7 +474,7 @@ mod tests {
             command: Some("/bin/id".into()),
         };
         let auth = to_auth_event(&genuine, &success).expect("should map");
-        assert_eq!(auth.target_user, "lab");
+        assert_eq!(auth.target_user, "root");
     }
 
     #[test]

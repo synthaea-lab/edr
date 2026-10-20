@@ -172,14 +172,20 @@ fn classify_sshd(message: &str) -> Option<JournalEvent> {
 
 /// Substrings `sudo` logs on the same `COMMAND=` line when the attempt did
 /// **not** succeed (wrong password, an account not in `sudoers`, a `sudoers`
-/// rule that names the command but refuses it, no password available to try) —
+/// rule that names the command but refuses it, no password available to try,
+/// a `sudoers` rule that names the command but restricts it to other hosts) —
 /// checked before treating a `COMMAND=` line as a privilege-escalation
 /// success — a failed attempt logs `COMMAND=` too, same line shape.
+/// `"user NOT authorized on host"` (`plugins/sudoers/logging.c`, sudo
+/// 1.9.15p5) added per review of #838 (Sollykhan, 2026-10-19): without it, a
+/// denial from a host-restricted central `sudoers` (fleets where one
+/// `sudoers` file is shared and scoped per host) was counted as a success.
 const SUDO_COMMAND_FAILURE_MARKERS: &[&str] = &[
     "incorrect password attempt",
     "NOT in sudoers",
     "command not allowed",
     "a password is required",
+    "user NOT authorized on host",
 ];
 
 /// Whether a `sudo` `COMMAND=` line records a refused attempt. The reason sudo
@@ -219,10 +225,31 @@ fn classify_sudo_command(message: &str) -> Option<JournalEvent> {
     })
 }
 
+/// Folds the PAM service name used for an interactive-login invocation into
+/// the base service a brute-force attempt against it is tracked under.
+/// PAM 1.5.3 ships separate `/etc/pam.d/su-l` and `/etc/pam.d/sudo-i` config
+/// files, so `su -`/`su --login` and `sudo -i` log `pam_unix(su-l:...)`/
+/// `pam_unix(sudo-i:...)` rather than `pam_unix(su:...)`/`pam_unix(sudo:...)`
+/// — before this normalization, `classify_pam`'s exact-match on the service
+/// name (and `auth::emitted_by`'s guard downstream) meant these two
+/// interactive forms never produced a `PamSessionOpened`/`PamAuthFailure` at
+/// all, so a brute force against either was invisible to T1548.003 and to
+/// the T1110 burst counter (review of #838, Sollykhan 2026-10-19: "the most
+/// common interactive forms"). Still the same `su`/`sudo` binary either way
+/// (`_COMM` is unaffected), only the PAM service name PAM itself dispatches
+/// on changes.
+fn normalize_pam_service(service: &str) -> &str {
+    match service {
+        "su-l" => "su",
+        "sudo-i" => "sudo",
+        other => other,
+    }
+}
+
 fn classify_pam(message: &str) -> Option<JournalEvent> {
     let rest = message.strip_prefix("pam_unix(")?;
     let (service, _) = rest.split_once(':')?;
-    let service = service.to_string();
+    let service = normalize_pam_service(service).to_string();
 
     if message.contains("session opened for user") {
         let target_user = extract_between(message, "session opened for user ", "(");
@@ -498,6 +525,12 @@ mod tests {
             "     lab : command not allowed ; TTY=pts/0 ; PWD=/home/lab ; USER=root ; \
              COMMAND=/bin/echo hi",
             "     lab : a password is required ; TTY=pts/0 ; COMMAND=/bin/echo hi",
+            // sudo 1.9.15p5, plugins/sudoers/logging.c:297 (review of #838,
+            // Sollykhan 2026-10-19): a host-restricted central sudoers denial —
+            // without this marker, 5 of these plus a real success gave
+            // (Success, PrivilegedSession) instead of (Failure, Failure, ...).
+            "     lab : user NOT authorized on host ; TTY=pts/0 ; PWD=/home/lab ; \
+             USER=root ; COMMAND=/bin/echo hi",
         ] {
             let r = record_with(&[("SYSLOG_IDENTIFIER", "sudo"), ("MESSAGE", message)]);
             assert_eq!(
@@ -609,6 +642,45 @@ mod tests {
                 service: "sudo".into(),
                 invoking_user: Some("omss".into()),
                 target_user: Some("omss".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn pam_auth_failure_for_su_dash_login_is_folded_into_su() {
+        // Review of #838 (Sollykhan, 2026-10-19): `su -`/`su --login` dispatch PAM
+        // through the separate `su-l` service (PAM 1.5.3's `/etc/pam.d/su-l`), not
+        // `su` — without folding it in, 5 `su -` failures plus a session open gave
+        // 0 events, making the most common interactive form of `su` invisible to
+        // T1548.003.
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(su-l:auth): authentication failure; logname=lab uid=1001 euid=0 \
+             tty=pts/1 ruser=lab rhost=  user=root",
+        )]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "su".into(),
+                invoking_user: Some("lab".into()),
+                target_user: Some("root".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn pam_session_opened_for_sudo_dash_i_is_folded_into_sudo() {
+        // Same fold, the other direction: `sudo -i` dispatches PAM through
+        // `sudo-i` (PAM 1.5.3's `/etc/pam.d/sudo-i`), not `sudo`.
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(sudo-i:session): session opened for user root(uid=0) by (uid=1001)",
+        )]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamSessionOpened {
+                service: "sudo".into(),
+                target_user: Some("root".into()),
             })
         );
     }
