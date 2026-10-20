@@ -120,10 +120,12 @@ pub(crate) const RDP_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// five-minute interval includes slower interactive guessing while limiting
 /// stale failures that are no longer meaningful evidence for a later success.
 pub(crate) const RDP_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
-/// T1548.003 — a local privilege-escalation success (`sudo`/`su`) after this
-/// many authentication failures joined to it (`crates/rules/src/sudo.rs`'s
-/// module doc: `sudo` joins on the trusted invoker uid, `su` on the real
-/// target name — not necessarily "the account escalated to" in either case).
+/// A local privilege-escalation success (`sudo`/`su`) after this many
+/// authentication failures joined to it (`crates/rules/src/sudo.rs`'s module
+/// doc: `sudo` joins on the trusted invoker uid, `su` on the real target
+/// name — not necessarily "the account escalated to" in either case).
+/// Reported as T1548.003 for `sudo`, T1110.001 for `su` (review of #838,
+/// Sollykhan 2026-10-19, non-blocking: `su` is not sudo caching).
 /// Same reasoning as [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a
 /// human mistyping their password a couple of times before getting it right,
 /// catches a scripted or sustained guess that eventually succeeds.

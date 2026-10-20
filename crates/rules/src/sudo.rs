@@ -1,5 +1,8 @@
 //! A local privilege-escalation success (`sudo`/`su`) that follows authentication
-//! failures for the same account, T1548.003 (Sudo and Sudo Caching, #381).
+//! failures for the same account (#381): reported as T1548.003 (Sudo and Sudo
+//! Caching) for `sudo`, T1110.001 (Brute Force: Password Guessing) for `su` —
+//! `su` is a plain login prompt with no caching to abuse, so the sudo-specific
+//! technique never fit it (review of #838, Sollykhan 2026-10-19, non-blocking).
 //!
 //! Both sides come from the same `AuthEvent` stream (`RuleState::on_auth`, one
 //! journal tail, unlike T1021.001's two independent Windows event channels), so
@@ -107,7 +110,7 @@ impl SudoSuccessAfterFailures {
             .targets
             .get_or_insert_with(invoker_uid, Target::default);
         insert_sorted(&mut target.failures, timestamp_ns, FAILURES_PER_TARGET_CAP);
-        target.join(&format!("sudo invoker_uid={invoker_uid}"))
+        target.join(&format!("sudo invoker_uid={invoker_uid}"), SUDO_TECHNIQUE)
     }
 
     /// A `sudo` privilege-escalation success by `invoker_uid` at `timestamp_ns`.
@@ -116,7 +119,7 @@ impl SudoSuccessAfterFailures {
             .targets
             .get_or_insert_with(invoker_uid, Target::default);
         target.record_success(timestamp_ns);
-        target.join(&format!("sudo invoker_uid={invoker_uid}"))
+        target.join(&format!("sudo invoker_uid={invoker_uid}"), SUDO_TECHNIQUE)
     }
 
     /// An `su` authentication failure against `target_name` at `timestamp_ns`.
@@ -126,7 +129,7 @@ impl SudoSuccessAfterFailures {
             .su_targets
             .get_or_insert_with(target_name.to_string(), Target::default);
         insert_sorted(&mut target.failures, timestamp_ns, FAILURES_PER_TARGET_CAP);
-        target.join(&format!("su target={target_name}"))
+        target.join(&format!("su target={target_name}"), SU_TECHNIQUE)
     }
 
     /// An `su` privilege-escalation success into `target_name` at `timestamp_ns`.
@@ -135,9 +138,17 @@ impl SudoSuccessAfterFailures {
             .su_targets
             .get_or_insert_with(target_name.to_string(), Target::default);
         target.record_success(timestamp_ns);
-        target.join(&format!("su target={target_name}"))
+        target.join(&format!("su target={target_name}"), SU_TECHNIQUE)
     }
 }
+
+/// ATT&CK technique reported for a `sudo` join — see the module doc for why
+/// `su` reports a different one.
+const SUDO_TECHNIQUE: &str = "T1548.003";
+/// ATT&CK technique reported for an `su` join (review of #838, Sollykhan
+/// 2026-10-19, non-blocking): `su` has no cache to abuse, so a success after
+/// repeated failures is password guessing, not sudo caching.
+const SU_TECHNIQUE: &str = "T1110.001";
 
 /// Inserts `value` keeping `deque` sorted, dropping the oldest past `cap`.
 fn insert_sorted(deque: &mut VecDeque<u64>, value: u64, cap: usize) {
@@ -171,9 +182,10 @@ impl Target {
     /// ending at it, once per window — see [`crate::rdp::Source::join`]'s doc,
     /// this is the same join, keyed differently. `account` is the precomputed,
     /// analyst-facing label for the alert (e.g. `"sudo invoker_uid=1001"` or
-    /// `"su target=root"` — see the callers above); this method has no opinion
-    /// on what it means, same as before.
-    fn join(&mut self, account: &str) -> Vec<Alert> {
+    /// `"su target=root"` — see the callers above); `technique` is
+    /// [`SUDO_TECHNIQUE`] or [`SU_TECHNIQUE`] depending on which called. This
+    /// method has no opinion on what either means, same as before.
+    fn join(&mut self, account: &str, technique: &'static str) -> Vec<Alert> {
         let mut alerts = Vec::new();
         for success in &mut self.successes {
             if success.alerted {
@@ -196,7 +208,7 @@ impl Target {
                     self.alerted_windows.pop_front();
                 }
                 alerts.push(Alert {
-                    technique: "T1548.003",
+                    technique,
                     severity: Severity::Medium,
                     message: format!(
                         "{account}: a local privilege escalation succeeded after {count} \
@@ -378,6 +390,21 @@ mod tests {
         let su_alert = state.on_su_success("root", 10 * SECOND);
         assert!(sudo_alert[0].message.starts_with("sudo invoker_uid=1234:"));
         assert!(su_alert[0].message.starts_with("su target=root:"));
+    }
+
+    #[test]
+    fn sudo_and_su_report_different_techniques() {
+        // su is a plain login prompt, not sudo caching (review of #838,
+        // Sollykhan 2026-10-19, non-blocking).
+        let mut state = SudoSuccessAfterFailures::new();
+        for second in 0..EXPECTED_THRESHOLD as u64 {
+            state.on_sudo_failure(1234, second * SECOND);
+            state.on_su_failure("root", second * SECOND);
+        }
+        let sudo_alert = state.on_sudo_success(1234, 10 * SECOND);
+        let su_alert = state.on_su_success("root", 10 * SECOND);
+        assert_eq!(sudo_alert[0].technique, "T1548.003");
+        assert_eq!(su_alert[0].technique, "T1110.001");
     }
 
     #[test]

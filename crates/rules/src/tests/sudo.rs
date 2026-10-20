@@ -1,4 +1,5 @@
-//! sudo/su success-after-failures rule (T1548.003, #381).
+//! sudo/su success-after-failures rule (#381): T1548.003 for `sudo`,
+//! T1110.001 for `su` (review of #838, Sollykhan 2026-10-19, non-blocking).
 
 use schema::{AuthEvent, AuthKind, AuthOutcome, User, fixtures};
 
@@ -201,6 +202,22 @@ fn distinct_su_targets_do_not_share_the_burst() {
     let mut alice = success("alice", AuthKind::ExplicitCredentials, 10 * SEC);
     alice.meta.comm = "su".to_string();
     assert!(state.on_auth(&alice).is_empty());
+}
+
+#[test]
+fn su_success_after_failures_for_the_same_target_reports_password_guessing() {
+    // `su` has no cache to abuse, so the join reports T1110.001, not sudo's
+    // T1548.003 (review of #838, Sollykhan 2026-10-19, non-blocking).
+    let mut state = RuleState::new();
+    for i in 0..THRESHOLD {
+        state.on_auth(&failure_from("su", "root", i * SEC));
+    }
+    let mut root = success("root", AuthKind::ExplicitCredentials, 10 * SEC);
+    root.meta.comm = "su".to_string();
+    let alerts = state.on_auth(&root);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].technique, "T1110.001");
+    assert!(alerts[0].message.starts_with("su target=root:"));
 }
 
 #[test]

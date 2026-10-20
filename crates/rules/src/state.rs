@@ -241,10 +241,10 @@ pub struct RuleState {
     /// by event time (T1021.001, #285); see the `rdp` module.
     rdp_success: RdpSuccessAfterFailures,
     /// Local privilege-escalation successes (`sudo`/`su`) joined to the
-    /// authentication failures for the same account, by event time (T1548.003,
-    /// #381) — "same account" means the same invoker uid for `sudo`, the same
-    /// target name for `su`; see the `sudo` module's own doc for why they
-    /// differ.
+    /// authentication failures for the same account, by event time (#381,
+    /// T1548.003 for `sudo` / T1110.001 for `su`) — "same account" means the
+    /// same invoker uid for `sudo`, the same target name for `su`; see the
+    /// `sudo` module's own doc for why they differ.
     sudo_success: SudoSuccessAfterFailures,
     /// pid → sliding counter for RANSOMWARE-RENAME (T1486, issue #262): renames by
     /// this pid where `new_path` is `old_path` plus an appended suffix. LRU-bounded:
@@ -1174,7 +1174,8 @@ impl RuleState {
     /// is the *stronger* signal, not an all-clear. For a Windows RDP success
     /// that signal is [`Self::rdp_success`] (T1021.001, joined from a separate
     /// `SessionEvent`); for a local `sudo`/`su` success it is
-    /// [`Self::sudo_success`] (T1548.003, #381) below, joined from this same
+    /// [`Self::sudo_success`] (#381, T1548.003 for `sudo` / T1110.001 for `su`
+    /// — see `crate::sudo`'s module doc) below, joined from this same
     /// `AuthEvent` stream. A local `sudo`/`su` failure also counts into the burst
     /// counter below (key: target account, source `"local"`, `sudo` and `su` sharing
     /// one key), so five wrong passwords in the window raise T1110 by themselves,
