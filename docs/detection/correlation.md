@@ -18,7 +18,7 @@ Two sources move it:
 | Source | Tier | What it reads | Status |
 | --- | --- | --- | --- |
 | Per-feature Bayesian LLRs | T1 | `BehaviorVector` (has_connect, exec→connect timing, suspicious path, connect count, external dest, ...), summed under a naive-independence assumption | built — `bayes::log_likelihood_ratio`, calibrated on the NjRAT capture (n=97/23, 2026-08-28) |
-| Correlation ML score | T2 | the 8-feature window vector (`ml::features::correlation`) scored by an Isolation Forest | scorer built and wired (`ml::CorrelationScorer` → `CorrelationEngine::update_belief_with_ml`, #345); trained model pending (#44) |
+| Correlation ML score | T2 | the 8-feature window vector (`ml::features::correlation`) scored by an Isolation Forest | scorer built and wired (`ml::CorrelationScorer` → `CorrelationEngine::update_belief_with_ml`, #345); trained model pending (#132) |
 
 An alert fires when `log_odds` crosses `+2.0` (~88%), once per crossing.
 
@@ -49,9 +49,12 @@ from the parsed forest (a T2 detection is never a bare number, same rule as T0).
 
 `score_to_llr` is **provisional**. Its slope and clamps are placeholders; the real
 values come from the pipeline's LLR calibration on a benign multi-event baseline
-(the same step that regenerates `bayes::log_likelihood_ratio`), which needs the
-capture campaign that does not exist yet (`ml/synthaea_ml/data/correlation_train.jsonl`,
-issue #44). Until then T2 can only ever contribute to a belief, never alert alone, and
+(the same step that regenerates `bayes::log_likelihood_ratio`), which needs a
+capture campaign specific to this model that does not exist yet
+(`ml/synthaea_ml/data/correlation_train.jsonl`) — #44 built the general scenario
+corpus and benign capture infrastructure this would run on, but closed without a
+correlation-specific run; #132 tracks training the model itself. Until then T2 can
+only ever contribute to a belief, never alert alone, and
 the clamps bound its influence: `[-1.0, +3.0]` log-odds, asymmetric because a behaviour
 model exonerates far more weakly than it accuses.
 

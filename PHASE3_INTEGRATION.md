@@ -1,8 +1,12 @@
 # Phase 3 Integration Guide (Issue #46)
 
-**Status:** Blocked by #13 (ML scorer integration), #14 (cmdline scorer)
+**Status:** The correlator-side wiring below shipped with #345: `update_belief`'s
+`ml_llr` parameter, the `engine.rs` call sites, `update_belief_with_ml`, and its unit
+tests. What remains is a trained correlation model (#132) and the end-to-end
+verification that needs one — not an architecture or wiring question.
 
-This document describes how to complete Phase 3 of issue #46 (correlator no-score handling) once the ML scorer is integrated into the agent.
+This document describes how Phase 3 of issue #46 (correlator no-score handling) was
+completed once the ML scorer was integrated into the agent.
 
 ## Current State
 
@@ -86,7 +90,7 @@ optional call keeps `on_event` usable with no ML scorer loaded at all. See
 `update_belief` a second time here, instead, used to double-count the
 hand-calibrated feature evidence (PR #345 review).
 
-#### 3. Agent Integration Point (shipped, #47)
+#### 3. Agent Integration Point (shipped, #345)
 
 **File:** `agent/src/sink.rs`'s `correlate()`, right after `engine.on_event(event)`.
 
@@ -116,6 +120,12 @@ if let Some(ref mut scorer) = *self.ml_scorer.lock().unwrap() {
     }
 }
 ```
+
+This whole block is skipped when `self.ml_scorer` holds no scorer — which is the
+case on every deployment today, since no trained correlation model ships (#132).
+The wiring is real and runs in production, not just in tests, but it currently has
+nothing to score: every event's belief update is still T1-only until a model is
+loaded.
 
 **Error handling policy:**
 - `FeatureOutOfBounds` → log warning, treat as `None`
@@ -176,19 +186,20 @@ fn test_update_belief_ml_none_skipped() {
 
 ## Migration Checklist
 
-- [ ] Update `bayes::update_belief` signature (add `ml_llr` parameter)
-- [ ] Update all `update_belief` call sites in `engine.rs` (pass `None` initially)
-- [ ] Expose `update_belief_with_ml` or similar in correlator public API (for agent)
-- [x] Implement agent sink wiring (shipped, #47)
-- [ ] Add unit tests for `ml_llr = Some(...)` and `ml_llr = None`
+- [x] Update `bayes::update_belief` signature (add `ml_llr` parameter)
+- [x] Update all `update_belief` call sites in `engine.rs` (pass `None` initially)
+- [x] Expose `update_belief_with_ml` or similar in correlator public API (for agent)
+- [x] Implement agent sink wiring (shipped, #345)
+- [x] Add unit tests for `ml_llr = Some(...)` and `ml_llr = None`
+  (`crates/correlator/src/tests/behavior.rs`, "update_belief_with_ml")
 - [ ] End-to-end test: benign baseline (no OOD), OOD injection, low event count
-- [ ] Update `docs/detection/ml.md` with Phase 3 semantics
+  — needs a trained model (#132); nothing to run against without one
+- [ ] Update `docs/detection/ml.md` with Phase 3 semantics — landed instead in
+  `docs/detection/correlation.md`'s "Wiring seam" section
 
 ## Timeline
 
-Phase 3 can proceed once:
-1. ML scorer is integrated into agent (#13, #14)
-2. Agent has access to `CorrelationScorer` (shipped, #47)
-3. Correlator exposes an API to pass `ml_llr` from agent sink
-
-Estimated effort: 1-2 hours for correlator changes + agent wiring, 1-2 hours for tests.
+Everything above is done except the two boxes left unchecked, both of which wait on
+the same thing: a trained correlation model. That is #132's own remaining scope, not
+a new issue — see `docs/detection/correlation.md`'s "Calibration status" for what the
+training step still needs.
