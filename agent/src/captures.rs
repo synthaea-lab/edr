@@ -163,10 +163,9 @@ pub(crate) fn plan(running: Captures, wanted: Captures) -> UprobesAction {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
     use super::*;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
 
     /// Every combination of the three captures.
     fn all() -> Vec<Captures> {
