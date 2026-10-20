@@ -288,11 +288,17 @@ fn extract_before(haystack: &str, end: &str) -> Option<String> {
 }
 
 /// Value of a `key=value` pair embedded in a `;`/space-separated log line, e.g.
-/// `USER=` in `"... ; USER=root ; COMMAND=..."`.
+/// `USER=` in `"... ; USER=root ; COMMAND=..."`. An empty value (`key=` directly
+/// followed by the next separator, e.g. `pam_unix`'s often-blank `ruser=`/`rhost=`)
+/// maps to `None`, the same as the key being absent entirely — every caller treats
+/// "field present but empty" and "field missing" as the same "nothing useful here"
+/// case (review of #838, `SherlockOmss` 2026-10-19): `classify_pam`'s `sudo` fallback
+/// from `target_user` to `invoking_user` (`auth.rs`) only runs on `None`, so an
+/// empty `user=` was silently taking the `Some("")` branch and skipping it.
 fn extract_field(haystack: &str, key: &str) -> Option<String> {
     let after = haystack.split_once(key)?.1;
-    let value = after.split([' ', ';']).next()?;
-    Some(value.trim().to_string())
+    let value = after.split([' ', ';']).next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 #[cfg(test)]
@@ -717,6 +723,27 @@ mod tests {
                 service: "su".into(),
                 invoking_user: Some("lab".into()),
                 target_user: Some("root".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn an_empty_user_field_is_none_not_an_empty_string() {
+        // Review of #838 (SherlockOmss, 2026-10-19): `extract_field` used to map
+        // `user=` immediately followed by a separator to `Some("")`, not `None` —
+        // this `sudo` failure's blank `user=` must fall back to `logname=` (see
+        // `auth::to_auth_event`'s `sudo` arm), not report an empty target account.
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_unix(sudo:auth): authentication failure; logname=lab uid=1000 euid=0 \
+             tty=/dev/pts/0 ruser= rhost=  user=",
+        )]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "sudo".into(),
+                invoking_user: Some("lab".into()),
+                target_user: None,
             })
         );
     }
