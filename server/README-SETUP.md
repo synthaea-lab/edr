@@ -276,4 +276,9 @@ See `docs/deployment.md` for production setup instructions.
 | `NEXTAUTH_SECRET` | Session encryption key | `dev_secret_change_in_production` |
 | `BETTER_AUTH_SECRET` | Auth encryption key | `dev_secret_change_in_production` |
 | `CRON_SECRET` | Cron job authorization | `dev_cron_secret` |
+| `NOTIFY_SECRET_KEY` | `<keyId>:<64 hex>`, seals webhook signing secrets (AES-256-GCM). Unset: creating a notification channel answers 503 (ADR-0036) | unset |
+| `NOTIFY_SECRET_KEY_PREVIOUS` | Older keys of the same form, comma-separated, used only to open what was sealed before a rotation; the delivery cron seals it again under the current key, a few channels a tick, after which the old key can be retired | unset |
+| `NOTIFY_ALLOWED_PRIVATE_HOSTS` | `<tenant id>:<host>` entries, comma-separated: hosts that tenant's channel URL may resolve to a private address (an on-prem SOAR). No wildcard tenant; an entry without a tenant is ignored. Even an entry never opens loopback, link-local (the metadata address included), the unspecified address or a cloud metadata address (`fd00:ec2::254`, `100.100.100.200`, `192.0.0.192`, `168.63.129.16`). An entry trusts a **name**, but DNS decides the address: a tenant who controls the DNS of an allowlisted name can point it at another internal address, and the error class shown in the console is a blind probe of what is reachable. Prefer IP literals, or names only the operator controls. The default resolver (c-ares) reads `resolv.conf`, not `/etc/hosts`. Set by whoever runs the server, never by a tenant | empty |
+| `NOTIFY_CONSOLE_URL` | Public base URL of the console, used for the links in notification payloads (falls back to `NEXTAUTH_URL`; with neither, the links are null) | unset |
+| `NOTIFY_ALLOWED_PORTS` | Ports besides 443 a channel URL may use | empty |
 | `NODE_ENV` | Environment mode | `development` |

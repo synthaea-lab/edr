@@ -30,6 +30,8 @@ model Tenant {
   hunts               Hunt[]
   huntRuns            HuntRun[]
   decoyTokens         DecoyToken[]
+  notificationChannels NotificationChannel[]
+  notifications       Notification[]
 
   @@map("tenants")
 }
@@ -44,7 +46,6 @@ model Agent {
   ring         String   @default("prod") // Canary ring: canary_0, canary_1, canary_2, prod
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
-
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   health      AgentHealth?
   decoyTokens DecoyToken[]
@@ -524,4 +525,89 @@ model Invitation {
 
   @@index([organizationId])
   @@map("auth_invitation")
+}
+
+// Operator notification channel (ADR-0036, #863): a signed webhook a tenant admin registered.
+// The signing secret is sealed (AES-256-GCM, channel id as AAD); it is never returned.
+model NotificationChannel {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  kind                String    @default("webhook")
+  // The URL is sealed like the secret (its path is often a bearer credential); `host` is the
+  // only part shown anywhere (console, audit rows, logs).
+  host                String
+  urlKeyId            String    @map("url_key_id")
+  urlSealed           String    @map("url_sealed")
+  secretKeyId         String    @map("secret_key_id")
+  secretSealed        String    @map("secret_sealed")
+  // For 24 hours after a rotation the previous secret also signs (two v1= values).
+  prevSecretKeyId     String?   @map("prev_secret_key_id")
+  prevSecretSealed    String?   @map("prev_secret_sealed")
+  prevSecretUntil     DateTime? @map("prev_secret_until")
+  events              String[]  // subscribed event names; empty means none
+  huntIds             String[]  @map("hunt_ids") // hunts whose hunt.new_matches this channel receives
+  status              String    @default("active") // active | paused | disabled
+  cooldownSeconds     Int       @default(1800) @map("cooldown_seconds")
+  lastStatusCode      Int?      @map("last_status_code")
+  lastError           String?   @map("last_error")
+  lastDeliveredAt     DateTime? @map("last_delivered_at")
+  // Set when an admin re-enables a paused channel: "five consecutive failed rows" counts from here.
+  pauseCountFrom      DateTime? @map("pause_count_from")
+  createdBy           String    @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+  states        NotificationState[]
+
+  @@index([tenantId])
+  @@map("notification_channels")
+}
+
+// The last state a channel was told about a subject (a host): per channel, not per agent, so a
+// channel in cooldown does not make another one miss a transition (ADR-0036 point 2). It
+// advances only when a row is enqueued for that channel.
+model NotificationState {
+  channelId String   @map("channel_id")
+  subject   String // the agent id
+  state     String // healthy | degraded | silent
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, subject])
+  @@map("notification_states")
+}
+
+// The outbox: one row per (channel, event occurrence). `id` is the event id the receiver
+// de-duplicates on. Delivery is at least once.
+model Notification {
+  id            String    @id @default(uuid())
+  tenantId      String    @map("tenant_id")
+  channelId     String    @map("channel_id")
+  event         String
+  subject       String // agent id or hunt id
+  seq           Int // per (channel, subject), so a receiver can check order
+  payload       Json
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lockedUntil   DateTime? @map("locked_until")
+  // Which claim holds the row: every write of a delivery's outcome names it, so a tick whose
+  // lease expired cannot overwrite what the tick that took the row over recorded.
+  leaseId       String?   @map("lease_id")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  failedAt      DateTime? @map("failed_at")
+  lastStatus    Int?      @map("last_status")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, subject, seq])
+  @@index([deliveredAt, failedAt, nextAttemptAt])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, lastAttemptAt])
+  @@map("notifications")
 }

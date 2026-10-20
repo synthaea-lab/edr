@@ -266,6 +266,46 @@ describe("GET /api/content/manifest/[ring]", () => {
     expect(res.status).toBe(502);
   });
 
+  it("returns 502, not a traversal, for a legacy manifest whose sha256 predates the #804 regex", async () => {
+    // `ContentEntry.sha256` is regex-validated since #804/#835 — but that validation
+    // also runs on *load* (`loadActiveManifest` -> `ContentManifest.safeParse`), not
+    // only on publish. A manifest stored before the regex existed (or crafted before
+    // #835's own fix closed the traversal it guards against) with a non-conforming
+    // hash makes every agent of the ring get this 502 on every fetch, until the stored
+    // file is fixed (review of #835) — this test pins that it fails *safe* (502, not
+    // served, not a crash) rather than claiming it is somehow prevented from happening.
+    const tenant = await createTestTenant();
+    await createTestAgent(tenant.id, "agent-legacy", { ring: "canary_0" });
+
+    const bytes = signedManifestBytes({
+      release_version: 1,
+      entries: [
+        {
+          path: "rules/beacon.sigma",
+          type: "rule",
+          sha256: "NOT-A-REAL-SHA256",
+          size: 1234,
+        },
+      ],
+    });
+    writeManifestFile("content-canary_0-v1.json", bytes);
+
+    await prisma.contentRelease.create({
+      data: {
+        tenantId: tenant.id,
+        ring: "canary_0",
+        releaseVersion: 1,
+        manifestUrl: "storage://manifests/content-canary_0-v1.json",
+        manifestSha256: createHash("sha256").update(bytes).digest("hex"),
+        releasedAt: new Date(),
+      },
+    });
+
+    const res = await GET(request("agent-legacy"), { params: { ring: "canary_0" } });
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toMatch(/schema/i);
+  });
+
   it("still enforces ring-spoofing and tenant isolation ahead of the manifest fetch", async () => {
     const tenant = await createTestTenant();
     await createTestAgent(tenant.id, "agent-6", { ring: "prod" });
