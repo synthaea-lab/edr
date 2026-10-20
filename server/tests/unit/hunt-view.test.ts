@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   RUNNING_GRACE_MS,
+  deleteConfirmation,
+  deleteResponseMessage,
   SESSION_EXPIRED_MESSAGE,
   describeQuery,
   describeSchedule,
@@ -141,5 +143,26 @@ describe("ownerLabel", () => {
     expect(ownerLabel("u1", "u1")).toBe("you");
     expect(ownerLabel("u1", "u2")).toBe("another member");
     expect(ownerLabel("u1", null)).toBe("another member");
+  });
+});
+
+describe("deleteConfirmation", () => {
+  it("names the hunt and says its history goes with it and that it cannot be undone", () => {
+    const text = deleteConfirmation("PowerShell from Office");
+    expect(text).toContain("“PowerShell from Office”");
+    expect(text).toMatch(/run history/);
+    expect(text).toMatch(/cannot be undone/);
+  });
+});
+
+describe("deleteResponseMessage", () => {
+  it("is null when the hunt is gone, whether this request or an earlier one removed it", () => {
+    expect(deleteResponseMessage(204, null)).toBeNull();
+    expect(deleteResponseMessage(404, { error: "Hunt not found" })).toBeNull();
+  });
+
+  it("gives the server's reason for any other answer, else the status", () => {
+    expect(deleteResponseMessage(500, { error: "Internal server error" })).toBe("Internal server error");
+    expect(deleteResponseMessage(502, null)).toBe("Request failed with status 502");
   });
 });

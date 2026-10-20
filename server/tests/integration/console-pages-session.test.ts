@@ -168,6 +168,19 @@ describe("console pages read the session with the request's headers (real databa
       expect(html).not.toContain("someone else's hunt");
     });
 
+    it("offers to delete each of the tenant's hunts, naming it, and escapes the name", async () => {
+      const tenant = await createTestTenant();
+      await hunt(tenant.id, "plain hunt");
+      await hunt(tenant.id, "<img src=x> hunt");
+      activeOrganizationId = tenant.id;
+
+      const html = await render("hunts/page");
+
+      expect(html).toContain('aria-label="Delete plain hunt"');
+      expect(html).toContain('aria-label="Delete &lt;img src=x&gt; hunt"');
+      expect(html).not.toContain("<img src=x>");
+    });
+
     it("shows a run in flight as running and keeps the numbers of the run before it, a failed one as failed", async () => {
       const tenant = await createTestTenant();
       const going = await hunt(tenant.id, "going");

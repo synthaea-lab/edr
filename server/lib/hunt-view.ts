@@ -124,3 +124,18 @@ export const SESSION_EXPIRED_MESSAGE = "Your session has expired. Sign in again,
 export function ownerLabel(ownerId: string, userId: string | null | undefined): string {
   return userId && ownerId === userId ? "you" : "another member";
 }
+
+/** What the browser asks before a hunt is deleted: the run history goes with it (ADR-0025). */
+export function deleteConfirmation(name: string): string {
+  return `Delete the hunt “${name}” and its run history? This cannot be undone.`;
+}
+
+/**
+ * What the delete button tells the user, or `null` when the hunt is gone: 204 is this request,
+ * 404 an earlier one (another tab, another member), and both leave the list as the user wanted.
+ */
+export function deleteResponseMessage(status: number, body: unknown): string | null {
+  if (status === 204 || status === 404) return null;
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  return typeof record.error === "string" && record.error ? record.error : `Request failed with status ${status}`;
+}

@@ -15,7 +15,8 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 - **Graduation** (#618): `POST /api/hunts/[id]/graduate` (`lib/hunt-graduation.ts`) answers a
   draft Sigma rule and its samples file from the hunt's newest finished run, for a person to
   review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing.
-- **Console** (`/console/hunts`): the list, a hunt's run history with Run now, and a create
+- **Console** (`/console/hunts`): the list (with a Delete button per hunt: it asks first, and
+  the run history goes with the hunt), a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
   into the API body with `lib/hunt-form.ts`, which runs the same validation as the API. The
   list reads each hunt's newest run and its newest run with a result in one query
@@ -28,7 +29,6 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 
 ## Not built yet
 
-- Deleting a hunt from the console (the API has `DELETE`).
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - The raw event archive as a second source (needs `server/datalake`, #77).
 - Graduation beyond the assisted Sigma draft: a console button, the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
