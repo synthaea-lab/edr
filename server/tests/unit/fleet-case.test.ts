@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  COMMON_HOST_FRACTION,
   FLEET_JOIN_WINDOW_MS,
   type FleetDetection,
+  isCommonHash,
   joinDetections,
   joinKeys,
   MAX_AGENTS_PER_ENTITY,
+  MIN_FLEET_FOR_COMMON,
 } from "@/lib/fleet-case";
 
 const SHA = "a".repeat(64);
@@ -174,6 +177,66 @@ describe("joinDetections", () => {
       ]);
       expect(groups).toHaveLength(1);
       expect(groups[0].entities).toEqual([{ kind: "sha256", key: OTHER_SHA }]);
+    });
+  });
+
+  describe("a hash that most of the fleet runs (#62)", () => {
+    const pair = [detection("a", exec()), detection("b", exec(), minutes(1))];
+    const prevalence = (hostsWithHash: number, reportingHosts: number, sha = SHA) => ({
+      reportingHosts,
+      hostsWithHash: new Map([[sha, hostsWithHash]]),
+    });
+
+    it("joins nothing on a hash that is on half of the reporting hosts or more: it is the system shell, not an intrusion", () => {
+      expect(joinDetections(pair, prevalence(6, 10))).toEqual([]);
+      expect(joinDetections(pair, prevalence(5, 10))).toEqual([]);
+    });
+
+    it("joins on a hash that is on a small part of the fleet", () => {
+      const [group] = joinDetections(pair, prevalence(2, 10));
+      expect(group.agentIds).toEqual(["a", "b"]);
+    });
+
+    it("cannot tell on a fleet too small to judge, and joins: two or three hosts sharing a hash is the signal", () => {
+      expect(joinDetections(pair, prevalence(2, 2))).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(MIN_FLEET_FOR_COMMON - 1, MIN_FLEET_FOR_COMMON - 1))).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(MIN_FLEET_FOR_COMMON, MIN_FLEET_FOR_COMMON))).toEqual([]);
+    });
+
+    it("joins as before when no prevalence is known: a hash with no sighting, or no figures given", () => {
+      expect(joinDetections(pair)).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(0, 10))).toHaveLength(1);
+      expect(joinDetections(pair, { reportingHosts: 10, hostsWithHash: new Map() })).toHaveLength(1);
+    });
+
+    it("only the common hash is dropped: another entity of the same detections still joins", () => {
+      const groups = joinDetections(
+        [
+          detection("a", exec()),
+          detection("b", exec(), minutes(1)),
+          detection("c", exec(OTHER_SHA)),
+          detection("d", exec(OTHER_SHA), minutes(1)),
+        ],
+        prevalence(8, 10)
+      );
+      expect(groups).toHaveLength(1);
+      expect(groups[0].entities).toEqual([{ kind: "sha256", key: OTHER_SHA }]);
+    });
+
+    it("never applies to an identity, which has no sightings to count", () => {
+      const groups = joinDetections(
+        [detection("a", session("alice")), detection("b", session("alice"), minutes(1))],
+        prevalence(10, 10)
+      );
+      expect(groups).toHaveLength(1);
+    });
+
+    it("isCommonHash is the whole rule: at the fraction of a fleet big enough, and not below", () => {
+      expect(isCommonHash(5, 10)).toBe(true);
+      expect(isCommonHash(4, 10)).toBe(false);
+      expect(isCommonHash(1, 0)).toBe(false);
+      expect(COMMON_HOST_FRACTION).toBeGreaterThan(0);
+      expect(COMMON_HOST_FRACTION).toBeLessThanOrEqual(1);
     });
   });
 

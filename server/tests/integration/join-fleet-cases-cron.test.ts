@@ -10,6 +10,7 @@ import {
 import { MAX_AGENTS_PER_ENTITY } from "@/lib/fleet-case";
 import { GET } from "@/app/api/cron/join-fleet-cases/route";
 import { prisma as routePrisma } from "@/lib/prisma";
+import { recordObservations } from "@/lib/prevalence";
 
 const SHA = "a".repeat(64);
 const OTHER_SHA = "b".repeat(64);
@@ -41,6 +42,54 @@ describe("GET /api/cron/join-fleet-cases", () => {
   afterAll(async () => {
     await cleanDatabase();
     await prisma.$disconnect();
+  });
+
+  describe("a hash that most of the fleet runs", () => {
+    /** `n` hosts that have all run SHA (the system shell); the first two also fired a detection on
+     * it, and on OTHER_SHA (a payload only they ran). */
+    async function fleetOf(n: number) {
+      const tenant = await createTestTenant();
+      const agents = [];
+      for (let i = 0; i < n; i++) {
+        const agent = await createTestAgent(tenant.id, `fleet-${i}`);
+        await recordObservations(prisma, tenant.id, agent.id, at(0), [{ kind: "sha256", key: SHA }]);
+        agents.push(agent);
+      }
+      for (const agent of agents.slice(0, 2)) {
+        await recordObservations(prisma, tenant.id, agent.id, at(0), [{ kind: "sha256", key: OTHER_SHA }]);
+        await createTestDetection(tenant.id, agent.id, { event: exec(SHA), timestamp: at(0) });
+        await createTestDetection(tenant.id, agent.id, { event: exec(OTHER_SHA), timestamp: at(1) });
+      }
+      return tenant;
+    }
+
+    it("joins on the rare hash and not on the one every host has, once the fleet is big enough to tell", async () => {
+      const tenant = await fleetOf(10);
+      await GET(cronRequest());
+      const cases = await prisma.fleetCase.findMany({ where: { tenantId: tenant.id }, include: { entities: true } });
+      expect(cases).toHaveLength(1);
+      expect(cases[0].entities.map((e) => e.key)).toEqual([OTHER_SHA]);
+    });
+
+    it("joins on both on a fleet of two, where a shared hash is the signal", async () => {
+      const tenant = await fleetOf(2);
+      await GET(cronRequest());
+      const cases = await prisma.fleetCase.findMany({ where: { tenantId: tenant.id }, include: { entities: true } });
+      expect(cases).toHaveLength(1);
+      expect(cases[0].entities.map((e) => e.key).sort()).toEqual([SHA, OTHER_SHA].sort());
+    });
+
+    it("counts the hosts of its own tenant only", async () => {
+      const tenant = await fleetOf(2);
+      const other = await createTestTenant();
+      for (let i = 0; i < 8; i++) {
+        const agent = await createTestAgent(other.id, `other-${i}`);
+        await recordObservations(prisma, other.id, agent.id, at(0), [{ kind: "sha256", key: SHA }]);
+      }
+      await GET(cronRequest());
+      const cases = await prisma.fleetCase.findMany({ where: { tenantId: tenant.id }, include: { entities: true } });
+      expect(cases[0].entities.map((e) => e.key).sort()).toEqual([SHA, OTHER_SHA].sort());
+    });
   });
 
   it("is refused without the cron secret", async () => {
