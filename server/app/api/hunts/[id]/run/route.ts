@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
-import { MAX_RUNS_PER_TENANT_PER_MINUTE, runHuntWithinLimit } from "@/lib/hunt";
+import { MAX_RUNS_PER_TENANT_PER_MINUTE } from "@/lib/hunt";
+import { runHuntWithinLimit } from "@/lib/hunt-runner";
 
 /**
  * POST /api/hunts/[id]/run — run the hunt now and return the new run. A query that
