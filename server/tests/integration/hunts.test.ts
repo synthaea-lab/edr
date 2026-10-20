@@ -17,10 +17,8 @@ import {
   HUNT_RUNS_KEPT,
   HUNT_TRANSACTION_TIMEOUT_MS,
   MAX_RUNS_PER_TENANT_PER_MINUTE,
-  dueHunts,
-  pruneHuntRuns,
-  runHunt,
 } from "@/lib/hunt";
+import { dueHunts, pruneHuntRuns, runHunt } from "@/lib/hunt-runner";
 import { Prisma } from "@prisma/client";
 
 const HOUR = 3_600_000;
