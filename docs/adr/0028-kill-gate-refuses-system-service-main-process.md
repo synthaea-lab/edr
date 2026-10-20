@@ -61,23 +61,38 @@ the implant from `NetworkManager` is provenance, not the amount of evidence.
 
 ## Consequences
 
-- `NetworkManager`, `chronyd`, `sshd` and most other package-owned daemons started by
-  init are escalated, not killed, whatever their belief score. The lab implant (exec'd
-  from `/tmp`, child of a shell) is killed as before; the regression tests pin both
-  sides. One category is not covered despite being package-owned and started by init:
-  a daemon whose own image *is* an interpreter (`ExecStart=/usr/bin/python3 -s
-  /usr/sbin/firewalld`, `tuned` on Fedora, most JVM-based services) is indistinguishable
-  at the image-path level from a script run the same way, and closing that gap (review
-  of #755) means this daemon stays killable on `BAYES` too. Accepted: a false
-  positive against an interpreter-run system service is judged less likely and less
-  disruptive than leaving every script run through a system interpreter permanently
-  immune to the gate.
+- `NetworkManager`, `chronyd`, `sshd` and most other daemons started by init from a
+  system path are escalated, not killed, whatever their belief score. The lab implant
+  (exec'd from `/tmp`, child of a shell) is killed as before; the regression tests pin
+  both sides. One category is not covered despite living on a system path and being
+  started by init: a daemon whose own image *is* an interpreter (`ExecStart=/usr/bin/
+  python3 -s /usr/sbin/firewalld`, `tuned` on Fedora, most JVM-based services) is
+  indistinguishable at the image-path level from a script run the same way, and
+  closing that gap (review of #755) means this daemon stays killable on `BAYES` too.
+  Accepted: a false positive against an interpreter-run system service is judged less
+  likely and less disruptive than leaving every script run through a system
+  interpreter permanently immune to the gate.
 - A compromised service's own main process is no longer auto-killed. The accepted
   trade-off: killing it restarts it, and the fleet-wide outage a false positive causes
   outweighs it. The compromised service's children remain killable.
-- The check is path-and-parent provenance, a heuristic: a binary a root attacker replaces
-  under `/usr/sbin` is not detected by it (the same limit `policy` documents for name
-  exclusions; the durable answer is signature and package verification).
+- **The check is path-and-parent provenance, a heuristic, not package verification —
+  nothing here asks whether a package actually owns the file** (review of #755,
+  SherlockOmss 2026-10-19; `agent::sink::SERVICE_MAIN_REFUSAL`'s wording was corrected
+  to say so, having previously claimed "package-owned"). Two consequences:
+  - A binary a root attacker replaces under `/usr/sbin` is not detected by it (the
+    same limit `policy` documents for name exclusions; the durable answer is
+    signature and package verification).
+  - `policy::service_main_path_is_trusted`'s `EXACT`/`FAMILIES` shell-and-interpreter
+    list is a blocklist with an unbounded tail: a root attacker who writes a unit
+    `ExecStart=`ing a binary under a trusted path that is neither a known
+    shell/interpreter nor a recognizable daemon name is outside the rule. Named
+    examples that would need nothing but a unit to run as a "service main" today:
+    `socat`, `ncat`, `nc`, `openssl`, `ssh` (a reverse tunnel), `curl`. Measured on a
+    live Fedora 43 host: 17 of 44 running service-main binaries sit directly under
+    `/usr/bin` (`/usr/sbin` is a symlink to it there), so narrowing the trusted paths
+    to `sbin`/`libexec` would unprotect the very daemon #652 is about, rather than
+    closing this gap. The durable fix is positive provenance — the unit's cgroup, or
+    package ownership — and is not in this PR.
 - **Limits.** Only services started directly by pid 1 qualify. User-session services
   (`systemd --user`) and container processes (parent is a container shim) are outside the
   rule and stay killable; whether they should be protected is open. The pid-1 test assumes

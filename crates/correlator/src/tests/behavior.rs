@@ -385,8 +385,8 @@ fn a_shell_or_interpreter_started_by_init_is_not_a_service_main_process() {
 fn opt_and_usr_local_are_not_service_main_paths() {
     // Review of #755 (Sollykhan, 2026-10-19): /opt/ and /usr/local/ host
     // third-party and admin-installed software as easily as a root attacker's own
-    // unit — being under either is not evidence of being the package-owned
-    // service the broader name-exclusion check was designed to rule out a
+    // unit — being under either is not evidence of being the kind of system-
+    // installed service the broader name-exclusion check was designed to rule out a
     // masquerade for.
     let mut engine = CorrelationEngine::new();
     engine.on_event(exec_with_meta(
@@ -425,6 +425,52 @@ fn a_daemon_that_shares_an_interpreter_family_prefix_still_qualifies() {
         "/usr/bin/php8.4",
     ));
     assert!(!engine.is_service_main_process(813, None));
+}
+
+#[test]
+fn interpreters_the_blocklist_used_to_miss_are_now_excluded() {
+    // Review of #755 (old-dov and SherlockOmss, 2026-10-19): a handful of real
+    // script runners had no version-suffix convention `FAMILIES` could already
+    // tolerate (`nodejs`, the only Node.js binary name some Debian/Ubuntu
+    // packages ship) or weren't in either list at all (`php-cgi`, which runs
+    // scripts, unlike the `php-fpm` daemon the previous test pins as protected).
+    // Each used to let a unit `ExecStart=`ing it through as a "service main",
+    // making any payload run through it permanently immune to the BAYES kill
+    // gate — the same class of hole #652 exists to close.
+    let mut engine = CorrelationEngine::new();
+    for (pid, name, path) in [
+        (814, "nodejs", "/usr/bin/nodejs"),
+        (815, "php-cgi8.4", "/usr/bin/php-cgi8.4"),
+        (816, "lua5.4", "/usr/bin/lua5.4"),
+        (817, "tclsh8.6", "/usr/bin/tclsh8.6"),
+        (818, "pypy3", "/usr/bin/pypy3"),
+    ] {
+        engine.on_event(exec_with_meta(meta_full(pid, 1, name, 0), path));
+        assert!(
+            !engine.is_service_main_process(pid, None),
+            "{name} must not be classed as a service main"
+        );
+    }
+
+    // `php-fpm` (the daemon) does not share the `php-cgi` family prefix, so it
+    // is unaffected by giving `php-cgi` its own entry.
+    engine.on_event(exec_with_meta(
+        meta_full(819, 1, "php-fpm8.4", 0),
+        "/usr/sbin/php-fpm8.4",
+    ));
+    assert!(engine.is_service_main_process(819, None));
+
+    // Documented, not fixed by this PR (ADR-0028 Consequences): a network tool
+    // run directly by a unit is not a known shell/interpreter/daemon name, so
+    // it still passes as a "service main". Pinning this is deliberate — it is
+    // the unbounded-tail gap the ADR now names explicitly, not a regression to
+    // catch, and a future narrowing of the blocklist should not close it by
+    // accident without updating that documentation.
+    engine.on_event(exec_with_meta(
+        meta_full(820, 1, "socat", 0),
+        "/usr/bin/socat",
+    ));
+    assert!(engine.is_service_main_process(820, None));
 }
 
 // ── BAYES_NAME_EXCLUSIONS (issue #212) ──────────────────────────────────────

@@ -123,10 +123,19 @@ struct SchemaProbe {
 /// file name, by exact name or by family prefix (`python3.12`, `perl5.38`). Not a complete
 /// list, a guard against the obvious mistake; the operator still chooses what to trust.
 ///
-/// `policy::service_main_path_is_trusted` keeps an intentionally identical `EXACT`/
-/// `FAMILIES` pair for a different question (the correlator's kill-gate provenance
-/// guard, #652/#755) — `correlator` can't depend on this crate (dependency direction,
-/// `tools/check-deps.py`), so it isn't shared. Keep the two lists in sync by hand.
+/// `policy::service_main_path_is_trusted` keeps its own `EXACT`/`FAMILIES` pair for a
+/// different question (the correlator's kill-gate provenance guard, #652/#755) —
+/// `correlator` can't depend on this crate (dependency direction, `tools/check-deps.py`),
+/// so it isn't shared. The two lists started identical but no longer are: `starts_with`
+/// over-matching is the safe direction here (allowing an interpreter name too eagerly
+/// still only widens what an operator must explicitly opt into with `allow_exe`), so
+/// `lua`/`tclsh` stay plain `EXACT` entries and names like `nodejs`/`phpdbg` were never
+/// needed — but `policy`'s version meant that same looseness let a real daemon
+/// (`php-fpm8.4`) or a real interpreter (`nodejs`) slip past the kill-gate check in the
+/// unsafe direction, so it grew extra `EXACT` entries and version-tolerant `FAMILIES`
+/// matching that this list has no reason to copy (review of #755, old-dov/SherlockOmss
+/// 2026-10-19). Keep both covering the same universe of interpreters by hand; the exact
+/// entries and matching precision are allowed to differ per their own safe direction.
 fn is_interpreter(path: &Path) -> bool {
     const EXACT: &[&str] = &[
         "sh",

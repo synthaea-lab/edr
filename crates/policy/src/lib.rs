@@ -146,10 +146,9 @@ pub fn service_main_path_is_trusted(path: &str) -> bool {
         "awk",
         "gawk",
         "mawk",
+        "nawk",
         "sed",
-        "lua",
         "luajit",
-        "tclsh",
         "wish",
         "expect",
         "gdb",
@@ -159,9 +158,27 @@ pub fn service_main_path_is_trusted(path: &str) -> bool {
         "chroot",
         "pwsh",
         "powershell",
+        // Script runners with no version-suffix convention of their own
+        // (review of #755, SherlockOmss 2026-10-19: each probed as a false
+        // "service main" at head). `nodejs` is the only binary name some
+        // Node.js packages on Debian/Ubuntu ship (old-dov 2026-10-19).
+        "nodejs",
+        "phpdbg",
+        "rscript",
+        "micropython",
+        "julia",
+        "guile",
+        "racket",
+        "jshell",
     ];
     const FAMILIES: &[&str] = &[
         "python", "perl", "ruby", "node", "php", "java", "bun", "deno",
+        // Moved here from EXACT (`lua`, `tclsh`) or added (`php-cgi`, `pypy`)
+        // so a version suffix is also recognized (`lua5.4`, `tclsh8.6`,
+        // `php-cgi8.4`, `pypy3`) — review of #755, SherlockOmss 2026-10-19.
+        // `php-fpm` (the daemon) does not share the `php-cgi` prefix, so this
+        // does not reopen the `php-fpm8.4` false-positive old-dov's review fixed.
+        "lua", "tclsh", "php-cgi", "pypy",
     ];
     let name = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
     let is_family_interpreter = FAMILIES.iter().any(|family| {
@@ -174,7 +191,9 @@ pub fn service_main_path_is_trusted(path: &str) -> bool {
             // `allow_exe`'s identical list — it strips protection from a real
             // daemon, not from a script runner). Only digits and `.` after the
             // prefix: no interpreter name in either list has a further suffix
-            // that isn't a version number.
+            // that isn't a version number. Two still do (`nodejs`, `php-cgi`
+            // without a trailing version): those are listed in `EXACT` or
+            // given their own family entry above instead.
             rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit() || c == '.')
         })
     });

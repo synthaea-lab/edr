@@ -353,7 +353,12 @@ fn crosses_kill_gate(technique: &str) -> bool {
 }
 
 /// Why the kill gate refuses a system service's main process (#652, ADR-0028).
-const SERVICE_MAIN_REFUSAL: &str = "main process of a system service (package-owned binary started by init); escalated, not killed";
+// Review of #755 (SherlockOmss, 2026-10-19): the old wording ("package-owned
+// binary") claimed more than `service_main_path_is_trusted` checks — nothing
+// here asks whether a package actually owns the file, only where it lives and
+// who started it. An analyst reading `alerts.ndjson` would otherwise take
+// "package-owned" as verified.
+const SERVICE_MAIN_REFUSAL: &str = "main process of a system service (image under a system path, started by init); escalated, not killed";
 
 /// ATT&CK technique ids folded into a [`schema::detection::Detection`] from the
 /// `technique` string this crate already uses as the dedup/alert-log key.
@@ -1097,8 +1102,9 @@ impl DetectionSink {
     /// Issue #25: policy-gates killing the process behind a high-confidence
     /// correlated verdict. A no-op whenever `enable_response` was never called.
     ///
-    /// Issue #652: `service_main` is the correlator's provenance verdict for `pid` (a
-    /// package-owned binary started by init). A Bayesian crossing alone does not
+    /// Issue #652: `service_main` is the correlator's provenance verdict for `pid` (its
+    /// image under a system path, started by init — see `SERVICE_MAIN_REFUSAL`'s doc
+    /// comment for why this is not phrased as "package-owned"). A Bayesian crossing alone does not
     /// justify killing a system service, so it is refused, in observe mode too, and the
     /// verdict still escalates. Corroborating evidence does not lift it: the refusal is
     /// about what the process is, not how much evidence there is (ADR-0028).
