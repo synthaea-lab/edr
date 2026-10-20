@@ -46,8 +46,21 @@ notes: >
   T1505.003 `0s from a WebshellLike request (GET /uploads/c99.php param=cmd, status 200, client
   10.88.0.1)` fire (the client is the podman bridge, not 127.0.0.1). That wording is the one of the
   `665dc8d` build; since #807 main words the same alert `<delta>s after a WebshellLike request`
-  (crates/correlator/src/rules.rs), so the quote is not what a current agent prints; the container
-  case was not re-run with one. The missing attribution was tracked as #894 and is fixed on main by #904 (not re-run here). The exec event carried no container
-  attribution: the container's cgroup is `machine.slice/libpod-<id>.scope/container`, and the id extraction
-  in crates/sensors/linux/userspace/src/container.rs (where the exec events are attributed, sensor.rs:325;
-  the uprobes copy has the same logic) only knows `docker-<id>.scope` and `cri-containerd-<id>.scope`.
+  (crates/correlator/src/rules.rs), so the quote is not what a current agent prints. The missing
+  attribution was tracked as #894 and is fixed on main by #904. In that first run the exec event
+  carried no container attribution: the container's cgroup is `machine.slice/libpod-<id>.scope/container`,
+  and the id extraction in crates/sensors/linux/userspace/src/container.rs (where the exec events are
+  attributed, sensor.rs:325; the uprobes copy has the same logic) only knew `docker-<id>.scope` and
+  `cri-containerd-<id>.scope`.
+  Re-run with a current agent, 2026-10-20 (Fedora 43, kernel 7.2.9, SELinux Enforcing, rootful podman
+  5.8.8, `php:8.4-apache` on port 8090 with the same two bind mounts; the agent is the VM's lab tree
+  built 2026-10-19 with #904's change, binary sha256 `aa7ee4f6...`; `rules.rs` and `sensor.rs` of that
+  tree are identical to main's and the two `container.rs` differ only in test formatting; run as a
+  root script, local mode, no `--enable-kill`): T1059 `pid=... comm=sh executed directly by ppid=...
+  comm=apache2 (service)` and T1505.003 `shell spawned by a web server 0s after a WebshellLike
+  request (GET /uploads/c99.php param=cmd, status 200, client 10.88.0.1)` fire, so the quote above is
+  now the current wording. The exec events of the web server's `sh` (`sh -c -- id`) and of its `id`
+  carry `meta.container.id`, equal to the id in the container's cgroup (`libpod-2a41b9f6...`). The
+  alerts themselves do not name the container: the id is on the events only. The apache2 process was
+  started before the agent, so its own exec is not in the run. Not covered: rootless podman, a build
+  with a recorded commit hash (the lab tree has no `.git`), Rocky.
