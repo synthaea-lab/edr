@@ -224,7 +224,9 @@ describe("detection ingest feeds prevalence", () => {
 
   it("records the event's observations for the agent's tenant", async () => {
     expect((await ingest()).status).toBe(200);
-    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
+    // The ingest stats (#899) are the other write; the prevalence one is the first.
+    const written = db.$executeRaw.mock.calls.filter((c) => String(c[0].sql).includes("prevalence_sightings"));
+    expect(written).toHaveLength(1);
   });
 
   // Regression guard: the detection is already stored when counters run, and a
