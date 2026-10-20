@@ -20,6 +20,7 @@ model Tenant {
   agents              Agent[]
   detections          Detection[]
   cases               Case[]
+  fleetCases          FleetCase[]
   caseNarratives      CaseNarrative[]
   auditLogs           AuditLog[]           @relation("TenantAuditLogs")
   contentReleases     ContentRelease[]
@@ -128,6 +129,10 @@ model Detection {
   // Grouped into a Case by the cron/group-detections sweep (issue #50); null
   // until grouped, so "caseId: null" is the query for "ungrouped evidence".
   caseId            String?  @map("case_id")
+  // The fleet-level case this detection was joined into across hosts by the
+  // cron/join-fleet-cases sweep (issue #62); independent of `caseId`, which is
+  // one host's grouping. Null when it joined nothing.
+  fleetCaseId       String?  @map("fleet_case_id")
   timestamp         DateTime
   technique         String // MITRE ATT&CK technique (e.g., T1059.001)
   severity          String // low/medium/high/critical
@@ -157,12 +162,14 @@ model Detection {
   // SetNull, not Cascade: deleting a Case must not delete the underlying
   // evidence it was built from.
   case   Case?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  fleetCase FleetCase? @relation(fields: [fleetCaseId], references: [id], onDelete: SetNull)
 
   @@unique([agentId, ingestId])
   @@index([tenantId, timestamp])
   @@index([agentId, timestamp])
   @@index([technique])
   @@index([caseId])
+  @@index([fleetCaseId])
   @@map("detections")
 }
 
@@ -184,6 +191,47 @@ model Case {
   @@index([tenantId, status, createdAt])
   @@index([severity])
   @@map("cases")
+}
+
+// Fleet case (issue #62, box 1): detections of two or more agents joined by a
+// shared entity (a file hash or an identity, `lib/fleet-case.ts`). Written only
+// by cron/join-fleet-cases; rebuildable from the detections, which stay the
+// evidence. `severity` is the highest of its detections and never goes down.
+model FleetCase {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  severity   String // low/medium/high/critical
+  status     String   @default("open") // open/investigating/resolved/false_positive
+  agentCount Int      @map("agent_count")
+  firstAt    DateTime @map("first_at")
+  lastAt     DateTime @map("last_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entities   FleetCaseEntity[]
+  detections Detection[]
+
+  @@index([tenantId, status, createdAt])
+  @@map("fleet_cases")
+}
+
+// One entity a fleet case joined on. Unique per tenant: an entity belongs to
+// one fleet case, so a later sighting of it grows that case instead of opening
+// a second one, and a detection that bridges two cases merges them.
+model FleetCaseEntity {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  fleetCaseId String   @map("fleet_case_id")
+  kind        String // sha256 | identity
+  key         String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  fleetCase FleetCase @relation(fields: [fleetCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, key])
+  @@index([fleetCaseId])
+  @@map("fleet_case_entities")
 }
 
 // Case narrative - one row per LLM-generated narration of a case's evidence

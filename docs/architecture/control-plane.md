@@ -228,3 +228,24 @@ unparseable body is retried, other `4xx` count toward skipping the segment
 - `agent.lastSeen` is updated, as it is for the heartbeat and detection routes.
 - Detections still go to `POST /api/ingest/detection` (one object per request).
   Nothing on the agent posts there yet.
+
+## Fleet cases
+
+`GET /api/cron/join-fleet-cases` (`CRON_SECRET`, called every few minutes like the other sweeps,
+nothing in the repo schedules it) joins each tenant's detections of the last seven days across
+hosts into **fleet cases** (#62, box 1). Two detections of different agents join when they carry
+the same executed file hash or the same signed-in identity, read through the entity extraction of
+the graph (`server/lib/graph.ts`), within 24 hours of each other. A fleet case is a `FleetCase` row
+with the entities it joined on (`FleetCaseEntity`, unique per tenant) and the detections it holds
+(`Detection.fleetCaseId`, independent of the host case in `caseId`). Its severity is the highest of
+its detections and never goes down; a later sighting of one of its entities grows it, and a
+detection that bridges two cases merges them into the older one. The join is idempotent.
+
+The join is narrow on purpose, because ADR-0035 makes a fleet case the trigger of a posture
+overlay and an attacker who can make a detection fire can try to link hosts: a bare path or a
+technique never joins; the accounts every host has (`root`, `SYSTEM`, ...) are not an identity; an
+entity seen on more than 20 agents joins nothing (software that is everywhere is not evidence).
+The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
+built: a console view or an API route for fleet cases, the other entities of #62 (lateral
+source/destination pairs, software inventory, network neighbours), and any posture trigger.
+Not run against a lab: only the tests, on one Postgres.
