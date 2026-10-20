@@ -176,9 +176,10 @@ pub fn is_expired(built_at: u64, now: u64, max_age_secs: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use ring::signature::KeyPair;
+
     use super::*;
     use crate::key::test_snapshot_key_pair;
-    use ring::signature::KeyPair;
 
     const NOW: u64 = 1_760_000_000;
 
