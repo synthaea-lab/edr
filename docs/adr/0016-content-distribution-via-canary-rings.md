@@ -101,7 +101,8 @@ model ContentRelease {
 
 **Artifact storage**: Object store or filesystem
 - Manifests: `manifests/content-{ring}-v{version}.json`
-- Artifacts: `artifacts/{path}` (e.g., `artifacts/rules/beacon.sigma`)
+- Artifacts: `artifacts/{sha256}` (content-addressed, not by path — #804; see
+  `docs/operations/content.md` for staging an artifact into the store)
 
 ### 3. Agent Content Distribution Flow
 

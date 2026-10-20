@@ -64,15 +64,78 @@ and refuses one that does not verify or lists nothing):
     release-tool sign --kind content --key-file release.key release-5.json --out release-5-signed.json
 
 `--current` (the manifest being withdrawn) is optional but worth giving: it lists what agents will
-remove, and the paths whose bytes differ between the two releases. **The artifact store keeps one
-file per path** (`storage/artifacts/<path>`), so for those paths the earlier bytes must be put
-back in the store before publishing. Content the later release only *added* needs nothing.
+remove, and the paths whose bytes differ between the two releases, for the operator's own
+information. **The artifact store is keyed by content hash** (`storage/artifacts/<sha256>`,
+#804), not by path, so nothing needs restoring: the earlier release's bytes are still sitting
+under their own hash, wherever they were first uploaded, whatever a later release did at that
+path. Publishing the corrective release needs only the manifest itself.
 
 Then publish with `POST /api/content/release`. The control plane refuses (422) a release whose
 manifest is not the one named, lists nothing, is for another ring, carries another number than the
 one it will assign, or lists an artifact that is missing from the store or does not hash to its
 value, so none of this shows up later as a failure for every agent of the ring. Agents fetch what
 differs and remove what it no longer lists (see above).
+
+## Staging an artifact in the store
+
+The artifact store is keyed by content hash, not by path (`storage/artifacts/<sha256>`, #804).
+To publish a release that adds or changes a file, put its bytes there under the hash of its own
+content before calling `POST /api/content/release` — the manifest's `sha256` for that entry must
+match:
+
+    sha=$(sha256sum rules/new.sigma | cut -d' ' -f1)
+    cp rules/new.sigma storage/artifacts/$sha
+
+An unchanged file needs nothing staged: its bytes are already under their hash from whichever
+release first uploaded them, and the store never prunes a hash that any release (active,
+rolled-back, or historical) still references (retention for hashes nothing references any more
+is #834). A publish that lists a hash not present in the store is refused (422, "not in the
+store"), naming the missing path.
+
+## Upgrading a server from the old, path-keyed store (#804)
+
+Before #804, `storage/artifacts/` held one file per manifest path
+(`storage/artifacts/rules/beacon.sigma`), **overwritten on every release that changed that
+path** — the old layout never kept more than the current bytes. The routes now read and write
+only `storage/artifacts/<sha256>`. A server upgraded without a migration step serves every agent
+a 404 on its next fetch — a new enrollment, an agent moved back to its ring, or the same-release
+repair above. Before deploying past this change, copy each existing file to its hash-named
+sibling (the old path-keyed files are no longer read and can be removed once every active
+release's artifacts have a hash-named copy):
+
+    find storage/artifacts -type f ! -regex '.*/[0-9a-f]\{64\}$' | while IFS= read -r f; do
+        sha=$(sha256sum "$f" | cut -d' ' -f1)
+        cp "$f" "storage/artifacts/$sha"
+    done
+
+Safe to re-run (a hash-named destination that already exists is overwritten with the same
+bytes), but re-running does **not** verify completeness or re-heal a hash-named file that is
+already missing or corrupt — it only ever reads path-named files, which the `! -regex` exclusion
+skips once they have a hash-named copy. Verify after running: for every release still referenced
+(active, rolled-back, or historical — same scope as the retention note above), its manifest's
+every `sha256` must resolve with `test -f storage/artifacts/$sha`.
+
+**This migration cannot recover a path's *overwritten* versions — only what is on disk right
+now.** Because the old layout kept one file per path, a release that changed `rules/x.yml`
+discarded whatever bytes were there before; by the time this migration runs, only the
+*current* release's bytes survive at that path, and only those get a hash-named copy. A
+corrective release naming an *earlier* release's hash for `rules/x.yml` (ADR-0032) is refused
+(422, "not in the store") exactly as if it had never been uploaded, because for this migration's
+purposes it never was: that hash's bytes were already gone before #804 shipped. Re-stage them
+under their own hash from the original release's build artifacts (the `dist/` directory
+`release-tool manifest` built that release from, not the live server) before publishing a
+corrective release that reaches back past the most recent change to a path.
+
+**`sha256` is schema-validated on every load, not only on publish** (`ContentEntry.sha256`,
+`/^[a-f0-9]{64}$/`, since #835): `loadActiveManifest` runs the same `ContentManifest.safeParse`
+the publish route does, on every agent fetch of every still-active release's stored manifest
+file. A manifest that predates the regex, or was otherwise stored with a non-conforming hash
+before this change shipped, now makes every agent of that release's ring get a 502 ("Manifest
+does not match the expected schema") on every fetch, not just the next publish. Before deploying
+this change, check every currently-active release's stored manifest against the regex (a quick
+`jq '.entries[].sha256' storage/manifests/*.json | grep -vE '^"[a-f0-9]{64}"$'` over the active
+ones is enough) and re-sign a corrected manifest for any that fail, same as the #804 migration
+above is itself a pre-deploy step, not something the running server does for you.
 
 ## Halting or rolling back a ring from the console
 
