@@ -1232,14 +1232,13 @@ impl RuleState {
         // stream feeds both sides of it), but still joins by event time, not
         // arrival order — see the `sudo` module's doc. Gated on `comm`, not
         // just `User::Unix`: an sshd failure (`LogonFailure` from `SshFailed`)
-        // is also a Unix identity and must never reach this join. For `su`
-        // this still only guards against the wrong *category* of event
-        // reaching the join, same as before (an attacker-controlled sshd
-        // username could still pollute `su`'s own target-name history by
-        // other means — see `crate::sudo`'s doc on that residual gap); for
-        // `sudo` the join itself now keys on the trusted uid below, not on
-        // anything parsed from the message (review of #838, Sollykhan
-        // 2026-10-19, point 1).
+        // is also a Unix identity, and must never reach this join at all —
+        // unchanged by the point below. What changed (review of #838,
+        // Sollykhan 2026-10-19, point 1): once an event *does* pass this
+        // gate, `sudo`'s own side of the join now keys on the trusted uid
+        // below, not on anything parsed from the message; `su`'s still keys
+        // on the target name, which has its own, narrower residual exposure
+        // — see `crate::sudo`'s doc for why the two differ.
         if let User::Unix { uid, .. } = event.meta.user {
             match event.meta.comm.as_str() {
                 "sudo" => alerts.extend(self.sudo_success.on_sudo_failure(uid, ts)),

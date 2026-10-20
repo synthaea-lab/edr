@@ -171,14 +171,14 @@ fn classify_sshd(message: &str) -> Option<JournalEvent> {
 }
 
 /// Substrings `sudo` logs on the same `COMMAND=` line when the attempt did
-/// **not** succeed (wrong password, an account not in `sudoers`, a `sudoers`
-/// rule that names the command but refuses it, no password available to try,
-/// a `sudoers` rule that names the command but restricts it to other hosts) —
-/// checked before treating a `COMMAND=` line as a privilege-escalation
-/// success — a failed attempt logs `COMMAND=` too, same line shape.
+/// **not** succeed — a wrong password, an account not in `sudoers`, a
+/// `sudoers` rule that names the command but refuses it either on this host
+/// or outright, no password available to try — checked before treating a
+/// `COMMAND=` line as a privilege-escalation success, since a failed attempt
+/// logs `COMMAND=` too, same line shape. The host-restriction marker,
 /// `"user NOT authorized on host"` (`plugins/sudoers/logging.c`, sudo
-/// 1.9.15p5) added per review of #838 (Sollykhan, 2026-10-19): without it, a
-/// denial from a host-restricted central `sudoers` (fleets where one
+/// 1.9.15p5), was added per review of #838 (Sollykhan, 2026-10-19): without
+/// it, a denial from a host-restricted central `sudoers` (fleets where one
 /// `sudoers` file is shared and scoped per host) was counted as a success.
 const SUDO_COMMAND_FAILURE_MARKERS: &[&str] = &[
     "incorrect password attempt",
