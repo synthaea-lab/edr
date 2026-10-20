@@ -29,6 +29,7 @@ model Tenant {
   corpusSamples       CorpusSample[]
   prevalenceSightings PrevalenceSighting[]
   ingestStats         IngestStat[]
+  commonSetSnapshot   CommonSetSnapshot?
   hunts               Hunt[]
   huntRuns            HuntRun[]
   decoyTokens         DecoyToken[]
@@ -687,4 +688,26 @@ model Notification {
   @@index([tenantId, createdAt])
   @@index([tenantId, lastAttemptAt])
   @@map("notifications")
+}
+
+// The tenant's latest common-set snapshot (ADR-0033, #76 box 2): the artifact bytes and the
+// signed manifest that names them. One row per tenant, replaced by each build; the agent fetches
+// both through /api/snapshot/*. The builder's guards compare a new build with this row.
+model CommonSetSnapshot {
+  id         String   @id @default(uuid())
+  tenantId   String   @unique @map("tenant_id")
+  builtAt    DateTime @map("built_at")
+  hostsCovered Int     @map("hosts_covered")
+  minHosts   Int      @map("min_hosts")
+  entryCount Int      @map("entry_count")
+  sha256     String
+  size       Int
+  // The SnapshotManifest as signed (lib/snapshot-manifest.ts).
+  manifest   Json
+  artifact   Bytes
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("common_set_snapshots")
 }
