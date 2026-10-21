@@ -129,13 +129,15 @@ jobs:
               apk add --allow-untrusted "$APK1"
               sh -n /etc/init.d/synthaea-agent || fail "installed openrc-run script is not valid shell"
               /var/lib/synthaea/bootstrap/agent --help >/dev/null || fail "freshly installed agent --help failed"
+              caps_before="$(grep "^capabilities=" /etc/init.d/synthaea-agent)"
+              [ -n "$caps_before" ] || fail "no capabilities= line in the freshly installed openrc-run script"
 
               echo "== upgrade to pkgrel 1 =="
               apk add --allow-untrusted --upgrade "$APK2"
               sh -n /etc/init.d/synthaea-agent || fail "upgraded openrc-run script is not valid shell"
               /var/lib/synthaea/bootstrap/agent --help >/dev/null || fail "agent --help failed after upgrade"
-              grep -qF "capabilities=\"^cap_bpf,^cap_perfmon,^cap_sys_resource,^cap_dac_read_search,^cap_net_admin,^cap_kill,^cap_audit_read\"" \
-                /etc/init.d/synthaea-agent || fail "capabilities= directive changed across the upgrade"
+              caps_after="$(grep "^capabilities=" /etc/init.d/synthaea-agent)"
+              [ "$caps_before" = "$caps_after" ] || fail "capabilities= directive changed across the upgrade ($caps_before -> $caps_after)"
 
               echo "== remove =="
               apk del synthaea-agent || fail "apk del did not run cleanly"
