@@ -19,11 +19,15 @@
 //! non-interactive session can't provide. Flagged as a lab-validation follow-up
 //! (see the crate doc's Status section), same as issue #91's kernel-dependent paths.
 //!
-//! `classify_pam` only matches the `pam_unix(` prefix: a host authenticating
-//! `sudo`/`su` through sssd/LDAP or `pam_faillock` instead of (or alongside)
-//! `pam_unix` produces no [`JournalEvent::PamAuthFailure`], and the T1548.003
-//! burst-then-success join (`crates/rules/src/sudo.rs`) never fires there —
-//! not live-validated against such a host either.
+//! `classify_pam` matches the `pam_unix(`/`pam_sss(` prefixes (#881) — a host
+//! authenticating `sudo`/`su` through LDAP (via `pam_ldap`, which has no auth-failure
+//! message of its own) still falls back to `pam_unix`'s own line and is covered, but
+//! `pam_faillock`'s lockout-bookkeeping lines are a different shape entirely and
+//! still produce no [`JournalEvent::PamAuthFailure`], so the T1548.003 burst-then-
+//! success join (`crates/rules/src/sudo.rs`) still never fires purely from those.
+//! Neither `pam_unix` nor `pam_sss`'s lines are live-validated against a real sssd
+//! host here (no such host in this dev sandbox) — same documented-format caveat as
+//! the sshd lines above.
 
 use crate::JournalRecord;
 
@@ -247,7 +251,19 @@ fn normalize_pam_service(service: &str) -> &str {
 }
 
 fn classify_pam(message: &str) -> Option<JournalEvent> {
-    let rest = message.strip_prefix("pam_unix(")?;
+    // pam_sss (SSSD) deliberately mirrors pam_unix's exact line shape for its own
+    // auth-failure message — a 2009 upstream patch added it specifically so
+    // existing pam_unix-oriented log tooling keeps working unchanged (#881):
+    // same "authentication failure; logname=... uid=... euid=... tty=... ruser=...
+    // rhost=... user=..." fields, just a different module name in the prefix.
+    // pam_ldap is deliberately NOT matched here: it has no comparable message of
+    // its own — an LDAP-authenticated failure is still logged by pam_unix when
+    // that module is stacked alongside it, which is already covered. pam_faillock
+    // is also not matched: its own log lines (lockout bookkeeping, a different
+    // shape entirely) don't carry this format either; still an open gap (#881).
+    let rest = ["pam_unix(", "pam_sss("]
+        .into_iter()
+        .find_map(|prefix| message.strip_prefix(prefix))?;
     let (service, _) = rest.split_once(':')?;
     let service = normalize_pam_service(service).to_string();
 
@@ -653,6 +669,30 @@ mod tests {
     }
 
     #[test]
+    fn pam_auth_failure_for_sudo_via_pam_sss_is_classified_the_same_as_pam_unix() {
+        // SSSD-backed sudo (sssd/LDAP-joined host, #881): pam_sss's own
+        // auth-failure line was deliberately patched upstream (2009) to mirror
+        // pam_unix's exact field layout, specifically so tooling keyed on that
+        // layout keeps working — only the module name in the prefix differs.
+        let r = record_with(&[
+            ("SYSLOG_IDENTIFIER", "sudo"),
+            (
+                "MESSAGE",
+                "pam_sss(sudo:auth): authentication failure; logname=omss uid=1000 euid=0 \
+                 tty=/dev/pts/2 ruser=omss rhost=  user=omss",
+            ),
+        ]);
+        assert_eq!(
+            classify(&r),
+            Some(JournalEvent::PamAuthFailure {
+                service: "sudo".into(),
+                invoking_user: Some("omss".into()),
+                target_user: Some("omss".into()),
+            })
+        );
+    }
+
+    #[test]
     fn pam_auth_failure_for_su_dash_login_is_folded_into_su() {
         // Review of #838 (Sollykhan, 2026-10-19): `su -`/`su --login` dispatch PAM
         // through the separate `su-l` service (PAM 1.5.3's `/etc/pam.d/su-l`), not
@@ -756,6 +796,20 @@ mod tests {
             "MESSAGE",
             "pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh \
              ruser= rhost=10.0.0.5  user=alice",
+        )]);
+        assert_eq!(classify(&r), None);
+    }
+
+    #[test]
+    fn pam_ldap_prefix_is_not_matched_deliberately() {
+        // pam_ldap has no auth-failure message of its own to match — an
+        // LDAP-authenticated failure is still logged by pam_unix when that module
+        // is stacked alongside it (already covered). A hypothetical pam_ldap(...)
+        // line, if one ever existed, is intentionally not classified here (#881).
+        let r = record_with(&[(
+            "MESSAGE",
+            "pam_ldap(sudo:auth): authentication failure; logname=lab uid=1001 euid=0 \
+             tty=pts/0 ruser=lab rhost=  user=lab",
         )]);
         assert_eq!(classify(&r), None);
     }
