@@ -49,8 +49,11 @@ carries the earlier content.
    one named, lists nothing, is for another ring, carries a number other than the one it will
    assign, or lists an artifact that is missing from the store (uploaded under the wrong hash, or
    never uploaded) or does not hash to its value**, instead of failing for the whole ring when it
-   is served. Unreferenced artifacts (once nothing still released lists their hash) are not
-   pruned yet — a retention rule is a deliberate follow-up, not done here (#834).
+   is served. Unreferenced artifacts (once nothing still released lists their hash) are removed
+   by `GET /api/cron/prune-artifacts` (`lib/content-retention.ts`, #834). The referenced set is
+   every hash listed by the manifest of every release row, whatever its status, tenant or ring.
+   The job fails closed (a manifest it cannot read means nothing is deleted) and keeps any file
+   younger than 24 hours, since an artifact is uploaded before the release that lists it.
 4. **The rollback endpoint keeps its job, and says what it does not do.** It still reactivates
    the earlier release for agents that have not applied the rolled-back one. Its response and its
    audit entry now name the corrective release that is needed (the number to use, the release to
