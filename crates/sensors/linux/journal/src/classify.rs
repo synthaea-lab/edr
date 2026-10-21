@@ -19,15 +19,18 @@
 //! non-interactive session can't provide. Flagged as a lab-validation follow-up
 //! (see the crate doc's Status section), same as issue #91's kernel-dependent paths.
 //!
-//! `classify_pam` matches the `pam_unix(`/`pam_sss(` prefixes (#881) — a host
-//! authenticating `sudo`/`su` through LDAP (via `pam_ldap`, which has no auth-failure
-//! message of its own) still falls back to `pam_unix`'s own line and is covered, but
-//! `pam_faillock`'s lockout-bookkeeping lines are a different shape entirely and
-//! still produce no [`JournalEvent::PamAuthFailure`], so the T1548.003 burst-then-
-//! success join (`crates/rules/src/sudo.rs`) still never fires purely from those.
-//! Neither `pam_unix` nor `pam_sss`'s lines are live-validated against a real sssd
-//! host here (no such host in this dev sandbox) — same documented-format caveat as
-//! the sshd lines above.
+//! `classify_pam` matches the `pam_unix(`/`pam_sss(` prefixes (#881), the latter
+//! checked against SSSD's own upstream source rather than assumed (see the
+//! function's doc). `pam_ldap` and `pam_faillock` are still not matched — not
+//! confirmed safe to skip, just unconfirmed either way (`pam_ldap`) or a different
+//! message shape entirely (`pam_faillock`) — so the T1548.003 burst-then-success
+//! join (`crates/rules/src/sudo.rs`) can still silently miss failures on a host
+//! using either. A host stacking `pam_unix` and `pam_sss` as two authenticators for
+//! the *same* account (not the usual one-module-per-account-source arrangement)
+//! could also double-count one failed password as two — open question, not ruled
+//! out. Neither `pam_unix` nor `pam_sss`'s lines are live-validated against a real
+//! sssd host here (no such host in this dev sandbox) — same documented-format
+//! caveat as the sshd lines above.
 
 use crate::JournalRecord;
 
@@ -251,16 +254,28 @@ fn normalize_pam_service(service: &str) -> &str {
 }
 
 fn classify_pam(message: &str) -> Option<JournalEvent> {
-    // pam_sss (SSSD) deliberately mirrors pam_unix's exact line shape for its own
-    // auth-failure message — a 2009 upstream patch added it specifically so
-    // existing pam_unix-oriented log tooling keeps working unchanged (#881):
-    // same "authentication failure; logname=... uid=... euid=... tty=... ruser=...
-    // rhost=... user=..." fields, just a different module name in the prefix.
-    // pam_ldap is deliberately NOT matched here: it has no comparable message of
-    // its own — an LDAP-authenticated failure is still logged by pam_unix when
-    // that module is stacked alongside it, which is already covered. pam_faillock
-    // is also not matched: its own log lines (lockout bookkeeping, a different
-    // shape entirely) don't carry this format either; still an open gap (#881).
+    // pam_sss (SSSD): matched against the module's own upstream source
+    // (src/sss_client/pam_sss.c, send_and_receive(), SSSD/sssd@master, checked
+    // 2026-10-21), not assumed — its logger() call emits
+    //   "authentication %s; logname=%s uid=%lu euid=%d tty=%s ruser=%s rhost=%s
+    //   user=%s"
+    // with "%s" filled in as "success"/"failure", in the same field order
+    // extract_field below reads for pam_unix (#881, review by SherlockOmss).
+    //
+    // pam_ldap is deliberately NOT matched here — not because it is confirmed to
+    // have no message of its own (no source checked for that), but because no
+    // source was found that documents one; treat as "not covered, format
+    // unknown", not "safely covered elsewhere". pam_faillock is also not
+    // matched: its own log lines (lockout bookkeeping) are a different shape
+    // entirely. Both are still open gaps (#881).
+    //
+    // Known open question, not resolved here: a host where pam_unix and pam_sss
+    // are BOTH stacked as authenticators for the same account (rather than one
+    // module handling local accounts and the other remote ones, which is the
+    // usual authselect/sssd arrangement) could log two PamAuthFailure events for
+    // one wrong password, double-counting toward sudo.rs's T1548.003 threshold.
+    // Nothing in this crate can tell which arrangement a given host uses from
+    // the journal lines alone.
     let rest = ["pam_unix(", "pam_sss("]
         .into_iter()
         .find_map(|prefix| message.strip_prefix(prefix))?;
@@ -802,10 +817,13 @@ mod tests {
 
     #[test]
     fn pam_ldap_prefix_is_not_matched_deliberately() {
-        // pam_ldap has no auth-failure message of its own to match — an
-        // LDAP-authenticated failure is still logged by pam_unix when that module
-        // is stacked alongside it (already covered). A hypothetical pam_ldap(...)
-        // line, if one ever existed, is intentionally not classified here (#881).
+        // Not covered, format unknown — no source was found documenting
+        // pam_ldap's own auth-failure message (if it has one at all), unlike
+        // pam_sss's, which is checked against its source above. This pins the
+        // current behavior (not matched) as a known gap, not a verified-safe
+        // skip; if pam_ldap does emit a failure line shaped like this, this
+        // test is locking in a real miss, not evidencing a non-issue (#881,
+        // review by SherlockOmss).
         let r = record_with(&[(
             "MESSAGE",
             "pam_ldap(sudo:auth): authentication failure; logname=lab uid=1001 euid=0 \
