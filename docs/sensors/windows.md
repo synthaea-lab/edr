@@ -53,8 +53,8 @@ connection constant to 3 together with the driver, so it must land **before** th
 loss is counted. The driver is not compiled by CI (no WDK on the runners): a change here is
 checked by the author's WDK build and the lab run.
 
-**Supported systems:** the driver allocates with `ExAllocatePool2`, which exists from Windows
-10 version 2004 (build 19041) and Windows Server 2022. On older Windows 10 and on Server 2016
-and 2019 the import cannot be resolved and the driver does not load. Supporting them needs
-the `ExAllocatePool2` down-level shim (or `ExAllocatePoolZero`-free allocation with
-`POOL_NX_OPTIN`) and a WDK build to verify it; it is not done here.
+**Pool compatibility:** the driver uses `ExAllocatePoolZero` with the WDK's
+`POOL_ZERO_DOWN_LEVEL_SUPPORT` path and initializes that path in `DriverEntry`. This avoids a
+direct `ExAllocatePool2` import on Windows 10 before version 2004 and on Windows Server 2016/2019.
+The WDK build checks the binary; actual loading and event delivery on those older systems still
+need a VM run.
