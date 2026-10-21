@@ -266,7 +266,7 @@ failure bursts, and on `sudo` and `su`, which are the two kinds excluded above),
 for a Windows logon, and no Sigma rule matches `auth` events. So a detection whose event is a
 successful logon does not exist today, and a lab run on two hosts still joins no identity from it.
 It becomes live when a rule produces one; the candidate is T1078 (a valid account seen for the
-first time, or at odd hours), a line of #377 that is not built. The Windows `session` events of
+first time, or at odd hours), a line of #376 that is not built. The Windows `session` events of
 the RDP rule (T1563.002) are the one identity source that already reaches a detection.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
