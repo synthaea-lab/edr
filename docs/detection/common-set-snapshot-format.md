@@ -118,7 +118,20 @@ both test against it. `built_at` equals the artifact header's `built_at`.
 - **Signing:** the `snapshot` key signs this kind only. Its custody is not decided (#753), so
   the only signer is the **public test key**, enabled by `SYNTHAEA_SNAPSHOT_SIGNER=test`; without
   it the cron answers 503 and nothing is published. Never set it on a production deployment.
-- **Not done here:** tenant binding (a `tenant_id` in the manifest, ADR-0033 decision 3, required
-  before production), and the agent's fetch loop (it verifies the signature, `built_at` freshness
-  and the maximum age).
+- **The agent** (`agent/src/snapshot_fetch.rs`, `updater::snapshot`): a loop inside `agent run`
+  polls the manifest about every six hours (jittered; `SYNTHAEA_SNAPSHOT_POLL_SECS` overrides it
+  for a lab run, floor 5 s), and does nothing unless the build embeds a `snapshot` key
+  (`updater::key::SNAPSHOT_PUBLIC_KEY`: none in a build without the `test-key` feature, so the
+  loop is off in production until #753 provisions one). It verifies the signature against that key
+  alone, refuses a `built_at` not later than the snapshot in force or more than 15 minutes ahead of
+  its clock, an offer already past the maximum age (provisionally 3 days), a declared size over the
+  64 MiB cap, an artifact whose size or SHA-256 differs from the signed ones or whose header
+  disagrees with the manifest, and anything that does not parse. Only then does it write
+  `snapshots/common-set.bin` atomically and reload that one file. A refusal keeps the snapshot in
+  force and is logged with its reason. A snapshot older than the maximum age is also treated as
+  absent where the evidence is judged, so the evidence is withheld when the server stops
+  publishing.
+- **Not done here:** tenant binding (a `tenant_id` in the manifest and the tenant identifier at
+  enrollment, ADR-0033 decision 3, required before production), and reporting a refused snapshot
+  on the health beacon (it is logged only: a beacon field is a schema change).
 
