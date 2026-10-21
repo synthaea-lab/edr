@@ -21,6 +21,8 @@
     allow(dead_code)
 )]
 mod alerts;
+#[cfg(target_os = "linux")]
+mod captures;
 mod commands;
 mod content;
 mod deception;
@@ -31,6 +33,7 @@ mod health;
     allow(dead_code)
 )]
 mod heartbeat;
+mod host_counters;
 // Linux-only: the module itself calls raw POSIX signal APIs
 // (sigemptyset/pthread_sigmask/sigwaitinfo) that don't exist in the `libc` crate on
 // Windows, and `agent/Cargo.toml` only pulls `libc` in under
@@ -70,6 +73,7 @@ mod silence;
     allow(dead_code)
 )]
 mod sink;
+mod snapshot_fetch;
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "macos", windows)),
     allow(dead_code)

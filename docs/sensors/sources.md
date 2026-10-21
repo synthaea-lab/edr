@@ -54,7 +54,7 @@ pending (the coverage packs #376–#381 — see
 | **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | ✅ SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
 | **Kernel modules & drivers**<br><sub>TA0003/TA0005 rootkits</sub> | 📋 #264 module+bpf | 🟡* image loads · 📋 #39 | 📋 #357 kexts |
 | **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | 📋 #362 kill-trace | 📋 #39 driver vantage | ✅ ES signals |
-| **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
+| **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | ✅ WEL log clears 1102/104 · 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
 | **Download provenance**<br><sub>TA0001 Initial Access</sub> | 📋 #87 (no OS mark) | ✅ ETW MotW | ✅ ES |
 | **Devices**<br><sub>TA0001 Initial Access · TA0010 Exfil</sub> | 📋 #84 | 📋 #84 | 📋 device-control |
 | **Containers**<br><sub>TA0004 Escape context</sub> | ✅ /proc | 📋 #371 silos | 📋 #372 host-side |
@@ -83,14 +83,14 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage | ✅ used | T1059 | #262 |
+| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
 | **Process execution** | netlink · audit | fallback exec + connect where eBPF is unavailable (lockdown, old kernel) | ✅ used | T1059 degraded | #34/#247 |
 | **Process execution** | procfs · `/proc/<pid>/environ` at exec-time drain | security-relevant exec environment (`LD_PRELOAD` family), present-only allowlist — never the whole env | ✅ used | T1574.006 | #363 |
 | **File activity** | eBPF · tracepoints | open/write/delete/rename/chmod/chown with paths + attribution; noisy /dev,/proc,/sys,/tmp filtered | ✅ used | T1105, T1485/T1486, T1070.004, T1222 | #262 |
 | **File activity** | eBPF · BPF-LSM | `file_open` at the security decision point — deliberate double observation (blinding check), io_uring-proof vantage; inline-block ready | ✅ used | T1562 context | #91 |
 | **File activity** | eBPF · BPF-LSM | timestomping via `inode_setattr` hook | 📋 planned | T1070.006 | matrix row |
 | **Network** | eBPF · tracepoints | connect/bind/listen/accept/socket, UDP send+recv — discrete, real-time | ✅ used | T1071/T1041, backdoor listeners | #263 |
-| **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features | #92 |
+| **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features; EGRESS-VOLUME (T1041/T1048: 512 MiB to one public address in 10 min, provisional, inert unless `nf_conntrack_acct` is on); ARCHIVE-EXFIL (T1560/T1041: a 100 MiB archive staged, read by another pid that then connects to a public address, via the file and connect streams) | #92, #380 |
 | **Network** | eBPF · tracepoints | mount/umount → platform-neutral v21 `Mount` | 📋 planned | staging, evidence destruction | #362 |
 | **DNS** | glibc `getaddrinfo` uprobe/uretprobe | query plus up to eight ordered IPv4/IPv6 answers, process-attributed; truncation is marked | ✅ used (glibc) | T1071.004, DGA and fast-flux features | #267/#458 |
 | **Encrypted traffic** | eBPF · uprobes | TLS plaintext pre-encryption/post-decryption (OpenSSL/BoringSSL/GnuTLS), byte-budgeted + redacted | ✅ used | T1071 C2 visibility without MITM | #90 |
@@ -135,7 +135,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | ETW · Kernel-Process | exec with the **real** PEB command line (F-1), per-event SID + integrity level (F-3), lineage | ✅ used | T1059 | #20 |
+| **Process execution** | ETW · Kernel-Process | exec with the **real** PEB command line (F-1), per-event SID + integrity level (F-3), lineage | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #20/#378 |
 | **Process execution** | ETW · Kernel-Process | image/DLL loads (EID 5) | ✅ used | T1574.002 side-loading | #21 |
 | **File activity** | ETW · Kernel-File | create/write (`NameCreate`+`CreateNewFile` join, F-6 partial), NT→drive-letter paths via real volume map (F-5) | ✅ used | T1105, dropper joins | #20 |
 | **File activity** | driver · minifilter | authoritative deletes/renames, named pipes, ADS, raw-volume access | 📋 planned | ransomware primitives | #136 |
@@ -163,6 +163,7 @@ gap.
 | **OS security verdicts** | WEL · TaskScheduler/Operational | task registered 106 (already covered, #422); 140/141 update/delete remain unnormalized pending a versioned schema event (#748). **The channel is Task Scheduler history, off by default** (Windows 11 25H2 client): the target only sees events where an operator enabled it, and the agent logs a disabled channel at start-up | ✅ used (where enabled) | T1053.005 | #283, #786 |
 | **Lateral-movement services** | ETW · WMI-Activity | WQL queries (EID 23) + method invocations (EID 24, `Win32_Process.Create`) | ✅ used | T1047 | #21 |
 | **Lateral-movement services** | ETW · BITS-Client | background transfer jobs | 📋 planned | T1197 | #284 |
+| **Tamper & anti-forensics** | WEL · Security+System | log cleared, from the Event Log service's own record in the emptied log: Security 1102 (the audit log) and System 104 (any other channel, provider `Microsoft-Windows-Eventlog`) → `LogCleared` (v45: channel, clearing account and SID, 1102's logon id, 104's backup path). Written whatever did the clear (`wevtutil`, `EvtClearLog`, .NET `ClearLog`, a renamed tool) and gated by no audit subcategory. Alert: High T1070.001 per clear; a `wevtutil cl` also raises the command-line rule (accepted duplicate) | ✅ used | T1070.001 | #799 |
 | **Tamper & anti-forensics** | driver · minifilter | timestomping (SetInformation), ADS manipulation, raw-volume access | 📋 planned | T1070.006, T1564.004 | #136 |
 | **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join (10 min), which stays silent when the image's Authenticode signature verifies (#441: resolved on the enrichment worker after the exec; an unverifiable image still alerts). A mark deleted through the API (`Unblock-File`, `Remove-Item -Stream`) → `FileDelete` of the stream (Kernel-File 26), T1553.005 when the file then runs (#442); any other strip/tamper needs the minifilter (#136). Coverage map: `docs/detection/download-provenance.md` | ✅ used | T1204.002, T1553.005 | #365, #442 |
 | **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
@@ -197,7 +198,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | ES · exec | argv + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran | #32 |
+| **Process execution** | ES · exec | argv + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran, T1057/T1082/T1016/T1087 discovery burst | #32/#378 |
 | **File activity** | ES · file events | open/create/rename/unlink; mmap **filtered to writable+shared** (dyld torrent dropped in-shim); POSIX `O_*` flags so cross-platform write rules apply unchanged | ✅ used | T1105, T1485/T1486, T1070.004 | #32 |
 | **File activity** | ES · widening | quarantine **strip**, timestomp, hidden flags, APFS clone/exchangedata staging, remount | 📋 planned | T1070.006, T1564.001 | #357 |
 | **Network** | NE · filter-data | flows with audit-token attribution (inbound + outbound) → `Connect`, close-time byte counts → `NetworkFlow` — BEACON consumes macOS flows unchanged | 🔨 built | T1071/T1041 | #33/#351 |

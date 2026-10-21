@@ -63,13 +63,11 @@ curl -s -o /dev/null "$BASE/index.php?id=1%20union%20select%20username,password%
 curl -s -o /dev/null "$BASE/download.php?file=../../../../etc/passwd"
 # a scanner user agent
 curl -s -o /dev/null -A "sqlmap/1.7.2#stable (https://sqlmap.org)" "$BASE/"
-# a webshell-like request: a command in a parameter of a script under uploads/
-curl -s -o /dev/null "$BASE/uploads/c99.php?cmd=id"
 # an ordinary request, which must NOT produce an event (it only counts in the summary)
 curl -s -o /dev/null "$BASE/index.html"
 
-# Give the agent's one-second poll time to read the log before the shell appears, so the
-# request precedes it in the correlator's window.
+# Let the agent's one-second poll read the three requests above first: they are not the
+# pairing under test, and a request read before the shell does not count since #807.
 sleep 3
 
 SH_TARGET=$(readlink -f /bin/sh 2>/dev/null || echo /bin/sh)
@@ -82,5 +80,14 @@ echo "Spawning a shell from a process named '$FAKE_COMM' ($FAKE_WEBSERVER) ..."
 # The subshell forces the fork that `sh -c` would otherwise skip (see lineage.sh).
 "$FAKE_WEBSERVER" -c '(/bin/sh -c "id >/dev/null")'
 
-echo "done. Alerts file: T1505.003 and T1059. Events file: four http_request events now,"
-echo "one http_summary after about a minute."
+# The webshell-like request comes AFTER the shell, within the correlator's 3 s grace (#807): a
+# shell is paired only with an access-log request read from the shell's time through 3 s after
+# it, and the access log line is written after the response, so it is read after the shell.
+echo "Sending the webshell-like request (within the 3 s grace after the shell) ..."
+# a webshell-like request: a command in a parameter of a script under uploads/
+curl -s -o /dev/null "$BASE/uploads/c99.php?cmd=id"
+# Let the grace expire so that the alert has been decided before the script ends.
+sleep 4
+
+echo "done. Alerts file: T1505.003 naming the WebshellLike request, and T1059. Events file: four"
+echo "http_request events, one http_summary after about a minute."

@@ -30,6 +30,12 @@ certificate) and `--standalone` to upload nothing — #658.)
   opt-in uprobes sensor (`--enable-tls-capture` / `--enable-readline-capture`,
   #90 — inert on Windows like the response flags), protected-resource guard,
   kill-loudness.
+- `captures.rs` (Linux) — the optional uprobe captures as a set that can only be **widened** at run
+  time (`CaptureSet`: the configured captures plus whatever is widened, never fewer than
+  configured). A `uprobes-supervisor` thread in `commands/linux.rs` follows it: the uprobes sensor
+  reads its config once, so a change **restarts** it, which leaves a gap in capture while the eBPF
+  object reloads; the sensor's heartbeat is watched by the silence monitor only while it runs.
+  Nothing widens the set yet (ADR-0035, #62 box 2: an overlay will).
 
 Sink composition is decorator-style, matching the trait design
 (`EventSink::on_event(&self)`): `PulsingSink(ProtectedResourceGuard(DetectionSink))`
@@ -96,12 +102,18 @@ indistinguishable from policy-disabled — observe-only either way.
   hash on one record, never a lost detection and never stalled capture.
 - **Sensor goes silent:** the silence monitor (#71) alerts locally and marks
   the sensor in the health beacon; the watchdog restarts a hung process via
-  the progress heartbeat (#102). The eBPF and journal sensors pulse when they
-  handle events (journald has no forced tick), with a 120 s deadline, so on a host
-  where nothing happens for two minutes they read silent: indistinguishable from
-  a stalled sensor, by design (`silence.rs`). Seen on an idle lab VM, 2026-10-14:
-  `linux-journal` went silent, the host showed `Degraded` and recovered when the
-  next login wrote to the journal.
+  the progress heartbeat (#102). The eBPF sensor pulses when it handles events
+  (it has no forced tick), with a 120 s deadline, so on a host where nothing
+  happens for two minutes it can read silent: indistinguishable from a stalled
+  sensor, by design (`silence.rs`); in practice the agent's own execs and opens
+  keep it alive. The journal sensor pulses on **every line `journalctl` delivers**,
+  not only the allowlisted ones, and the agent writes its own line into journald
+  every 30 s (`SYSLOG_IDENTIFIER=synthaea-agent-canary`, `journalctl -t
+  synthaea-agent-canary`), so an idle host stays healthy while a stopped journald
+  or a stuck `journalctl` still reads silent at the 120 s deadline. Before that
+  (until #846) only auth and unit records pulsed it: on an idle lab VM,
+  2026-10-14, `linux-journal` went silent, the host showed `Degraded` and
+  recovered when the next login wrote to the journal.
 - **A flood of file opens (kernel ring buffer full):** the eBPF sensor drops open
   events when its ring buffer fills, logging `ring buffer full, dropping open
   event` (not counted in the health beacon, so the control plane cannot see it).

@@ -11,7 +11,7 @@ migration; agent identity stays the mTLS enrollment PKI — the two never mix.
 | `ingest/` | Agent-facing endpoints — event/detection upload, heartbeats; mTLS terminated in front (proxy/sidecar) |
 | `api/` | Management API — enrollment/PKI, policy distribution, fleet inventory, case queries, audit log |
 | `console/` | Analyst console — case-centric triage UI, fleet health, content/model distribution |
-| `ops/` | Fleet operations — agent health, observable-loss counters, ring rollout, ingest health |
+| `ops/` | Fleet operations — agent health, observable-loss counters, ring rollout (halt and roll back from `/console/ops` for an owner or admin: `docs/operations/content.md`), ingest health |
 | `integrations/` | SOAR/ticketing/paging — bidirectional case workflow (Jira, ServiceNow, PagerDuty, webhooks) |
 | `datalake/` | Telemetry lake — full-fidelity raw events, columnar/partitioned; substrate for cloud detection, hunting, graph/prevalence rebuilds, ML corpora |
 | `cloud-detection/` | Cloud-based detection: streaming on ingest, scheduled sweeps, and retrospective replay of new content over history |
@@ -40,8 +40,15 @@ schema. Two constraints follow, both found by running a real login:
   and call `auth.api.getSession({ headers: await headers() })`; better-auth refuses a call without
   the headers.
 - **A session's `activeOrganizationId` is the tenant id**, so an organization's id must equal its
-  tenant's. Nothing creates the pair yet (admin-only tenant creation is configured, not built):
-  until it is, set the session's `active_organization_id` by hand to sign in against a tenant.
+  tenant's. `lib/tenant-provisioning.ts`'s `provisionTenant` creates the pair (#821), called from
+  `POST /api/admin/tenants` with `{ name }`; the caller becomes the tenant's owning member. The
+  route is gated by `PLATFORM_OPERATOR_USER_IDS` (`lib/platform-operator.ts`), a comma-separated
+  allow-list of `auth_user.id` values, not a session role — the caller has no tenant yet at this
+  point, so a role *within* a tenant (`requireTenantAdmin`, #803) cannot gate it. To sign in
+  against the new tenant afterward, call better-auth's own `POST /api/auth/organization/set-active`
+  with `{ organizationId: <the returned tenant id> }`. Organization deletion is disabled
+  (`disableOrganizationDeletion` in `lib/auth.ts`): better-auth's own delete API has no notion of
+  the Tenant/Organization pairing and would orphan the Tenant row.
 
 A better-auth upgrade can add fields to its tables: `tests/integration/console-auth.test.ts` fails
 if a required one is missing from `prisma/schema.prisma`.

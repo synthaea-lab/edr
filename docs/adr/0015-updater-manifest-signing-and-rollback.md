@@ -285,6 +285,20 @@ needs the Decision 9 fallback at the unit level.
   matching the sensor-crate convention (empty stub elsewhere) rather than a
   cross-platform no-op API surface that would misleadingly suggest parity.
 
+- `/usr/bin/synthaea-ctl` is installed by the package (`.deb`/`.rpm`/`.apk`)
+  as its own root-owned copy of `cli`, not a symlink into `current/` — that
+  directory is owned by the unprivileged `synthaea` service user this ADR's
+  updater runs as, and a symlink there let a compromised agent repoint it and
+  get root the next time an operator ran `sudo synthaea-ctl` (#897). This
+  means the packaged CLI is pinned to the installed package version: it can
+  go stale relative to an agent `apply_release` has since self-updated past,
+  refusing to talk to it on a `PROTOCOL_VERSION` mismatch
+  (`crates/ipc/src/protocol.rs`) with a clean, disclosed error rather than
+  silently misbehaving. The fix for that is the next package upgrade, which
+  ships a matching CLI again — accepted as the cost of removing the
+  privilege-escalation path, since `PROTOCOL_VERSION` has only moved twice in
+  this project's life so far.
+
 - Canary-ring *content* distribution (rules, models) is unaffected by this
   ADR and remains fully open — #73 and #49 still need their own design for
   ring membership, per-ring telemetry, and auto-halt. This ADR's

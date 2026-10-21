@@ -120,8 +120,58 @@ pub(crate) const RDP_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
 /// five-minute interval includes slower interactive guessing while limiting
 /// stale failures that are no longer meaningful evidence for a later success.
 pub(crate) const RDP_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
+/// A local privilege-escalation success (`sudo`/`su`) after this many
+/// authentication failures joined to it (`crates/rules/src/sudo.rs`'s module
+/// doc: `sudo` joins on the trusted invoker uid, `su` on the real target
+/// name — not necessarily "the account escalated to" in either case).
+/// Reported as T1548.003 for `sudo`, T1110.001 for `su` (review of #838,
+/// Sollykhan 2026-10-19, non-blocking: `su` is not sudo caching).
+/// Same reasoning as [`RDP_SUCCESS_AFTER_FAILURES_THRESHOLD`]: tolerates a
+/// human mistyping their password a couple of times before getting it right,
+/// catches a scripted or sustained guess that eventually succeeds.
+///
+/// The opposite of a noise source, confirmed live (Fedora 43, sudo 1.9.17p2,
+/// review of #838, Sollykhan 2026-10-19): `pam_unix` logs exactly **one**
+/// `authentication failure` line per sudo *invocation*, however many of the
+/// (default `passwd_tries=3`) password prompts within it were wrong — three
+/// wrong passwords at one prompt is one failure here, not three. So this
+/// counts per invocation, the opposite of what a prior version of this
+/// comment claimed, and the real effect is lower sensitivity, not alert
+/// noise: an attacker needs 5 separate sudo invocations (up to 15 wrong
+/// passwords) to cross this threshold, not 5 wrong passwords. Not re-tuned
+/// here; lowering the threshold would be the fix if this proves insensitive
+/// in practice.
+pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD: u32 = 5;
+/// Sliding look-back window for [`SUDO_SUCCESS_AFTER_FAILURES_THRESHOLD`].
+pub(crate) const SUDO_SUCCESS_AFTER_FAILURES_WINDOW_NS: u64 = 300_000_000_000; // 300s
 pub(crate) const BEACON_THRESHOLD: u32 = 3;
 pub(crate) const BEACON_WINDOW_NS: u64 = 60_000_000_000; // 60s
+
+/// EGRESS-VOLUME threshold and window (T1041/T1048, #380): this many bytes sent by one
+/// process name to one public address inside the window. **Provisional**: 512 MiB in 10
+/// minutes is far above an interactive session and below a bulk exfiltration of a
+/// home directory, but no lab capture of ordinary uploads (backups, `rsync` to a remote
+/// host, a container registry push, a video call) exists to calibrate it, so those
+/// are the false positives to watch for live. Raise it before lowering it.
+pub(crate) const EGRESS_BYTES_THRESHOLD: u64 = 512 * 1024 * 1024;
+/// Sliding look-back window for [`EGRESS_BYTES_THRESHOLD`].
+pub(crate) const EGRESS_WINDOW_NS: u64 = 600_000_000_000; // 10 min
+
+/// ARCHIVE-EXFIL (T1560/T1041, #380): a file whose name ends in an archive or compression
+/// extension, opened for writing by a pid that then writes at least this many bytes, is a
+/// **staged archive**. **Provisional**: 100 MiB is the size at which an archive stops being a
+/// config bundle and starts being a collection, with no lab measurement behind it.
+pub(crate) const ARCHIVE_STAGED_BYTES: u64 = 100 * 1024 * 1024;
+/// How long after it was staged an archive can be read by another process and still count.
+pub(crate) const ARCHIVE_READ_WINDOW_NS: u64 = 3_600_000_000_000; // 1 h
+/// How long after reading a staged archive a process can connect to a public address and
+/// still complete the chain.
+pub(crate) const ARCHIVE_EGRESS_WINDOW_NS: u64 = 600_000_000_000; // 10 min
+/// Name endings of an archive or a compressed stream, compared in lowercase. A name is a
+/// choice of the writer (`.dat` evades it) and is the stated gap of the rule, not a claim.
+pub(crate) const ARCHIVE_SUFFIXES: &[&str] = &[
+    ".zip", ".tar", ".tgz", ".7z", ".rar", ".gz", ".bz2", ".xz", ".zst", ".tbz2", ".txz",
+];
 
 /// SCAN-SPREAD threshold and window (T1046/T1210, issue #465): N distinct
 /// destinations on the same (pid, dport) in X seconds. Calibrated against
@@ -420,3 +470,28 @@ pub(crate) const BROWSERS: &[&str] = &[
     "iexplore.exe",
     "vivaldi.exe",
 ];
+
+/// New-shape alerts POLICY-DENIAL-DRIFT raises per [`POLICY_DENIAL_ALERT_WINDOW_NS`] (#812):
+/// `known_policy_denials` bounds the rule's memory of what it has seen, not its alert
+/// volume, so a flood of distinct shapes (varying the subject/object type faster than a
+/// real host ever would) could otherwise emit one alert per shape, unbounded. The key is
+/// (mechanism, subject context, object context, object class, action); since #813 added
+/// the requested permission set to it, one (type, type, class) triple produces one shape
+/// per permission set the kernel denies for it, not one shape overall.
+///
+/// 2048 is a reasoned bound, **not a measured one**: a few hundred distinct triples times a
+/// handful of permission sets each was the estimate when it was chosen, and nobody has
+/// compared it with the denial volume of a real `SELinux`-enforcing fleet. Shapes past it are
+/// counted (`policy_denial_alerts_shed`) and, not being remembered, can alert in a later
+/// window. Revisit with real denial data.
+pub(crate) const POLICY_DENIAL_ALERT_CAP: u64 = 2048;
+
+/// How long [`POLICY_DENIAL_ALERT_CAP`] lasts before the budget refills: one hour of event time
+/// (`meta.timestamp_ns`). Long enough that a flood stays bounded to the cap per hour, short
+/// enough that a genuinely new denial after a noisy period is not silenced for the whole run.
+pub(crate) const POLICY_DENIAL_ALERT_WINDOW_NS: u64 = 3_600_000_000_000;
+
+/// One alert per (pid, kind of credential file) per this window. A scanner or a `grep -r` over
+/// `/home` opens the same credential files again and again, and the first open is the finding.
+/// Sliding (timestamp-based), never a reset bucket. Uncalibrated (first cut, 2026-10-21).
+pub(crate) const CREDENTIAL_READ_ALERT_WINDOW_NS: u64 = 300_000_000_000; // 5 min

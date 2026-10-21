@@ -45,7 +45,11 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     "enrich_dropped": 3,
     "rarity_applied": 7,
     "rarity_withheld": 11,
-    "rarity_unapplied": 2
+    "rarity_unapplied": 2,
+    "watchdog_restarts": 3,
+    "tamper_events": 5,
+    "parent_image_evicted_live": 13,
+    "parent_image_evicted_dead": 209000
   }
 }
 ```
@@ -61,10 +65,19 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
 | `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
 | `rarity_unapplied` | cumulative rare images whose evidence found no belief to land on (evicted or never created): the loss, counted. Zero if the agent predates the field. |
+| `watchdog_restarts` | how many times the watchdog has restarted the agent since the watchdog started (it tells the agent at spawn). Zero without a watchdog, and if the agent predates the field. |
+| `tamper_events` | cumulative tamper-class alerts: the agent's own monitors (a sensor confirmed silent, a shipped binary or its signed manifest that no longer verifies) since the agent started, plus the watchdog's self-protection events (service definition drift, a binary that no longer matches its pinned hash). A rule detecting tampering with a protected resource is an ordinary detection and is not counted; a `SIGKILL` of the agent shows as one more `watchdog_restarts`. Zero if the agent predates the field. |
+| `parent_image_evicted_live` | cumulative Linux parent-image cache entries the cap dropped while their process was still alive: the loss (a later child of that process carries no `parent_image_path`, #783). Zero on other platforms and for an older agent. |
+| `parent_image_evicted_dead` | cumulative entries the cap dropped whose process had exited: nothing lost, it shows how full the cache runs. Zero on other platforms and for an older agent. |
 
-The three `rarity_*` fields are additive: the server stores a beacon without them (an older
-agent) as zeros, and an older server ignores them. The ops fleet table shows them in one
-"Rarity evidence" column ("N applied, N withheld, N lost"). `transport`'s
+The three `rarity_*` fields and the four fields after them (#863) are additive: the server stores a
+beacon without them (an older agent) as zeros, and an older server ignores them. The ops fleet
+table shows the rarity ones in one "Rarity evidence" column ("N applied, N withheld, N lost") and
+the others in "Watchdog restarts", "Tamper events" and "Parent images evicted" ("N live, N
+exited"). **None of the four makes a host `degraded`**: they are information about the agent's
+self-protection and a cache, not lost telemetry, and the live evictions lose one field of one
+event, not an event. Making a rising tamper count or a restart loop a status of its own is a
+separate decision (#863). `transport`'s
 `heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it
 is a change to this contract.
 
@@ -93,14 +106,16 @@ recent loss is told from one beacon to the next:
 What this does not see: loss the beacon does not carry, such as the kernel ring buffer
 overflowing (`ring buffer full, dropping open event` is logged but not counted).
 
-The other cause of `degraded`, a silent sensor, can also be an idle host: the eBPF and journal
-sensors pulse when they handle events and have a 120 s deadline, so a host with nothing in its
-journal for two minutes shows `linux-journal` silent. The ops table shows the two causes in
-separate columns ("Silent sensors", "Telemetry loss"), so an operator can tell them apart. Checked
-2026-10-14 with a real agent: after an outage the host went `Degraded` with "Lost telemetry in the
-last 10 min" (spool dropped 2048, enrich dropped 7443), the window followed the last rise of a
-counter and closed 10 minutes after it, and the host stayed `Degraded` about a minute longer
-for the silent journal sensor on the idle VM.
+The other cause of `degraded` is a silent sensor. The eBPF sensor pulses when it handles events and
+has a 120 s deadline; the journal sensor pulses on every line `journalctl` delivers and the agent
+writes a canary line into journald every 30 s, so an idle host no longer shows `linux-journal`
+silent, while a stopped journald still does (151 s after the stop in the lab, 22 s to recover).
+The ops table shows the two causes in separate columns ("Silent sensors", "Telemetry loss"), so an
+operator can tell them apart. Checked 2026-10-14 with a real agent, before the canary: after an
+outage the host went `Degraded` with "Lost telemetry in the last 10 min" (spool dropped 2048,
+enrich dropped 7443), the window followed the last rise of a counter and closed 10 minutes after
+it, and the host stayed `Degraded` about a minute longer for the journal sensor on the idle VM,
+which only auth and unit records pulsed then.
 
 ### Response
 
@@ -213,3 +228,47 @@ unparseable body is retried, other `4xx` count toward skipping the segment
 - `agent.lastSeen` is updated, as it is for the heartbeat and detection routes.
 - Detections still go to `POST /api/ingest/detection` (one object per request).
   Nothing on the agent posts there yet.
+
+## Fleet cases
+
+`GET /api/cron/join-fleet-cases` (`CRON_SECRET`, called every few minutes like the other sweeps,
+nothing in the repo schedules it) joins each tenant's detections of the last seven days across
+hosts into **fleet cases** (#62, box 1). Two detections of different agents join when they carry
+the same executed file hash or the same signed-in identity, read through the entity extraction of
+the graph (`server/lib/graph.ts`), within 24 hours of each other. A fleet case is a `FleetCase` row
+with the entities it joined on (`FleetCaseEntity`, unique per tenant) and the detections it holds
+(`Detection.fleetCaseId`, independent of the host case in `caseId`). Its severity is the highest of
+its detections and never goes down; a later sighting of one of its entities grows it, and a
+detection that bridges two cases merges them into the older one. The join is idempotent.
+
+The join is narrow on purpose, because ADR-0035 makes a fleet case the trigger of a posture
+overlay and an attacker who can make a detection fire can try to link hosts: a bare path or a
+technique never joins; the accounts every host has (`root`, `SYSTEM`, ...) are not an identity; an
+entity seen on more than 20 agents joins nothing (software that is everywhere is not evidence).
+
+An identity comes from two events. A Windows `session` event (RDP, `SessionEvent`) names its
+`target_user`. A **successful logon** (`auth` event, `outcome` success and `kind` logon: Linux sshd
+`Accepted`, Windows 4624) names it too. A failed logon never does, because its user name is text the
+attacker chose; `explicit_credentials` (`su`, `sudo -u`) and `privileged_session` (`sudo`) never do
+either, because an attacker already on the host picks the account they name there, and either would
+let them link hosts on demand. The generic accounts are compared by their bare name, so
+`HOST\Administrator` counts as `Administrator`, and the accounts a Windows host logs on by itself
+(machine accounts ending in `$`, `DWM-n`, `UMFD-n`, `ANONYMOUS LOGON`, `LOCAL SERVICE`,
+`NETWORK SERVICE`) are not identities, nor are the default logins of a cloud or distribution image
+(`ubuntu`, `ec2-user`, `debian`, `fedora`, `centos`, `rocky`, `cloud-user`, `azureuser`, `admin`),
+which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
+are signed in to as `vagrant`, and a lab run could not otherwise show the join.
+
+**The successful-logon half is preparatory work and does nothing on a host yet.** The join reads
+`detection.event`, and a detection stores the event that fired a rule. On `main`, no rule fires on
+a successful logon: `RuleState::on_auth` returns nothing for `AuthKind::Logon` (it alerts on
+failure bursts, and on `sudo` and `su`, which are the two kinds excluded above), it returns early
+for a Windows logon, and no Sigma rule matches `auth` events. So a detection whose event is a
+successful logon does not exist today, and a lab run on two hosts still joins no identity from it.
+It becomes live when a rule produces one; the candidate is T1078 (a valid account seen for the
+first time, or at odd hours), a line of #377 that is not built. The Windows `session` events of
+the RDP rule (T1563.002) are the one identity source that already reaches a detection.
+The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
+built: a console view or an API route for fleet cases, the other entities of #62 (lateral
+source/destination pairs, software inventory, network neighbours), and any posture trigger.
+A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. A later run with an agent that carries #930 joined on the hash of `/bin/sh` (one fleet case, two identities in turn on one VM). The identity join on a Linux logon is proven by its tests, on one Postgres, **not in a lab run**, and no rule produces a detection carrying a successful logon yet (see above). Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.
