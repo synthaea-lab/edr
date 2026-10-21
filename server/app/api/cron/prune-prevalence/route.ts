@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
+import { pruneIngestStats } from "@/lib/ingest-stats";
 import {
   DEFAULT_MAX_ROWS_PER_TENANT,
   DEFAULT_RETENTION_DAYS,
@@ -36,7 +37,8 @@ export async function GET(req: NextRequest) {
     const olderThan = new Date(Date.now() - retentionDays * DAY_MS);
 
     const result = await prunePrevalence(prisma, { olderThan, maxRowsPerTenant });
-    return NextResponse.json({ ...result, retentionDays, maxRowsPerTenant, olderThan: olderThan.toISOString() });
+    const ingestStatsExpired = await pruneIngestStats(prisma, new Date());
+    return NextResponse.json({ ...result, ingestStatsExpired, retentionDays, maxRowsPerTenant, olderThan: olderThan.toISOString() });
   } catch (error) {
     console.error("Prevalence prune error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
