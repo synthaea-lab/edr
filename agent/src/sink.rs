@@ -1103,8 +1103,9 @@ impl DetectionSink {
     /// correlated verdict. A no-op whenever `enable_response` was never called.
     ///
     /// Issue #652: `service_main` is the correlator's provenance verdict for `pid` (its
-    /// image under a system path, started by init — see `SERVICE_MAIN_REFUSAL`'s doc
-    /// comment for why this is not phrased as "package-owned"). A Bayesian crossing alone does not
+    /// image under a system path, started by init — see the comment above
+    /// `SERVICE_MAIN_REFUSAL`'s definition for why this is not phrased as "package-owned").
+    /// A Bayesian crossing alone does not
     /// justify killing a system service, so it is refused, in observe mode too, and the
     /// verdict still escalates. Corroborating evidence does not lift it: the refusal is
     /// about what the process is, not how much evidence there is (ADR-0028).

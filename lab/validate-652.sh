@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Runs INSIDE the fedora41 VM (repo in /synthaea, build in /var/synthaea/target); see
 # lab/vagrant-hyperv/README.md to bring the VM up and put the checkout in /synthaea.
-# Last run 2026-10-16 on Fedora 43, kernel 7.2.10, SELinux Enforcing: 7 pass, 1 fail
-# (scenario A's BAYES crossing didn't happen inside this run's timing window on that
-# VM — not a regression, A only exercises the generic, pre-existing non-service kill
-# path; see PR #755's comments). The 2026-10-07 Fedora 41 run (8/8) predates the #82
-# rebase that this header used to claim.
 # #652: the kill gate refuses a system service's main process (image under a trusted
 # path, ppid 1), still kills the implant.
-#   A  enforce, response.sh implant (bash child of a shell)      -> SIGKILLed, RESPONSE-KILL "killed"
-#   B  enforce, same beacon as a systemd-run unit (bash, ppid 1) -> survives, "refused to kill"
-#   C  observe, same unit                                        -> survives, "refused" not "would have"
+#
+# Scenarios B and C's beacon is `lab/scenarios/v652-beacon.rs`, a compiled binary installed to
+# /usr/libexec/v652-beacon (old-dov, 2026-10-20): `204b5ff` made `service_main_path_is_trusted`
+# exclude shells and interpreters, so a `bash -c '...'` unit main (what this script used before)
+# is no longer a protected service main at all — B and C would stop testing the refusal this PR
+# adds and instead just exercise the ordinary kill path, the same gap A already covers.
+#   A  enforce, response.sh implant (bash child of a shell)            -> SIGKILLed, RESPONSE-KILL "killed"
+#   B  enforce, same beacon as a systemd-run unit (v652-beacon, ppid 1) -> survives, "refused to kill"
+#   C  observe, same unit                                               -> survives, "refused" not "would have"
 set -uo pipefail
 cd /synthaea
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
@@ -26,6 +27,10 @@ echo "== build =="; cargo build --release -p agent 2>&1 | tail -2
 [ -x "$BIN" ] || { echo "[FAIL] no agent binary"; exit 1; }
 sudo mkdir -p /etc/synthaea; sudo cp crates/config/data/default-agent.toml /etc/synthaea/agent.toml
 
+echo "== build beacon =="; rustc -O -o /tmp/v652-beacon lab/scenarios/v652-beacon.rs
+sudo install -m 0755 /tmp/v652-beacon /usr/libexec/v652-beacon
+[ -x /usr/libexec/v652-beacon ] || { echo "[FAIL] no beacon binary"; exit 1; }
+
 start_agent() { # $1=tag $2..=flags
   local tag=$1; shift
   sudo pkill -9 -f "[t]arget/release/agent run" 2>/dev/null; sleep 1
@@ -36,11 +41,9 @@ start_agent() { # $1=tag $2..=flags
 }
 stop_agent() { sudo pkill -INT -f "[t]arget/release/agent run"; sleep 3; sudo chmod a+r "$W"/*.nd 2>/dev/null; }
 
-service_beacon() { # beacon as a systemd unit: exe /usr/bin/bash, parent pid 1
+service_beacon() { # beacon as a systemd unit: exe /usr/libexec/v652-beacon, parent pid 1
   local unit=$1
-  sudo systemd-run --quiet --unit="$unit" --collect bash -c '
-    exec 9>/dev/null
-    for _ in $(seq 1 90); do { exec 3<>/dev/tcp/127.0.0.1/4444; } 2>/dev/null; exec 3>&- 3<&-; sleep 1; done' 
+  sudo systemd-run --quiet --unit="$unit" --collect /usr/libexec/v652-beacon
   sleep 1; systemctl show -p MainPID --value "$unit"
 }
 alive() { ! journalctl -u "$1" --no-pager | grep -qiE "killed|signal|SIGKILL|failed"; } # a clean run ends "Deactivated successfully"

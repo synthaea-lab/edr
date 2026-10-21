@@ -141,8 +141,9 @@ pub struct CorrelationEngine {
     masquerading: BoundedMap<u32, Option<u64>>,
     /// Pids whose `ExecEvent` showed an image under a system path, started directly
     /// by init (a system service's main process, #652 — nothing here checks package
-    /// ownership, see `agent::sink::SERVICE_MAIN_REFUSAL`'s doc comment). Only read by the kill gate
-    /// ([`Self::is_service_main_process`]); detection and belief never look at it.
+    /// ownership, see the comment above `agent::sink::SERVICE_MAIN_REFUSAL`'s definition).
+    /// Only read by the kill gate ([`Self::is_service_main_process`]); detection and
+    /// belief never look at it.
     service_mains: BoundedMap<u32, Option<u64>>,
 }
 
