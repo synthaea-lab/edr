@@ -86,6 +86,17 @@ describe("joinKeys", () => {
     expect(joinKeys("a1", logon(user), T0)).toEqual([]);
   });
 
+  it.each(["ubuntu", "ec2-user", "debian", "fedora", "centos", "rocky", "cloud-user", "azureuser", "admin"])(
+    "a successful logon of the default image account %s gives no key: every host built from the image has it",
+    (user) => {
+      expect(joinKeys("a1", logon(user), T0)).toEqual([]);
+    }
+  );
+
+  it("a successful logon of vagrant is a key: the lab VMs sign in as vagrant, and the join has to be provable there", () => {
+    expect(joinKeys("a1", logon("vagrant"), T0)).toEqual([{ kind: "identity", key: "vagrant" }]);
+  });
+
   it.each(["alice", "CORP\\alice", "svc-backup", "dollar$sign"])(
     "a successful logon of %s is not mistaken for a generic account",
     (user) => {

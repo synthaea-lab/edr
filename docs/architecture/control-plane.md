@@ -254,8 +254,21 @@ either, because an attacker already on the host picks the account they name ther
 let them link hosts on demand. The generic accounts are compared by their bare name, so
 `HOST\Administrator` counts as `Administrator`, and the accounts a Windows host logs on by itself
 (machine accounts ending in `$`, `DWM-n`, `UMFD-n`, `ANONYMOUS LOGON`, `LOCAL SERVICE`,
-`NETWORK SERVICE`) are not identities.
+`NETWORK SERVICE`) are not identities, nor are the default logins of a cloud or distribution image
+(`ubuntu`, `ec2-user`, `debian`, `fedora`, `centos`, `rocky`, `cloud-user`, `azureuser`, `admin`),
+which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
+are signed in to as `vagrant`, and a lab run could not otherwise show the join.
+
+**The successful-logon half is preparatory work and does nothing on a host yet.** The join reads
+`detection.event`, and a detection stores the event that fired a rule. On `main`, no rule fires on
+a successful logon: `RuleState::on_auth` returns nothing for `AuthKind::Logon` (it alerts on
+failure bursts, and on `sudo` and `su`, which are the two kinds excluded above), it returns early
+for a Windows logon, and no Sigma rule matches `auth` events. So a detection whose event is a
+successful logon does not exist today, and a lab run on two hosts still joins no identity from it.
+It becomes live when a rule produces one; the candidate is T1078 (a valid account seen for the
+first time, or at odd hours), a line of #377 that is not built. The Windows `session` events of
+the RDP rule (T1563.002) are the one identity source that already reaches a detection.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.
-A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. A later run with an agent that carries #930 joined on the hash of `/bin/sh` (one fleet case, two identities in turn on one VM). The identity join on a Linux logon is proven by its tests, on one Postgres, **not in a lab run**. Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.
+A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. A later run with an agent that carries #930 joined on the hash of `/bin/sh` (one fleet case, two identities in turn on one VM). The identity join on a Linux logon is proven by its tests, on one Postgres, **not in a lab run**, and no rule produces a detection carrying a successful logon yet (see above). Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.

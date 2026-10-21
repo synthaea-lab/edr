@@ -175,7 +175,9 @@ export function extractGraphFacts(hostKey: string, event: unknown, at: Date): Gr
       edges.push({ kind: "logged_in", from: identity, to: host, at });
     }
   } else if (e.type === "auth") {
-    // A logon the host accepted (Linux sshd `Accepted`, Windows 4624). Never a failed logon, whose
+    // A logon the host accepted (Linux sshd `Accepted`, Windows 4624). No rule fires on one yet
+    // (`on_auth` returns nothing for it), so a stored detection does not carry such an event today:
+    // this is ready for the rule that will (T1078, #377). Never a failed logon, whose
     // user name is text the attacker picked, and never `explicit_credentials` / `privileged_session`
     // (`su`, `sudo -u`, a successful `sudo`): an attacker already on the host chooses the account
     // they name there. Both would make an identity a way to link hosts on demand.

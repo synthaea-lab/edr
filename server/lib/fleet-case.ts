@@ -65,6 +65,20 @@ const GENERIC_IDENTITIES = new Set([
   "administrator",
   "nobody",
   "daemon",
+  // The default login of a cloud or distribution image: every host built from the same image
+  // has it, so two hosts that each log in as one are not the same intruder.
+  "ubuntu",
+  "ec2-user",
+  "debian",
+  "fedora",
+  "centos",
+  "rocky",
+  "cloud-user",
+  "azureuser",
+  "admin",
+  // `vagrant` is NOT here, on purpose: the lab VMs are signed in to as `vagrant`, and with it
+  // listed no lab run could ever show the identity join. Put it back with the first fleet
+  // that really has a `vagrant` account on every host.
 ]);
 
 /** Accounts a Windows host logs on by itself (machine accounts, session helpers, anonymous). */
