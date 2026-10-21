@@ -30,6 +30,12 @@ certificate) and `--standalone` to upload nothing — #658.)
   opt-in uprobes sensor (`--enable-tls-capture` / `--enable-readline-capture`,
   #90 — inert on Windows like the response flags), protected-resource guard,
   kill-loudness.
+- `captures.rs` (Linux) — the optional uprobe captures as a set that can only be **widened** at run
+  time (`CaptureSet`: the configured captures plus whatever is widened, never fewer than
+  configured). A `uprobes-supervisor` thread in `commands/linux.rs` follows it: the uprobes sensor
+  reads its config once, so a change **restarts** it, which leaves a gap in capture while the eBPF
+  object reloads; the sensor's heartbeat is watched by the silence monitor only while it runs.
+  Nothing widens the set yet (ADR-0035, #62 box 2: an overlay will).
 
 Sink composition is decorator-style, matching the trait design
 (`EventSink::on_event(&self)`): `PulsingSink(ProtectedResourceGuard(DetectionSink))`
