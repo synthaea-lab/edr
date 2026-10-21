@@ -245,7 +245,17 @@ The join is narrow on purpose, because ADR-0035 makes a fleet case the trigger o
 overlay and an attacker who can make a detection fire can try to link hosts: a bare path or a
 technique never joins; the accounts every host has (`root`, `SYSTEM`, ...) are not an identity; an
 entity seen on more than 20 agents joins nothing (software that is everywhere is not evidence).
+
+An identity comes from two events. A Windows `session` event (RDP, `SessionEvent`) names its
+`target_user`. A **successful logon** (`auth` event, `outcome` success and `kind` logon: Linux sshd
+`Accepted`, Windows 4624) names it too. A failed logon never does, because its user name is text the
+attacker chose; `explicit_credentials` (`su`, `sudo -u`) and `privileged_session` (`sudo`) never do
+either, because an attacker already on the host picks the account they name there, and either would
+let them link hosts on demand. The generic accounts are compared by their bare name, so
+`HOST\Administrator` counts as `Administrator`, and the accounts a Windows host logs on by itself
+(machine accounts ending in `$`, `DWM-n`, `UMFD-n`, `ANONYMOUS LOGON`, `LOCAL SERVICE`,
+`NETWORK SERVICE`) are not identities.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.
-A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. The join is proven only by its tests, on one Postgres; whether an agent built from `main` sends the hash on exec detections is not checked. Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.
+A lab run on two hosts (2026-10-20, the `665dc8d` + #845 agent build, `prevalence-lineage` on both) produced 38 detections and **joined none**: no detection event of that build carries a `sha256`, and none is a `session` event, so there was no hash or identity to join on. A later run with an agent that carries #930 joined on the hash of `/bin/sh` (one fleet case, two identities in turn on one VM). The identity join on a Linux logon is proven by its tests, on one Postgres, **not in a lab run**. Joining on a network destination was considered and left out: the destinations the lab detections share are `0.0.0.0`, `::` and the gateway's NTP, which would link every host to every other.
