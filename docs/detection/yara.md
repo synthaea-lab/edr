@@ -34,8 +34,8 @@ only processes of its own uid, and a scan of any other process fails closed and 
 
 ```ini
 [Service]
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_SYS_PTRACE
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_AUDIT_READ CAP_SYS_PTRACE
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_AUDIT_READ CAP_SYS_PTRACE
 ```
 
 `kernel.yama.ptrace_scope` can restrict `/proc/<pid>/mem` further; `CAP_SYS_PTRACE` overrides it.

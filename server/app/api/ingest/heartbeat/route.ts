@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
 import { beaconTime, parseHeartbeatBody } from "@/lib/health-beacon";
 import { nextLossObservedAt } from "@/lib/fleet-health";
+import { acceptedOutcome, recordIngest } from "@/lib/ingest-stats";
 
 export async function POST(req: NextRequest) {
   try {
@@ -106,6 +107,10 @@ async function storeBeacon(
       rarityApplied: BigInt(beacon.rarity_applied),
       rarityWithheld: BigInt(beacon.rarity_withheld),
       rarityUnapplied: BigInt(beacon.rarity_unapplied),
+      watchdogRestarts: BigInt(beacon.watchdog_restarts),
+      tamperEvents: BigInt(beacon.tamper_events),
+      parentImageEvictedLive: BigInt(beacon.parent_image_evicted_live),
+      parentImageEvictedDead: BigInt(beacon.parent_image_evicted_dead),
       sensors: beacon.sensors,
     };
     await prisma.agentHealth.upsert({
@@ -113,6 +118,8 @@ async function storeBeacon(
       create: { agentId: agent.id, tenantId: agent.tenantId, ...fields },
       update: fields,
     });
+    // Only a stored beacon counts: an agent that sends none (an older one) is not "skipped".
+    await recordIngest(prisma, agent.tenantId, agent.id, "beacon", acceptedOutcome(1, 0, null), receivedAt);
   } catch (error) {
     console.error("Health beacon store error:", error);
   }

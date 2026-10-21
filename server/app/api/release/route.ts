@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getTenantId, getUserId } from "@/lib/tenant";
+import { getTenantId } from "@/lib/tenant";
+import { requireTenantAdmin } from "@/lib/admin-auth";
 import { loadReleaseArtifact, loadReleaseManifest } from "@/lib/release-manifest";
 
 const CreateReleaseSchema = z.object({
@@ -16,7 +17,7 @@ const CreateReleaseSchema = z.object({
  * POST /api/release
  * Admin endpoint: publish a signed binary release to a ring (ADR-0015, #30).
  *
- * Authentication: better-auth session.
+ * Authentication: better-auth session, `owner` or `admin` member of the tenant (#837).
  * Request body: { ring, releaseVersion, manifestUrl, manifestSha256, releasedAt? }
  *
  * Refuses to publish anything an agent could not install: the manifest must
@@ -28,8 +29,9 @@ const CreateReleaseSchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
-    const tenantId = await getTenantId(req);
-    const userId = await getUserId(req);
+    const authed = await requireTenantAdmin(req);
+    if ("response" in authed) return authed.response;
+    const { tenantId, userId } = authed;
 
     const validation = CreateReleaseSchema.safeParse(await req.json());
     if (!validation.success) {

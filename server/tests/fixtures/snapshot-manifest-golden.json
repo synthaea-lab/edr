@@ -1,0 +1,14 @@
+{
+  "public_key": "d759793bbc13a2819a827c76adb6fba8a49aee007f49f2d0992d99b825ad2c48",
+  "manifest": {
+    "schema_version": 1,
+    "kind": "common-set",
+    "built_at": 1760000000,
+    "hosts_covered": 12,
+    "min_hosts": 3,
+    "entry_count": 4096,
+    "sha256": "abababababababababababababababababababababababababababababababab",
+    "size": 5432,
+    "signature": "cb69108801bb35bccff20a6bb90dc37c1a9f199979aed2129ef9f73733147d7a81505b9300dcaf70e4b410bedae4ac9422bb35784755955d55021d986f80b204"
+  }
+}
