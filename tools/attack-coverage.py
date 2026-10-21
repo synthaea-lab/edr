@@ -158,6 +158,8 @@ TECHNIQUE_TACTIC = {
     "T1553.005": "Defense Evasion",
     "T1562.001": "Defense Evasion",
     "T1562.004": "Defense Evasion",
+    "T1567.002": "Exfiltration",
+    "T1567.003": "Exfiltration",
     "T1571": "Command and Control",
     "T1574.006": "Defense Evasion",
     "T1611": "Privilege Escalation",
