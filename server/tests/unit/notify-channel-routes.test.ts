@@ -67,7 +67,7 @@ describe("notification channel routes", () => {
   });
 
   it("creates a channel, returns the secret once, audits without it", async () => {
-    const res = await POST(r("POST", { url: "https://hooks.example.com/x" }));
+    const res = await POST(r("POST", { url: "https://hooks.example.com/hook-7Qk2xP9m" }));
     const body = await res.json();
     expect(res.status).toBe(201);
     expect(body.secret).toMatch(/^whsec_[0-9a-f]{48}$/);
@@ -75,11 +75,11 @@ describe("notification channel routes", () => {
     const stored = db.notificationChannel.create.mock.calls[0][0].data;
     expect(JSON.stringify(stored)).not.toContain(body.secret);
     // The URL's path is a credential for many receivers: only the host is stored in
-    // clear. Checked against the plaintext fields only, not the whole record —
-    // urlSealed/secretSealed are ciphertext (effectively random bytes) and can contain
-    // "/x" by sheer coincidence, which is not a leak (#938).
-    const { urlSealed: _urlSealed, secretSealed: _secretSealed, ...plaintext } = stored;
-    expect(JSON.stringify(plaintext)).not.toContain("/x");
+    // clear, checked against the whole record (including urlSealed/secretSealed —
+    // a regression that stored the URL unsealed belongs there too). A short needle
+    // like "/x" had a non-trivial chance of appearing by coincidence in ciphertext's
+    // base64 output; a distinctive one like this (64^-10 odds) does not (#938).
+    expect(JSON.stringify(stored)).not.toContain("hook-7Qk2xP9m");
     expect(stored.host).toBe("hooks.example.com");
     expect(stored.urlKeyId).toBe("k1");
     expect(stored.urlSealed).toEqual(expect.any(String));
