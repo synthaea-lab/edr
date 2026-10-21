@@ -17,6 +17,8 @@ import { extractGraphFacts } from "@/lib/graph";
  * - the generic accounts every host has (`root`, `SYSTEM`...) are not an identity worth joining on;
  * - an entity seen on more than `MAX_AGENTS_PER_ENTITY` agents joins nothing: software that is
  *   everywhere is not evidence, and one decoy hash must not link a whole fleet;
+ * - a **hash that most of the fleet runs** joins nothing (`isCommonHash`): the system shell is on
+ *   every host, so two hosts that each fired a detection on it are not one intrusion;
  * - sightings join only within `FLEET_JOIN_WINDOW_MS` of each other.
  */
 
@@ -27,6 +29,31 @@ export const FLEET_JOIN_WINDOW_MS = 24 * 60 * 60 * 1000;
  * measured figure: no fleet larger than a lab pair has run here.
  */
 export const MAX_AGENTS_PER_ENTITY = 20;
+
+/**
+ * A hash on at least this fraction of the reporting hosts is software, not evidence. A starting
+ * point, calibrated like the other numbers once there is a fleet to measure.
+ */
+export const COMMON_HOST_FRACTION = 0.5;
+
+/**
+ * Below this many reporting hosts the fraction says nothing: on two hosts every hash they share is
+ * on 100 % of the fleet, and a rule that dropped it would make a pair of hosts unjoinable. Under
+ * this size a shared hash joins (the cap above still applies).
+ */
+export const MIN_FLEET_FOR_COMMON = 5;
+
+/** What the join knows about the fleet's file hashes: how many hosts have reported at all, and how
+ * many of them have run each hash (from the prevalence sightings). */
+export type FleetPrevalence = {
+  reportingHosts: number;
+  hostsWithHash: ReadonlyMap<string, number>;
+};
+
+/** Whether a hash on `hostsWithHash` of `reportingHosts` hosts is too common to join on. */
+export function isCommonHash(hostsWithHash: number, reportingHosts: number): boolean {
+  return reportingHosts >= MIN_FLEET_FOR_COMMON && hostsWithHash / reportingHosts >= COMMON_HOST_FRACTION;
+}
 
 /** Accounts present on every host: signing in as one says nothing about who else did. */
 const GENERIC_IDENTITIES = new Set([
@@ -92,9 +119,20 @@ function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** The distinct file hashes `detections` could join on: what to ask the prevalence about. */
+export function candidateHashes(detections: FleetDetection[]): string[] {
+  const hashes = new Set<string>();
+  for (const d of detections) {
+    for (const key of joinKeys(d.agentId, d.event, d.timestamp)) {
+      if (key.kind === "sha256") hashes.add(key.key);
+    }
+  }
+  return Array.from(hashes);
+}
+
 /** Joins `detections` into groups spanning at least two agents. The result does not depend on the
- * order of the input. */
-export function joinDetections(detections: FleetDetection[]): FleetGroup[] {
+ * order of the input. With `prevalence`, a hash most of the fleet runs joins nothing. */
+export function joinDetections(detections: FleetDetection[], prevalence?: FleetPrevalence): FleetGroup[] {
   const sightings = new Map<string, { key: JoinKey; detections: FleetDetection[] }>();
   for (const d of detections) {
     for (const key of joinKeys(d.agentId, d.event, d.timestamp)) {
@@ -121,6 +159,13 @@ export function joinDetections(detections: FleetDetection[]): FleetGroup[] {
 
   for (const { key, detections: seen } of Array.from(sightings.values())) {
     if (new Set(seen.map((d) => d.agentId)).size > MAX_AGENTS_PER_ENTITY) continue;
+    if (
+      prevalence &&
+      key.kind === "sha256" &&
+      isCommonHash(prevalence.hostsWithHash.get(key.key) ?? 0, prevalence.reportingHosts)
+    ) {
+      continue;
+    }
     const ordered = [...seen].sort(
       (a, b) => a.timestamp.getTime() - b.timestamp.getTime() || compare(a.id, b.id)
     );
