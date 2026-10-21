@@ -76,6 +76,8 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
 | T1552.004 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.003 | 3 | `rules:crates/rules/src/credfiles.rs` |
 
 ## Discovery
 
