@@ -20,6 +20,13 @@ const exec = (sha256: string = SHA) => ({
   image_path: "/tmp/payload",
   sha256,
 });
+const logon = (user: string, outcome = "success", kind = "logon") => ({
+  type: "auth",
+  meta: { pid: 811, ppid: 1, comm: "sshd", timestamp_ns: 1 },
+  outcome,
+  kind,
+  target_user: user,
+});
 const session = (user: string) => ({ type: "session", target_user: user, meta: {} });
 
 const cronRequest = (secret: string | null = process.env.CRON_SECRET ?? null) =>
@@ -244,6 +251,53 @@ describe("GET /api/cron/join-fleet-cases", () => {
     await GET(cronRequest());
 
     expect(await prisma.fleetCase.count()).toBe(0);
+  });
+
+  describe("a Linux logon (an auth event)", () => {
+    it("joins two agents' detections that carry a successful logon of one user", async () => {
+      const tenant = await createTestTenant();
+      const a = await createTestAgent(tenant.id, "agent-a");
+      const b = await createTestAgent(tenant.id, "agent-b");
+      await createTestDetection(tenant.id, a.id, { event: logon("mallory"), timestamp: at(0) });
+      await createTestDetection(tenant.id, b.id, { event: logon("Mallory"), timestamp: at(5) });
+
+      await GET(cronRequest());
+
+      const cases = await prisma.fleetCase.findMany({ where: { tenantId: tenant.id }, include: { entities: true } });
+      expect(cases).toHaveLength(1);
+      expect(cases[0].entities.map((e) => [e.kind, e.key])).toEqual([["identity", "mallory"]]);
+      expect(await prisma.detection.count({ where: { fleetCaseId: cases[0].id } })).toBe(2);
+    });
+
+    it.each([
+      ["a failed logon", "failure", "logon_failure"],
+      ["explicit credentials", "success", "explicit_credentials"],
+      ["a privileged session", "success", "privileged_session"],
+    ])("does not join on %s: the user name is not proof of who signed in", async (_label, outcome, kind) => {
+      const tenant = await createTestTenant();
+      const a = await createTestAgent(tenant.id, "agent-a");
+      const b = await createTestAgent(tenant.id, "agent-b");
+      await createTestDetection(tenant.id, a.id, { event: logon("mallory", outcome, kind), timestamp: at(0) });
+      await createTestDetection(tenant.id, b.id, { event: logon("mallory", outcome, kind), timestamp: at(5) });
+
+      await GET(cronRequest());
+
+      expect(await prisma.fleetCase.count()).toBe(0);
+    });
+
+    it("does not join on a generic account, or on a failed logon beside a successful one", async () => {
+      const tenant = await createTestTenant();
+      const a = await createTestAgent(tenant.id, "agent-a");
+      const b = await createTestAgent(tenant.id, "agent-b");
+      await createTestDetection(tenant.id, a.id, { event: logon("root"), timestamp: at(0) });
+      await createTestDetection(tenant.id, b.id, { event: logon("root"), timestamp: at(1) });
+      await createTestDetection(tenant.id, a.id, { event: logon("mallory"), timestamp: at(2) });
+      await createTestDetection(tenant.id, b.id, { event: logon("mallory", "failure", "logon_failure"), timestamp: at(3) });
+
+      await GET(cronRequest());
+
+      expect(await prisma.fleetCase.count()).toBe(0);
+    });
   });
 
   it("one tenant's failure does not stop the others, and is not a 200", async () => {
