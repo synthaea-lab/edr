@@ -4436,7 +4436,7 @@ fn try_getaddrinfo_exit(ctx: RetProbeContext) -> Result<u32, u32> {
     macro_rules! copy_dns_answer {
         ($slot:literal, $family:ident, $address_ptr:ident) => {{
             // SAFETY: `e` points to this CPU's writable scratch map value and
-            // `$slot` is a compile-time index within the fixed eight-slot array.
+            // `$slot` is a compile-time index within the fixed [`MAX_DNS_ANSWERS`]-slot array.
             unsafe { (*e).answers[$slot].family = $family as u8 };
             if $family == i32::from(AF_INET) {
                 // SAFETY: `sockaddr_ptr` came from a user-memory read. The BPF
@@ -4507,6 +4507,22 @@ fn try_getaddrinfo_exit(ctx: RetProbeContext) -> Result<u32, u32> {
                     5 => copy_dns_answer!(5, family, address_ptr),
                     6 => copy_dns_answer!(6, family, address_ptr),
                     7 => copy_dns_answer!(7, family, address_ptr),
+                    8 => copy_dns_answer!(8, family, address_ptr),
+                    9 => copy_dns_answer!(9, family, address_ptr),
+                    10 => copy_dns_answer!(10, family, address_ptr),
+                    11 => copy_dns_answer!(11, family, address_ptr),
+                    12 => copy_dns_answer!(12, family, address_ptr),
+                    13 => copy_dns_answer!(13, family, address_ptr),
+                    14 => copy_dns_answer!(14, family, address_ptr),
+                    15 => copy_dns_answer!(15, family, address_ptr),
+                    16 => copy_dns_answer!(16, family, address_ptr),
+                    17 => copy_dns_answer!(17, family, address_ptr),
+                    18 => copy_dns_answer!(18, family, address_ptr),
+                    19 => copy_dns_answer!(19, family, address_ptr),
+                    20 => copy_dns_answer!(20, family, address_ptr),
+                    21 => copy_dns_answer!(21, family, address_ptr),
+                    22 => copy_dns_answer!(22, family, address_ptr),
+                    23 => copy_dns_answer!(23, family, address_ptr),
                     _ => break,
                 };
                 if copied.is_err() {

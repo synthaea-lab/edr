@@ -536,10 +536,13 @@ mod tests {
     }
 
     #[test]
-    fn dns_answer_walk_caps_fake_chains_at_eight_entries() {
-        for (length, expected, truncated) in
-            [(1, 1, false), (3, 3, false), (8, 8, false), (12, 8, true)]
-        {
+    fn dns_answer_walk_caps_fake_chains_at_max_dns_answers_entries() {
+        for (length, expected, truncated) in [
+            (1, 1, false),
+            (3, 3, false),
+            (wire::MAX_DNS_ANSWERS, wire::MAX_DNS_ANSWERS, false),
+            (wire::MAX_DNS_ANSWERS + 4, wire::MAX_DNS_ANSWERS, true),
+        ] {
             let entries = (1..=length)
                 .map(|octet| {
                     Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(

@@ -304,7 +304,7 @@ pub const MAX_DNS_QUERY_LEN: usize = 256;
 /// Maximum `addrinfo` list entries inspected by the DNS uretprobe. This constant
 /// bound keeps the verifier's loop analysis finite; a following entry is visible
 /// through `answers_truncated`.
-pub const MAX_DNS_ANSWERS: usize = 8;
+pub const MAX_DNS_ANSWERS: usize = 24;
 /// Budget for TLS plaintext capture (first N bytes). Chosen to fit comfortably
 /// in a ring-buffer event with metadata while staying under 512 bytes total.
 pub const MAX_TLS_CAPTURE: usize = 256;
@@ -944,7 +944,13 @@ pub struct GetAddrInfoEvent {
     /// [`MAX_DNS_ANSWERS`]); entries with null addresses or unknown families are
     /// skipped.
     pub answer_count: u8,
-    /// True when `ai_next` was non-null after the eighth inspected entry.
+    /// True when `ai_next` was non-null after the [`MAX_DNS_ANSWERS`]th inspected
+    /// `addrinfo` **node**, not address: without `hints.ai_socktype`, glibc
+    /// returns one node per address per socktype (STREAM/DGRAM/RAW), so this can
+    /// be set well before `MAX_DNS_ANSWERS` distinct addresses have been seen
+    /// (review of #458, old-dov 2026-10-21: a null-hints `getaddrinfo("debian.org")`
+    /// measured 8 addresses as 24 nodes). Read it as "more resolver nodes existed
+    /// past this point", not "more addresses existed".
     pub answers_truncated: bool,
     /// The first [`MAX_DNS_ANSWERS`] valid IPv4/IPv6 answers in resolver order.
     pub answers: [DnsAnswer; MAX_DNS_ANSWERS],
