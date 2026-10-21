@@ -71,8 +71,11 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1003.002 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
 | T1003.003 | 3 | `sigma:rules/sigma/windows/ntds_ifm_export.yml` |
 | T1003.004 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
-| T1003.008 | 3 | `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
+| T1003.008 | 3 | `rules:crates/rules/src/credfiles.rs`, `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
 | T1110 | 3 | `rules:crates/rules/src/state.rs` |
+| T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1552.004 | 3 | `rules:crates/rules/src/credfiles.rs` |
 
 ## Lateral Movement
 
@@ -121,7 +124,6 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
 | T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
 | T1548.003 | 3 | `rules:crates/rules/src/sudo.rs`, `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
-| T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1557 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1558 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
