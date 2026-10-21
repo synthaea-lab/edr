@@ -276,6 +276,19 @@ fn classify_pam(message: &str) -> Option<JournalEvent> {
     // one wrong password, double-counting toward sudo.rs's T1548.003 threshold.
     // Nothing in this crate can tell which arrangement a given host uses from
     // the journal lines alone.
+    //
+    // Also from the source (review by SherlockOmss, not just the format string):
+    // that logger() line fires for every non-success reply, not only a wrong
+    // password — pam_sss special-cases PAM_USER_UNKNOWN right after it when
+    // deciding whether to also log "received for user %s: %d (%s)", so a "this
+    // account isn't ours" reply produces the same "authentication failure" line
+    // this crate classifies as PamAuthFailure. On a stack where pam_sss is
+    // consulted for an account it doesn't manage before a pam_unix that then
+    // succeeds, the journal carries a failure immediately followed by a
+    // success for the same invocation — exactly the shape sudo.rs's
+    // burst-then-success join looks for. The usual authselect ordering tries
+    // pam_unix first for local accounts, which would avoid this, but nothing
+    // here can confirm a given host's order from the journal lines alone.
     let rest = ["pam_unix(", "pam_sss("]
         .into_iter()
         .find_map(|prefix| message.strip_prefix(prefix))?;
