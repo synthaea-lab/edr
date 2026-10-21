@@ -10,7 +10,10 @@ simulates: >
 expected_detections:
   - technique: "T1505.003"
     rule: rule_web_request_shell   # crates/correlator/src/rules.rs — a web-server shell
-                                   # paired with the nearest signature request
+                                   # named with the request read from its time through 3 s after
+                                   # it (#807); this script sends the webshell-like request after
+                                   # the shell, within that grace (#903), so the alert names it,
+                                   # see the notes below
     min_count: 1
     tolerance: 0
   - technique: "T1059"
@@ -32,7 +35,23 @@ notes: >
   and T1059 fire, four `http_request` events. php-fpm as the parent is web-webshell-php; a custom
   LogFormat is web-custom-logformat.
   Re-run 2026-10-15 on Fedora 43 (kernel 7.2.9, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.68 with `FAKE_COMM=httpd`, access log
-  /var/log/httpd/access_log: T1505.003 (0 s from the webshell_like request, status 404) and T1059
-  fire, the four `http_request` events (sql_injection, path_traversal, scanner_user_agent,
+  /var/log/httpd/access_log: T1505.003 (0 s from the webshell_like request, status 404; this is
+  the agent build `665dc8d` (#820, with inline-fix.diff), before #807) and T1059 fire, the four `http_request` events (sql_injection, path_traversal, scanner_user_agent,
   webshell_like) are written, then one `http_summary`. The sqlmap-agent request returns 403 on
   this httpd, not 404; the signature is unaffected.
+  Since #807 (merged 2026-10-14) a shell is paired only with a request read from the shell's time
+  through 3 s after it (the log line is written after the response). Until #903 this script sent
+  its four requests BEFORE it starts the fake shell, so it could not show the pairing; #903 (merged
+  2026-10-19) now sends the webshell-like request after the shell, within the 3 s grace, and the
+  other requests first. The measurements below are of the script BEFORE #903 and were not re-run
+  with it here. Run with the agent of main, `b28935b` plus #845 (needed on kernel 7.2), on Fedora 43 and on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main `b28935b` plus #845's diff (the Rocky build; the
+  notes of the run record that same static build for the Fedora comparison, no separate Fedora hash
+  was kept), alone, twice each: the same on both. T1059 fires; T1505.003 fires after the 3 s grace as the
+  generic "shell spawned by a web server; no matching access-log request has been read yet"; the
+  second run's requests, read later, also produce the completion alert "late access-log request
+  read after the generic shell alert (unverified ...)". The four `http_request` events and the
+  `http_summary` are unchanged. The expected_detections above (technique level) held then and
+  still do. With the #903 script the named pairing is expected here too (#893): per the #903
+  lab record, "0s after a WebshellLike request (GET /uploads/c99.php param=cmd, status 404,
+  client 127.0.0.1)" on Rocky 9.8 and Fedora 43, 3 runs of 3 each. web-webshell-php.sh remains
+  the scenario where the request really causes the shell.

@@ -12,8 +12,10 @@ import crypto from "crypto";
  * Only paths listed in the agent's own active manifest are served (an
  * allowlist, not a traversal filter): `storage/artifacts` holds every tenant's
  * and ring's files, so a bare path lookup would let any enrolled agent read
- * another tenant's content or a ring's unreleased files. The stored file must
- * hash to the manifest's signed value before it is sent.
+ * another tenant's content or a ring's unreleased files. The store is keyed
+ * by content hash (#804), not by `path` — the manifest entry's `sha256` says
+ * where to read the bytes from, and that is also checked against what is
+ * actually on disk before it is sent.
  *
  * Authentication: nginx proxy secret + mTLS + enrolled agent (`authenticateAgent`)
  * Query params:
@@ -65,7 +67,7 @@ export async function GET(req: NextRequest) {
     // For now, serve from local filesystem (dev only)
     let fileBuffer: Buffer;
     try {
-      fileBuffer = await fs.readFile(path.join(process.cwd(), "storage", "artifacts", artifactPath));
+      fileBuffer = await fs.readFile(path.join(process.cwd(), "storage", "artifacts", entry.sha256));
     } catch (error: any) {
       if (error.code === "ENOENT") {
         return NextResponse.json({ error: "Artifact not found" }, { status: 404 });
