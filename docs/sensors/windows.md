@@ -50,8 +50,10 @@ header is 72 bytes: v2 bytes 0-63 are unchanged, `dropped_capture_failed` is a l
 The driver and the agent client share the protocol version, and this change moves the client's
 connection constant to 3 together with the driver, so it must land **before** the receive loop
 (#853): until then the agent connects but does not read the events, the queue fills and the
-loss is counted. The driver is not compiled by CI (no WDK on the runners): a change here is
-checked by the author's WDK build and the lab run.
+loss is counted. If #853 lands first instead, rebase #857 onto that main before merging it;
+until the v3 driver is deployed, the v3 client is refused by the older driver and file
+telemetry from this channel is unavailable. The driver is not compiled by CI (no WDK on the
+runners): a change here is checked by the author's WDK build and the lab run.
 
 **Pool compatibility:** the driver uses `ExAllocatePoolZero` with the WDK's
 `POOL_ZERO_DOWN_LEVEL_SUPPORT` path and initializes that path in `DriverEntry`. This avoids a
