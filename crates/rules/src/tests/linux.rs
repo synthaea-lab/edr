@@ -3507,3 +3507,161 @@ fn egress_volume_counts_a_reused_local_port_as_a_new_flow() {
         state.on_network_flow(&flow_sent("uploader", 50000, dst, Some(600 * MIB), 5 * SEC));
     assert_eq!(alerts.len(), 1);
 }
+
+// ── ARCHIVE-EXFIL: an archive is staged, another pid reads it, then connects out (#380) ──
+
+const ARCHIVE_PATH: &str = "/var/tmp/home-backup.tar.gz";
+const WRITE_FLAGS: u32 = 0o1; // O_WRONLY on Linux
+
+fn open_event(pid: u32, comm: &str, path: &str, flags: u32, ts: u64) -> FileOpenEvent {
+    let mut event = schema::fixtures::file_open();
+    event.meta.pid = pid;
+    event.meta.comm = comm.to_string();
+    event.meta.timestamp_ns = ts;
+    event.path = path.to_string();
+    event.flags = flags;
+    event
+}
+
+fn write_event(pid: u32, bytes: u64, ts: u64) -> schema::FileWriteEvent {
+    let mut event = schema::fixtures::file_write();
+    event.meta.pid = pid;
+    event.meta.timestamp_ns = ts;
+    event.bytes_requested = bytes;
+    event
+}
+
+fn connect_to(pid: u32, comm: &str, daddr: [u8; 4], ts: u64) -> ConnectEvent {
+    connect_event_full(pid, comm, daddr, 443, ts)
+}
+
+/// Stages `ARCHIVE_PATH` by pid 100 (200 MiB written) at t = 0..2 s.
+fn stage_archive(state: &mut RuleState) {
+    state.on_file_open(&open_event(100, "tar", ARCHIVE_PATH, WRITE_FLAGS, 0));
+    state.on_file_write(&write_event(100, 100 * MIB, SEC));
+    state.on_file_write(&write_event(100, 100 * MIB, 2 * SEC));
+}
+
+#[test]
+fn archive_exfil_staged_archive_read_then_connect_alerts_once() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state);
+    state.on_file_open(&open_event(200, "rclone", ARCHIVE_PATH, 0, 60 * SEC));
+    let alerts = state.on_connect(&connect_to(200, "rclone", [203, 0, 113, 9], 62 * SEC));
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    assert_eq!(alerts[0].technique, "T1560/T1041");
+    assert!(alerts[0].message.contains(ARCHIVE_PATH));
+    // One alert per reader.
+    let again = state.on_connect(&connect_to(200, "rclone", [203, 0, 113, 10], 63 * SEC));
+    assert!(again.is_empty());
+}
+
+#[test]
+fn archive_exfil_a_small_archive_is_not_staged() {
+    let mut state = RuleState::new();
+    state.on_file_open(&open_event(100, "tar", ARCHIVE_PATH, WRITE_FLAGS, 0));
+    state.on_file_write(&write_event(100, 10 * MIB, SEC));
+    state.on_file_open(&open_event(200, "curl", ARCHIVE_PATH, 0, 60 * SEC));
+    assert!(
+        state
+            .on_connect(&connect_to(200, "curl", [203, 0, 113, 9], 62 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_the_writer_extracting_its_own_archive_is_not_a_hand_off() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state);
+    // The same pid opens the file again to read it, then connects.
+    state.on_file_open(&open_event(100, "tar", ARCHIVE_PATH, 0, 10 * SEC));
+    assert!(
+        state
+            .on_connect(&connect_to(100, "tar", [203, 0, 113, 9], 11 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_a_connection_to_a_private_address_does_not_complete_it() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state);
+    state.on_file_open(&open_event(200, "rsync", ARCHIVE_PATH, 0, 60 * SEC));
+    assert!(
+        state
+            .on_connect(&connect_to(200, "rsync", [192, 168, 1, 20], 62 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_a_late_read_or_a_late_connection_does_not_count() {
+    let mut late_read = RuleState::new();
+    stage_archive(&mut late_read);
+    // Read two hours after staging: outside the one-hour read window.
+    late_read.on_file_open(&open_event(200, "curl", ARCHIVE_PATH, 0, 7200 * SEC));
+    assert!(
+        late_read
+            .on_connect(&connect_to(200, "curl", [203, 0, 113, 9], 7201 * SEC))
+            .is_empty()
+    );
+    let mut late_connect = RuleState::new();
+    stage_archive(&mut late_connect);
+    late_connect.on_file_open(&open_event(200, "curl", ARCHIVE_PATH, 0, 60 * SEC));
+    // Connects 11 minutes after the read: outside the 10-minute window.
+    assert!(
+        late_connect
+            .on_connect(&connect_to(200, "curl", [203, 0, 113, 9], 720 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_another_pid_connecting_does_not_complete_it() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state);
+    state.on_file_open(&open_event(200, "cat", ARCHIVE_PATH, 0, 60 * SEC));
+    assert!(
+        state
+            .on_connect(&connect_to(300, "curl", [203, 0, 113, 9], 62 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_a_file_without_an_archive_name_is_not_tracked() {
+    let mut state = RuleState::new();
+    state.on_file_open(&open_event(
+        100,
+        "tar",
+        "/var/tmp/home-backup.dat",
+        WRITE_FLAGS,
+        0,
+    ));
+    state.on_file_write(&write_event(100, 200 * MIB, SEC));
+    state.on_file_open(&open_event(
+        200,
+        "curl",
+        "/var/tmp/home-backup.dat",
+        0,
+        60 * SEC,
+    ));
+    assert!(
+        state
+            .on_connect(&connect_to(200, "curl", [203, 0, 113, 9], 62 * SEC))
+            .is_empty()
+    );
+}
+
+#[test]
+fn archive_exfil_a_flow_event_completes_it_as_well() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state);
+    state.on_file_open(&open_event(200, "scp", ARCHIVE_PATH, 0, 60 * SEC));
+    let alerts = state.on_network_flow(&flow_sent("scp", 50000, [203, 0, 113, 9], None, 62 * SEC));
+    // `flow_sent` builds pid 300; align it with the reader.
+    assert!(alerts.is_empty());
+    let mut flow = flow_sent("scp", 50000, [203, 0, 113, 9], None, 63 * SEC);
+    flow.meta.pid = 200;
+    assert_eq!(state.on_network_flow(&flow).len(), 1);
+}
