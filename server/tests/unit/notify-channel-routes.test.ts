@@ -74,8 +74,12 @@ describe("notification channel routes", () => {
     expect(JSON.stringify(body.channel)).not.toContain(body.secret);
     const stored = db.notificationChannel.create.mock.calls[0][0].data;
     expect(JSON.stringify(stored)).not.toContain(body.secret);
-    // The URL's path is a credential for many receivers: only the host is stored in clear.
-    expect(JSON.stringify(stored)).not.toContain("/x");
+    // The URL's path is a credential for many receivers: only the host is stored in
+    // clear. Checked against the plaintext fields only, not the whole record —
+    // urlSealed/secretSealed are ciphertext (effectively random bytes) and can contain
+    // "/x" by sheer coincidence, which is not a leak (#938).
+    const { urlSealed: _urlSealed, secretSealed: _secretSealed, ...plaintext } = stored;
+    expect(JSON.stringify(plaintext)).not.toContain("/x");
     expect(stored.host).toBe("hooks.example.com");
     expect(stored.urlKeyId).toBe("k1");
     expect(stored.urlSealed).toEqual(expect.any(String));
