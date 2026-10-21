@@ -11,6 +11,7 @@
 //! dated lab observations — treat them as data with provenance, not tunable noise.
 
 mod amsi;
+mod credfiles;
 mod defender;
 mod exclusions;
 mod inventory;
@@ -18,6 +19,7 @@ mod ld_trust;
 mod ldap;
 mod ntlm;
 mod rdp;
+mod recon;
 mod session;
 mod signature_gate;
 mod sliding;
