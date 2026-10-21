@@ -769,10 +769,14 @@ pub(crate) fn check_log_clear_exec(event: &ExecEvent) -> Option<Alert> {
 /// `wevtutil qe` (`sensor-windows-eventlog`), and neither may alert; neither may
 /// read-only queries (`sc query`, `reg query`, `Get-EventLog`, `net start`).
 ///
+/// A wrapper such as `cmd /c net stop eventlog` is not matched on its own line: `cmd.exe`
+/// starts `net.exe` as a child, and that child's exec (`net stop eventlog`) is the one that
+/// alerts, so the wrapper adds nothing to look for.
+///
 /// Known gaps: a channel disabled through the API or the registry rather than by one of
 /// these command lines is not seen here, and the sensor's start-up channel check (#786) only
 /// warns about a channel that is already disabled when the agent starts, so a channel
-/// switched off afterwards is not caught; a PowerShell pipeline such as
+/// switched off afterwards is not caught; a pipeline such as
 /// `Get-Service EventLog | Stop-Service`, an encoded command, and a renamed copy of a tool
 /// are not matched either.
 #[must_use]
@@ -926,9 +930,9 @@ fn reg_disables_eventlog(args: &[&str]) -> Option<&'static str> {
         .then_some("EventLog service disabled")
 }
 
-/// `Stop-Service` of EventLog, or `Set-Service EventLog -StartupType Disabled`, within one
-/// PowerShell statement: `Stop-Service -Name Spooler; Get-WinEvent -LogName EventLog` names
-/// EventLog, but not as the service being stopped.
+/// `Stop-Service` of `EventLog`, or `Set-Service EventLog -StartupType Disabled`, within one
+/// statement of the command line: `Stop-Service -Name Spooler; Get-WinEvent -LogName
+/// EventLog` names `EventLog`, but not as the service being stopped.
 fn powershell_stops_or_disables_eventlog(cmdline: &str) -> Option<&'static str> {
     let lower = cmdline.to_lowercase();
     for statement in lower.split([';', '|', '&', '\n']) {

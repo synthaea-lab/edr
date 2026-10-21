@@ -236,6 +236,15 @@ fn lookalike_command_lines_do_not_alert() {
 }
 
 #[test]
+fn a_cmd_wrapper_is_caught_on_the_child_it_starts() {
+    // `cmd /c net stop eventlog` is not matched on its own line; the `net.exe` it starts
+    // has its own exec, with the command line cmd passes on, and that one alerts.
+    assert!(!t1562_002(&win_exec("cmd /c net stop eventlog")));
+    let child = exec_event_win(2, 1, "net.exe", "net  stop eventlog", 0);
+    assert!(t1562_002(&child));
+}
+
+#[test]
 fn a_non_windows_exec_never_raises_the_windows_event_logging_rule() {
     // The same text on a Unix agent (a script path, `ssh host net stop eventlog`) is not a
     // Windows command.
