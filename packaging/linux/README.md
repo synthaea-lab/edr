@@ -40,9 +40,11 @@ This separation ensures that package managers (apt/dnf) and the updater never co
 └── alerts.ndjson       # Detection alerts
 
 /etc/synthaea/          # Configuration directory
-└── agent.toml          # Default template (ADR-0013); every control-plane field
-                         # is a # CHANGE ME placeholder, offline_fallback = true
-                         # lets the agent run as shipped
+└── agent.toml          # Default template (ADR-0013), shipped by both packages;
+                         # RPM marks it %config(noreplace). Control-plane fields
+                         # are # CHANGE ME placeholders: configure them before
+                         # expecting uploads. offline_fallback = true allows a
+                         # local-only start.
 
 /usr/bin/
 └── synthaea-ctl        # Root-owned package asset, a copy of cli (#897) —
@@ -172,14 +174,21 @@ sudo apt-get purge synthaea-agent    # Full cleanup
 
 RHEL:
 ```bash
-sudo dnf remove synthaea-agent       # Full cleanup
+sudo dnf remove synthaea-agent       # Preserve alerts and remaining state
 ```
 
 Verify:
 - [ ] Service stopped and disabled
 - [ ] Binaries removed
-- [ ] Directories removed (on purge/remove)
-- [ ] No residue: `systemctl list-unit-files | grep -v synthaea`
+- [ ] Debian purge removes the package state; RPM removal preserves existing
+      files under `/var/log/synthaea` and remaining `/var/lib/synthaea` state for
+      forensics/reinstallation. RPM manages `agent.toml` as `%config(noreplace)`:
+      on removal, an edited copy is saved as `.rpmsave`, while an unchanged
+      packaged copy is removed.
+- [ ] RPM removal asks the service account to remove inventoried canaries
+      after stopping the service. If cleanup fails, the inventory and state
+      remain for manual recovery; never delete the state first.
+- [ ] No `synthaea-agent.service` entry remains in `systemctl list-unit-files`
 
 **5. Lab Scenario Integration**
 ```bash

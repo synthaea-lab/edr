@@ -23,6 +23,35 @@ fn inventory_path(state_dir: &Path) -> PathBuf {
     deception_dir(state_dir).join("inventory.json")
 }
 
+/// Remove only inventoried canaries during package removal. This runs under
+/// the service account: the inventory is service-writable and must never be
+/// interpreted by a root process. A refusal or I/O failure leaves the
+/// inventory for an operator to inspect after the package is removed.
+///
+/// # Errors
+///
+/// Returns an error if the inventory cannot be read or updated, or if any
+/// inventoried canary cannot be safely removed.
+pub(crate) fn cleanup_for_uninstall(state_dir: &Path) -> anyhow::Result<()> {
+    let report = deception::remove(&inventory_path(state_dir))?;
+    tracing::info!(
+        removed = report.removed.len(),
+        missing = report.missing.len(),
+        foreign = report.foreign.len(),
+        refused = report.refused.len(),
+        failed = report.failed.len(),
+        "deception: package removal cleanup"
+    );
+    if !report.is_clean() {
+        anyhow::bail!(
+            "{} canaries were refused and {} could not be removed; inventory retained",
+            report.refused.len(),
+            report.failed.len()
+        );
+    }
+    Ok(())
+}
+
 fn seed_path(state_dir: &Path) -> PathBuf {
     deception_dir(state_dir).join("seed")
 }
@@ -852,6 +881,54 @@ fn report_removal(report: &deception::RemoveReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_cleanup_removes_only_inventoried_canaries() {
+        let root = tempfile::tempdir().unwrap();
+        let share = root.path().join("share");
+        fs::create_dir(&share).unwrap();
+        let decoys = deception::plan(
+            &deception::Seed::from_bytes([23; 32]),
+            &[deception::Placement {
+                dir: share.clone(),
+                kinds: vec![deception::Kind::Credentials],
+            }],
+        );
+        let inventory = inventory_path(root.path());
+        fs::create_dir_all(inventory.parent().unwrap()).unwrap();
+        deception::plant(&decoys, &inventory).unwrap();
+        let operator_file = share.join("operator.txt");
+        fs::write(&operator_file, "keep me").unwrap();
+
+        cleanup_for_uninstall(root.path()).unwrap();
+
+        assert!(!decoys[0].path.exists());
+        assert!(!inventory.exists());
+        assert_eq!(fs::read_to_string(operator_file).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn package_cleanup_refusal_keeps_inventory_for_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let share = root.path().join("share");
+        fs::create_dir(&share).unwrap();
+        let decoys = deception::plan(
+            &deception::Seed::from_bytes([29; 32]),
+            &[deception::Placement {
+                dir: share,
+                kinds: vec![deception::Kind::Credentials],
+            }],
+        );
+        let inventory = inventory_path(root.path());
+        fs::create_dir_all(inventory.parent().unwrap()).unwrap();
+        deception::plant(&decoys, &inventory).unwrap();
+        fs::remove_file(&decoys[0].path).unwrap();
+        fs::create_dir(&decoys[0].path).unwrap();
+
+        assert!(cleanup_for_uninstall(root.path()).is_err());
+        assert!(inventory.exists());
+        assert!(decoys[0].path.is_dir());
+    }
 
     fn config_for(dirs: &[&Path]) -> config::DeceptionConfig {
         config::DeceptionConfig {

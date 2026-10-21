@@ -100,6 +100,9 @@ enum Command {
     /// Checks that the environment can load the collectors, without attaching them
     /// (no event capture and no persistent effect).
     Status,
+    /// Remove inventoried canaries before a package uninstall, without running
+    /// sensors or contacting the control plane. Run as the service user.
+    CleanupDeception,
     /// Loads the collectors and runs detection until Ctrl-C.
     Run {
         /// JSON-Lines file alerts are appended to.
@@ -375,6 +378,7 @@ fn try_main() -> anyhow::Result<std::process::ExitCode> {
     let mut exit_code = std::process::ExitCode::SUCCESS;
     let result = match cli.command {
         Command::Status => commands::cmd_status(),
+        Command::CleanupDeception => deception::cleanup_for_uninstall(&cfg.storage.state_dir),
         Command::Run {
             alerts,
             events,

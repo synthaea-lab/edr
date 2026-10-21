@@ -29,11 +29,13 @@ within the hour while the agent runs (the deletion itself already raised a detec
 that was modified or replaced is never overwritten. To get rid of a decoy, take its directory
 out of `canary_dirs`; deleting the file only makes it come back.
 
-**What an uninstall leaves** (checked on `main`, Fedora 44, 2026-10-14: two installs with
-different seeds, then one restarted without `[deception]`): the canaries are removed
-(`canaries removed removed=4`) and so is the inventory. The `seed` file stays in
-`<state_dir>/deception/` (ADR-0029). The canary directories were yours: the agent never creates a
-missing one and never removes one, so an empty directory afterwards is not a residue.
+**Removing canaries.** Removing `[deception]` and restarting the agent deletes the inventoried
+canaries; this was checked on Fedora 44 on 2026-10-14 with two installs and different seeds
+(`canaries removed removed=4`). The inventory is then removed; the seed remains. RPM removal
+also invokes `agent cleanup-deception` as the `synthaea` user after stopping the service. If a
+canary cannot be removed, the package leaves the inventory and state for manual recovery and
+prints a warning. This RPM transaction path needs a live package test. The canary directories
+were created by the operator, not the agent, and are never removed by the cleanup.
 
 ## With the packaged systemd unit
 
