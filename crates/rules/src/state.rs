@@ -265,6 +265,9 @@ pub struct RuleState {
     exec_lineage: BoundedMap<u32, crate::recon::ExecLineage>,
     /// Lineage → distinct SSH destinations, for SSH-FANOUT (T1021.004, #378). LRU-bounded.
     ssh_fanout: BoundedMap<crate::recon::Lineage, SlidingDistinct<IpAddr>>,
+    /// Lineage → distinct security-software discovery commands, for SECURITY-DISCOVERY
+    /// (T1518.001, #378). LRU-bounded.
+    security_discovery: BoundedMap<crate::recon::Lineage, SlidingDistinct<&'static str>>,
     /// (pid, dport) → sliding distinct-destination counter for SCAN-SPREAD
     /// (T1046/T1210, issue #465). LRU-bounded.
     scan_spread: BoundedMap<(u32, u16), SlidingDistinct<IpAddr>>,
@@ -475,6 +478,7 @@ impl RuleState {
             recon_wrappers: BoundedMap::new(COUNTER_CAP),
             exec_lineage: BoundedMap::new(PID_COMM_CAP),
             ssh_fanout: BoundedMap::new(COUNTER_CAP),
+            security_discovery: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
             known_policy_denials: BoundedMap::new(COUNTER_CAP),
             policy_denial_alerts: 0,
@@ -1123,6 +1127,46 @@ impl RuleState {
         })
     }
 
+    /// SECURITY-DISCOVERY (T1518.001, #378): three distinct security-software discovery
+    /// commands from one lineage in 60 s: the posture questions (`getenforce`, `csrutil
+    /// status`, `Get-MpComputerStatus`, `netsh advfirewall show`, `fltmc`) and lookups of a
+    /// named security product (`ps | grep falcon`, `sc query windefend`). One command is
+    /// what a hardening check does; three different ones in a minute is a host being sized
+    /// up. Low: compliance scanners (`OpenSCAP`, lynis, Qualys-style audits) run the same set.
+    fn check_security_discovery(
+        &mut self,
+        event: &ExecEvent,
+        lineage: crate::recon::Lineage,
+    ) -> Option<Alert> {
+        use crate::recon::{SECURITY_DISCOVERY_THRESHOLD, SECURITY_DISCOVERY_WINDOW_NS};
+
+        let label = crate::recon::security_discovery(event)?;
+        let ts = event.meta.timestamp_ns;
+        let entry = self
+            .security_discovery
+            .get_or_insert_with(lineage, SlidingDistinct::default);
+        let distinct = entry.record(label, ts, SECURITY_DISCOVERY_WINDOW_NS);
+        if distinct >= SECURITY_DISCOVERY_THRESHOLD
+            && entry.try_alert(ts, SECURITY_DISCOVERY_WINDOW_NS)
+        {
+            let seen: Vec<&str> = entry.values().copied().collect();
+            return Some(Alert {
+                technique: "T1518.001",
+                severity: Severity::Low,
+                message: format!(
+                    "pid={} comm={}: lineage of pid={} ran {distinct} distinct security-software \
+                     discovery commands ({}) in {}s — the host's defences being sized up",
+                    event.meta.pid,
+                    event.meta.comm,
+                    lineage.0,
+                    seen.join(", "),
+                    SECURITY_DISCOVERY_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+
     /// SSH-FANOUT (T1021.004, #378): outbound SSH to eight distinct hosts from one lineage in
     /// 60 s. The lineage is the one the connecting process was exec'd under, so a loop that
     /// runs `ssh host cmd` per host (one process, one connect each) adds up where a per-pid
@@ -1178,6 +1222,7 @@ impl RuleState {
         alerts.extend(self.check_memfd_exec(event));
         let lineage = self.record_lineage(event);
         alerts.extend(self.check_recon_burst(event, lineage));
+        alerts.extend(self.check_security_discovery(event, lineage));
         alerts.extend(crate::stateless::check_ld_preload_hijack(
             event,
             &self.ld_trust_extra,

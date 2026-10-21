@@ -409,6 +409,7 @@ mod persistence;
 mod quarantine;
 mod rdp;
 mod recon;
+mod security_discovery;
 mod session;
 mod ssh_fanout;
 mod sudo;
