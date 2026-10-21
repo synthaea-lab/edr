@@ -90,7 +90,7 @@ gap.
 | **File activity** | eBPF · BPF-LSM | `file_open` at the security decision point — deliberate double observation (blinding check), io_uring-proof vantage; inline-block ready | ✅ used | T1562 context | #91 |
 | **File activity** | eBPF · BPF-LSM | timestomping via `inode_setattr` hook | 📋 planned | T1070.006 | matrix row |
 | **Network** | eBPF · tracepoints | connect/bind/listen/accept/socket, UDP send+recv — discrete, real-time | ✅ used | T1071/T1041, backdoor listeners | #263 |
-| **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features | #92 |
+| **Network** | netlink · sock_diag+conntrack | listening-port snapshots (LISTENER-DRIFT), flow 5-tuples + byte counters | ✅ used | beacon volume features; EGRESS-VOLUME (T1041/T1048: 512 MiB to one public address in 10 min, provisional, inert unless `nf_conntrack_acct` is on) | #92, #380 |
 | **Network** | eBPF · tracepoints | mount/umount → platform-neutral v21 `Mount` | 📋 planned | staging, evidence destruction | #362 |
 | **DNS** | eBPF | query/answer joined to the resolving process (udp:53 parse vs. `getaddrinfo` uprobe — choice in-issue) | 📋 planned | T1071.004, DGA features | #267 |
 | **Encrypted traffic** | eBPF · uprobes | TLS plaintext pre-encryption/post-decryption (OpenSSL/BoringSSL/GnuTLS), byte-budgeted + redacted | ✅ used | T1071 C2 visibility without MITM | #90 |

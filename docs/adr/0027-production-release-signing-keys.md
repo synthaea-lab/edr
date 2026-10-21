@@ -1,11 +1,11 @@
 # ADR-0027: Production signing keys for releases and content: a trust set, custody, and a recovery path
 
-- **Status**: proposed
-- **Date**: 2026-10-06
+- **Status**: accepted 2026-10-21 as a design, with "Owner's decisions, 2026-10-21"; the holders, the approvers and the accounts are not decided, and no key is generated until they are
+- **Date**: 2026-10-06 (accepted 2026-10-21)
 
-ADR-0033 (proposed) would add a fourth key to this trust set, `snapshot`, with one job: signing
-the per-tenant common-set snapshot manifest, held in a signing-only key service rather than in
-offline custody. It does not change the three keys decided here.
+ADR-0033 adds a fourth key to this trust set, `snapshot`, with one job: signing the per-tenant
+common-set snapshot manifest, held in a signing-only key service rather than in offline custody.
+ADR-0035 adds a fifth, `posture`, on the same terms. Neither changes the three keys decided here.
 
 ## Implementation status
 
@@ -112,7 +112,8 @@ owner's decisions and are marked as such.
   that can rotate the signing keys, with roles by key). Adopting TUF's metadata, its
   expiry and threshold rules and its tooling would avoid inventing the rotation format, at
   the cost of a larger envelope than ADR-0015's and a dependency on its client logic. Worth
-  evaluating before the rotation payload is designed; this ADR does not exclude it.
+  evaluating before the rotation payload is designed; this ADR does not exclude it. Owner's
+  decision 5 (2026-10-21): not adopted now.
 - **Threshold signatures (for example FROST) for `release`.** Removes the single signer
   without a second key, at the cost of cryptography the workspace does not use today and
   tooling that is young. Not proposed now.
@@ -122,15 +123,55 @@ owner's decisions and are marked as such.
 - **Keep one embedded key for both release and content.** Smallest change, and the reason this
   ADR splits them: it makes the lowest-value forgery as dangerous as the highest.
 
+## Owner's decisions, 2026-10-21
+
+Taken by the owner, who delegated the design choices to the author of this change; the reviewers
+of this change can contest them. They decide the design only. **They do not name a person, an
+account or a device, and no key may be generated before the open points below are settled.**
+
+1. **The trust set is the three keys of Decision 1, unchanged.** `snapshot` (ADR-0033) and
+   `posture` (ADR-0035) are **separate keys that only sign**, never shared with `release`,
+   `content` or `recovery` and never with each other.
+2. **Technology for `release` and `content`: `release-tool` grows a PKCS#11 backend first.** It
+   covers a PIV token and an HSM, keeps the tool offline (#597), and needs no cloud account. A
+   cloud-KMS backend is added only if the organisation has such an account; `--key-file` stays
+   reserved to the test key. The backend is built and tested against a software token before any
+   real key exists.
+3. **`recovery` is generated and held as Decision 2 says, split 2 of 3,** with its public half
+   committed. The holders and the places are not decided here.
+4. **A signing-only service for `snapshot` and `posture` is accepted** (ADR-0033 decision 1,
+   ADR-0035 owner's decision 1), under three constraints: the set of documents it may sign is
+   fixed in its code (a snapshot manifest, a posture overlay), it applies a per-tenant rate
+   limit, and every signature is audited. It reuses the signer abstraction of point 2. The
+   `snapshot` loop stays gated on tenant binding (ADR-0033 decision 3). If this point is
+   refused, the fallback of both ADRs applies: no automatic overlays, only analyst-approved ones
+   signed offline.
+5. **TUF is not adopted now.** The rotation release keeps the shape of Decision 1 (a subset of
+   TUF: roles by key, a root of trust that can rotate them). The change that designs the rotation
+   payload must carry a written comparison with TUF's threshold and expiry rules, and a rotation
+   release carries a `release_version` like any release (anti-rollback, ADR-0015). TUF is
+   revisited if the rotation format grows beyond one signed payload.
+
+**Still open, and not decidable by design** (they are facts about people and accounts): who the
+release managers and the approvers are, and how many approvals a release needs; who holds a
+`recovery` share and in which places; whether a cloud account or an HSM exists; who owns the
+signing service's policy. Until then there is no real key, no runbook (this ADR says it is
+written with the first real key) and no lab drill, and #754 stays unwritten (Decision 5).
+
+What this unblocks, without any key: the key-rotation release against a test recovery key (with
+golden fixtures), and the `release-tool` PKCS#11 backend against a software token.
+
 ## Follow-up issues (to open if this is accepted)
 
 1. Key ceremony and custody setup for the three keys (owner, holders, technology).
-2. Embedded trust set, the `test-key` feature, derived `SYNTHAEA_UPDATER_TEST_KEY`, the CI
-   check that a packaged build has no test key, and removal of the guard for production builds.
+2. (Done, #761 and #855.) Embedded trust set, the `test-key` feature, derived
+   `SYNTHAEA_UPDATER_TEST_KEY`, the CI check that a packaged build has no test key, and removal of
+   the guard for production builds.
 3. The key-rotation release: manifest shape, verification rules (which key may change which),
    golden fixtures, anti-rollback interaction (a rotation has a `release_version` like any
    release).
-4. `release-tool` signing backends for the chosen custody.
+4. `release-tool` signing backends: the PKCS#11 backend first, a cloud-KMS one only if an account
+   exists.
 5. The release-signing runbook and the lab rotation drill.
 6. The periodic timer units, after the above.
 
