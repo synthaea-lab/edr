@@ -77,6 +77,15 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
 | T1552.004 | 3 | `rules:crates/rules/src/credfiles.rs` |
 
+## Discovery
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1016 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1057 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1082 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1087 | 3 | `rules:crates/rules/src/recon.rs` |
+
 ## Lateral Movement
 
 | Technique | Layer(s) | Source(s) |
