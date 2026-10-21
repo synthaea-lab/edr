@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { authenticateAgent } from "@/lib/agent-auth";
+import { authenticateAgent, type AuthenticatedAgent } from "@/lib/agent-auth";
+import { acceptedOutcome, recordIngest, refusedOutcome, lagOf } from "@/lib/ingest-stats";
 import { aggregateSightings, extractObservations, recordSightings } from "@/lib/prevalence";
 
 /** Body ceiling, checked on the bytes actually read (not the Content-Length header). */
@@ -44,31 +45,35 @@ function eventTime(event: Record<string, unknown>, now: Date): Date {
  * segment once it gets a 2xx.
  */
 export async function POST(req: NextRequest) {
+  // Known once the certificate is checked: a refusal or failure after that is counted for it (#899).
+  let known: AuthenticatedAgent | null = null;
+  const refuse = async (error: string, status: number, received = 0) => {
+    if (known) await recordIngest(prisma, known.tenantId, known.id, "events", refusedOutcome(status, received), new Date());
+    return NextResponse.json({ error }, { status });
+  };
   try {
     const authenticated = await authenticateAgent(req);
     if ("response" in authenticated) return authenticated.response;
     const { agent } = authenticated;
+    known = agent;
 
     const raw = await req.text();
     if (Buffer.byteLength(raw) > MAX_BODY_BYTES) {
-      return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+      return refuse("Payload too large", 413);
     }
 
     let body: unknown;
     try {
       body = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "Body is not valid JSON" }, { status: 400 });
+      return refuse("Body is not valid JSON", 400);
     }
     const events = (body as { events?: unknown } | null)?.events;
     if (!Array.isArray(events)) {
-      return NextResponse.json({ error: "Missing 'events' array" }, { status: 400 });
+      return refuse("Missing 'events' array", 400);
     }
     if (events.length > MAX_EVENTS_PER_BATCH) {
-      return NextResponse.json(
-        { error: `At most ${MAX_EVENTS_PER_BATCH} events per batch` },
-        { status: 413 }
-      );
+      return refuse(`At most ${MAX_EVENTS_PER_BATCH} events per batch`, 413, events.length);
     }
 
     // A malformed entry is skipped, not a reason to reject the batch: one bad
@@ -96,9 +101,20 @@ export async function POST(req: NextRequest) {
 
     await prisma.agent.update({ where: { id: agent.id }, data: { lastSeen: now } });
 
+    // Best effort too (`recordIngest` never throws). Counted last so that a 500 above is
+    // counted as a refusal, not as an accepted batch.
+    await recordIngest(
+      prisma,
+      agent.tenantId,
+      agent.id,
+      "events",
+      acceptedOutcome(events.length, events.length - accepted, lagOf(items.map((i) => i.at), now)),
+      now
+    );
+
     return NextResponse.json({ accepted, batch_id: randomUUID() });
   } catch (error) {
     console.error("Event ingest error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return refuse("Internal server error", 500);
   }
 }
