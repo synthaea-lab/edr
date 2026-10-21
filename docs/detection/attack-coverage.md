@@ -74,6 +74,15 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1003.008 | 3 | `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
 | T1110 | 3 | `rules:crates/rules/src/state.rs` |
 
+## Discovery
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1016 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1057 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1082 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1087 | 3 | `rules:crates/rules/src/recon.rs` |
+
 ## Lateral Movement
 
 | Technique | Layer(s) | Source(s) |
