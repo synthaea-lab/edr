@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
-import { type FleetGroup, joinDetections, outranksOrEqualSeverity } from "@/lib/fleet-case";
+import {
+  candidateHashes,
+  type FleetGroup,
+  joinDetections,
+  outranksOrEqualSeverity,
+} from "@/lib/fleet-case";
+import { loadFleetPrevalence } from "@/lib/fleet-prevalence";
 
 /** Fixed key for a transaction-scoped advisory lock, paired with a per-tenant second key, as in
  * cron/group-detections: two overlapping invocations would otherwise both open a case for the
@@ -110,7 +116,8 @@ async function joinOneTenant(tx: Prisma.TransactionClient, tenantId: string): Pr
     take: JOIN_BATCH_SIZE,
   });
   const moreWorkLikely = detections.length === JOIN_BATCH_SIZE;
-  const groups = joinDetections(detections);
+  const prevalence = await loadFleetPrevalence(tx, tenantId, candidateHashes(detections));
+  const groups = joinDetections(detections, prevalence);
 
   let fleetCasesCreated = 0;
   let fleetCasesMerged = 0;
