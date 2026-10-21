@@ -164,6 +164,7 @@ TECHNIQUE_TACTIC = {
     "T1620": "Defense Evasion",
     "T1021.002": "Lateral Movement",
     "T1563.002": "Lateral Movement",
+    "T1021.004": "Lateral Movement",
     "T1016": "Discovery",
     "T1057": "Discovery",
     "T1082": "Discovery",

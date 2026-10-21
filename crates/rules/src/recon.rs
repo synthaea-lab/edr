@@ -48,6 +48,26 @@ pub(crate) enum Category {
 /// The process whose children are counted together: its pid and generation stamp.
 pub(crate) type Lineage = (u32, Option<u64>);
 
+/// The lineage of a process, as recorded when it was exec'd, with the generation stamp of
+/// that incarnation of the pid.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExecLineage {
+    pub(crate) generation: Option<u64>,
+    pub(crate) lineage: Lineage,
+}
+
+impl ExecLineage {
+    /// The lineage recorded for the process `pid` of generation `generation`, unless the pid
+    /// was recorded for another incarnation.
+    pub(crate) fn current(recorded: Option<&Self>, generation: Option<u64>) -> Option<Lineage> {
+        let recorded = recorded?;
+        match (recorded.generation, generation) {
+            (Some(was), Some(is)) if was != is => None,
+            _ => Some(recorded.lineage),
+        }
+    }
+}
+
 /// A one-shot shell wrapper seen running, and the lineage its children belong to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Wrapper {
@@ -252,3 +272,11 @@ pub(crate) fn discovery(event: &ExecEvent) -> Option<(&'static str, Category)> {
     };
     Some(found)
 }
+
+/// T1021.004 (#378): outbound SSH connections to this many distinct hosts from one lineage
+/// inside [`SSH_FANOUT_WINDOW_NS`].
+pub(crate) const SSH_FANOUT_THRESHOLD: u32 = 8;
+/// Sliding window of [`SSH_FANOUT_THRESHOLD`].
+pub(crate) const SSH_FANOUT_WINDOW_NS: u64 = 60_000_000_000; // 60s
+/// The SSH port.
+pub(crate) const SSH_PORT: u16 = 22;

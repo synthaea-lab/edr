@@ -410,6 +410,7 @@ mod quarantine;
 mod rdp;
 mod recon;
 mod session;
+mod ssh_fanout;
 mod sudo;
 mod tamper;
 mod windows;

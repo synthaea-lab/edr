@@ -260,6 +260,11 @@ pub struct RuleState {
     staged_archives: BoundedMap<String, u64>,
     /// pid → the staged archive it read, until it connects out. LRU-bounded.
     archive_readers: BoundedMap<u32, ArchiveReader>,
+    /// pid → the lineage it was exec'd under, for the rules that see a process later
+    /// (SSH-FANOUT reads it on the process's connects). LRU-bounded.
+    exec_lineage: BoundedMap<u32, crate::recon::ExecLineage>,
+    /// Lineage → distinct SSH destinations, for SSH-FANOUT (T1021.004, #378). LRU-bounded.
+    ssh_fanout: BoundedMap<crate::recon::Lineage, SlidingDistinct<IpAddr>>,
     /// (pid, dport) → sliding distinct-destination counter for SCAN-SPREAD
     /// (T1046/T1210, issue #465). LRU-bounded.
     scan_spread: BoundedMap<(u32, u16), SlidingDistinct<IpAddr>>,
@@ -468,6 +473,8 @@ impl RuleState {
             scan_spread: BoundedMap::new(COUNTER_CAP),
             recon_burst: BoundedMap::new(COUNTER_CAP),
             recon_wrappers: BoundedMap::new(COUNTER_CAP),
+            exec_lineage: BoundedMap::new(PID_COMM_CAP),
+            ssh_fanout: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
             known_policy_denials: BoundedMap::new(COUNTER_CAP),
             policy_denial_alerts: 0,
@@ -1053,11 +1060,11 @@ impl RuleState {
         )
     }
 
-    /// RECON-BURST (T1057/T1082/T1016/T1087, #378): six distinct discovery commands
-    /// across three categories from one lineage in 30 s. See [`crate::recon`] for what
-    /// counts, what a lineage is, and the false positives accepted.
-    fn check_recon_burst(&mut self, event: &ExecEvent) -> Option<Alert> {
-        use crate::recon::{self, Wrapper};
+    /// The lineage this exec belongs to (see [`crate::recon`]): the parent, or the parent of a
+    /// one-shot wrapper the parent is. Records a wrapper's own lineage for its children and
+    /// this process's lineage for the rules that see it later.
+    fn record_lineage(&mut self, event: &ExecEvent) -> crate::recon::Lineage {
+        use crate::recon::{self, ExecLineage, Wrapper};
 
         let ppid = event.meta.ppid;
         let lineage = Wrapper::lineage_for(
@@ -1074,6 +1081,26 @@ impl RuleState {
                 },
             );
         }
+        self.exec_lineage.insert(
+            event.meta.pid,
+            ExecLineage {
+                generation: event.meta.process_generation,
+                lineage,
+            },
+        );
+        lineage
+    }
+
+    /// RECON-BURST (T1057/T1082/T1016/T1087, #378): six distinct discovery commands
+    /// across three categories from one lineage in 30 s. See [`crate::recon`] for what
+    /// counts, what a lineage is, and the false positives accepted.
+    fn check_recon_burst(
+        &mut self,
+        event: &ExecEvent,
+        lineage: crate::recon::Lineage,
+    ) -> Option<Alert> {
+        use crate::recon;
+
         let (command, category) = recon::discovery(event)?;
         let burst = self
             .recon_burst
@@ -1096,6 +1123,47 @@ impl RuleState {
         })
     }
 
+    /// SSH-FANOUT (T1021.004, #378): outbound SSH to eight distinct hosts from one lineage in
+    /// 60 s. The lineage is the one the connecting process was exec'd under, so a loop that
+    /// runs `ssh host cmd` per host (one process, one connect each) adds up where a per-pid
+    /// counter such as SCAN-SPREAD sees one connection per process. Whether the lineage is
+    /// interactive is not observable here, so a human typing eight `ssh` commands in a
+    /// minute is indistinguishable from a script; what fires in practice is `pssh` and
+    /// similar fleet tools run from one shell, the accepted cost. Loopback is not counted.
+    /// A process the rules never saw exec'd (started before the agent) has no lineage and is
+    /// not counted.
+    fn check_ssh_fanout(&mut self, event: &ConnectEvent) -> Option<Alert> {
+        use crate::recon::{ExecLineage, SSH_FANOUT_THRESHOLD, SSH_FANOUT_WINDOW_NS, SSH_PORT};
+
+        if event.dport != SSH_PORT || event.daddr.is_loopback() || event.daddr.is_unspecified() {
+            return None;
+        }
+        let lineage = ExecLineage::current(
+            self.exec_lineage.peek(&event.meta.pid),
+            event.meta.process_generation,
+        )?;
+        let ts = event.meta.timestamp_ns;
+        let entry = self
+            .ssh_fanout
+            .get_or_insert_with(lineage, SlidingDistinct::default);
+        let distinct = entry.record(event.daddr, ts, SSH_FANOUT_WINDOW_NS);
+        if distinct >= SSH_FANOUT_THRESHOLD && entry.try_alert(ts, SSH_FANOUT_WINDOW_NS) {
+            return Some(Alert {
+                technique: "T1021.004",
+                severity: Severity::Medium,
+                message: format!(
+                    "pid={} comm={}: lineage of pid={} opened SSH sessions to {distinct} distinct \
+                     hosts in {}s — lateral movement by script, or a fleet tool run from one shell",
+                    event.meta.pid,
+                    event.meta.comm,
+                    lineage.0,
+                    SSH_FANOUT_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+
     /// To be called for every `ExecEvent` in the stream, in chronological order.
     /// Updates the state (pid→comm table) after evaluation, so a process cannot match
     /// itself.
@@ -1108,7 +1176,8 @@ impl RuleState {
         alerts.extend(self.check_parent_suspect(event));
         alerts.extend(self.check_lolbin(event));
         alerts.extend(self.check_memfd_exec(event));
-        alerts.extend(self.check_recon_burst(event));
+        let lineage = self.record_lineage(event);
+        alerts.extend(self.check_recon_burst(event, lineage));
         alerts.extend(crate::stateless::check_ld_preload_hijack(
             event,
             &self.ld_trust_extra,
@@ -1140,6 +1209,7 @@ impl RuleState {
         let mut alerts: Vec<Alert> = self.check_beacon(event).into_iter().collect();
         alerts.extend(self.check_scan_spread(event));
         alerts.extend(self.check_archive_egress(&event.meta, event.daddr));
+        alerts.extend(self.check_ssh_fanout(event));
         alerts
     }
 
