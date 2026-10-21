@@ -19,6 +19,12 @@ export type RingStatus = {
   latestReleasedAt: string | null;
   /** The version agents are offered, or null when the ring is halted. */
   servedVersion: number | null;
+  /**
+   * Whether a rollback has somewhere to go: the ring is serving or halted and an earlier release
+   * exists (the rollback route's own condition). False otherwise, so the console does not offer a
+   * rollback that can only answer 404.
+   */
+  hasEarlierRelease: boolean;
   agents: number;
   byStatus: Record<FleetStatus, number>;
 };
@@ -60,6 +66,15 @@ export async function loadRings(
             where: { tenantId, ring, status: "active" },
             orderBy: { releaseVersion: "desc" },
           });
+    // The rollback route rolls back the newest active or halted release to an earlier one of any
+    // status; when the newest release is that one, an earlier row is all it needs.
+    const rollable = latest?.status === "active" || latest?.status === "halted";
+    const earlier = rollable
+      ? await db.contentRelease.findFirst({
+          where: { tenantId, ring, releaseVersion: { lt: latest.releaseVersion } },
+          select: { releaseVersion: true },
+        })
+      : null;
     const inRing = fleet.filter((a) => a.ring === ring);
     rings.push({
       ring,
@@ -67,6 +82,7 @@ export async function loadRings(
       latestVersion: latest?.releaseVersion ?? null,
       latestReleasedAt: latest?.releasedAt.toISOString() ?? null,
       servedVersion: served?.releaseVersion ?? null,
+      hasEarlierRelease: earlier !== null,
       agents: inRing.length,
       byStatus: countByStatus(inRing),
     });

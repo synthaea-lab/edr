@@ -50,9 +50,10 @@ describe("GET /api/content/artifact is scoped to the agent's own manifest (issue
     db.agent.findUnique.mockResolvedValue({ id: "a1", tenantId: "t1", ring: "canary_0" });
     originalCwd = process.cwd();
     sandbox = mkdtempSync(join(tmpdir(), "artifact-scope-"));
-    mkdirSync(join(sandbox, "storage", "artifacts", "rules"), { recursive: true });
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules", "beacon.sigma"), RULE);
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules", "other-ring.sigma"), OTHER);
+    mkdirSync(join(sandbox, "storage", "artifacts"), { recursive: true });
+    // Keyed by content hash (#804), not by path.
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(RULE)), RULE);
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(OTHER)), OTHER);
     process.chdir(sandbox);
     active.loadActiveManifest.mockResolvedValue(
       manifestWith([{ path: "rules/beacon.sigma", sha256: sha(RULE) }])
@@ -90,7 +91,8 @@ describe("GET /api/content/artifact is scoped to the agent's own manifest (issue
   });
 
   it("does not send a stored file that no longer matches the signed hash", async () => {
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules", "beacon.sigma"), "tampered");
+    // The file sitting at its own hash's name no longer hashes to it: corrupted on disk.
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(RULE)), "tampered");
     const res = await call(`path=rules/beacon.sigma&sha256=${sha(RULE)}`);
     expect(res.status).toBe(502);
   });
