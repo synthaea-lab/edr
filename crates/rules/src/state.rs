@@ -1103,6 +1103,10 @@ impl RuleState {
         let ts = event.meta.timestamp_ns;
         if has_write_intent(event.flags) {
             if is_archive_name(&event.path) {
+                // A new write open of the path starts a new archive: a staging from an
+                // earlier run (a nightly job rewriting `home.tar.gz`) must not outlive it,
+                // or the read window would be measured from the first night forever.
+                self.staged_archives.remove(&event.path);
                 self.archive_writers.insert(
                     pid,
                     ArchiveWriter {
@@ -1120,11 +1124,9 @@ impl RuleState {
         if ts.saturating_sub(staged_ns) > ARCHIVE_READ_WINDOW_NS {
             return;
         }
-        if self
-            .archive_writers
-            .peek(&pid)
-            .is_some_and(|w| w.path == event.path)
-        {
+        if self.archive_writers.peek(&pid).is_some_and(|w| {
+            w.path == event.path && same_incarnation(w.generation, event.meta.process_generation)
+        }) {
             return;
         }
         self.archive_readers.insert(
@@ -1149,10 +1151,11 @@ impl RuleState {
         }
         writer.bytes = writer.bytes.saturating_add(event.bytes_requested);
         if writer.bytes >= ARCHIVE_STAGED_BYTES {
+            // The staging time is the last write past the threshold, not the first: a job
+            // that keeps writing for hours is finished when it stops, and the read window
+            // counts from there.
             let path = writer.path.clone();
-            if self.staged_archives.peek(&path).is_none() {
-                self.staged_archives.insert(path, event.meta.timestamp_ns);
-            }
+            self.staged_archives.insert(path, event.meta.timestamp_ns);
         }
     }
 
@@ -1164,6 +1167,14 @@ impl RuleState {
     /// lab capture of the host's own backups). Gaps, stated: a stream that never touches a
     /// file (`tar | ssh`), an archive named without one of [`ARCHIVE_SUFFIXES`], and a
     /// sender that is not the reader (a file handed over by a pipe or a copy).
+    ///
+    /// False positives beyond the backup job, from the shape itself: the reader is any
+    /// process that opens the file without write intent, and any public connection from that
+    /// pid inside the window completes the chain, with no link between the bytes read and the
+    /// destination. A long-lived daemon (an antivirus scanner, an indexer, a sync client) that
+    /// touches the archive and later makes an unrelated connection alerts. Open, connect and
+    /// flow events arrive from separate rings, so a connection stamped just before the open
+    /// can be ordered after it; the window absorbs that.
     fn check_archive_egress(&mut self, meta: &schema::EventMeta, daddr: IpAddr) -> Option<Alert> {
         if !is_public_address(daddr) {
             return None;

@@ -3665,3 +3665,77 @@ fn archive_exfil_a_flow_event_completes_it_as_well() {
     flow.meta.pid = 200;
     assert_eq!(state.on_network_flow(&flow).len(), 1);
 }
+
+#[test]
+fn archive_exfil_a_rewritten_archive_is_staged_again_the_next_night() {
+    let mut state = RuleState::new();
+    // Night 1: staged, never read.
+    stage_archive(&mut state);
+    // Night 2, a day later, the same job rewrites the same name.
+    let day = 86_400 * SEC;
+    state.on_file_open(&open_event(101, "tar", ARCHIVE_PATH, WRITE_FLAGS, day));
+    state.on_file_write(&write_event(101, 100 * MIB, day + SEC));
+    state.on_file_write(&write_event(101, 100 * MIB, day + 2 * SEC));
+    state.on_file_open(&open_event(200, "rclone", ARCHIVE_PATH, 0, day + 60 * SEC));
+    let alerts = state.on_connect(&connect_to(200, "rclone", [203, 0, 113, 9], day + 62 * SEC));
+    assert_eq!(alerts.len(), 1, "the second night must alert: {alerts:?}");
+}
+
+#[test]
+fn archive_exfil_the_read_window_counts_from_the_last_write_of_a_long_job() {
+    let mut state = RuleState::new();
+    state.on_file_open(&open_event(100, "tar", ARCHIVE_PATH, WRITE_FLAGS, 0));
+    state.on_file_write(&write_event(100, 200 * MIB, SEC));
+    // The job keeps writing for three hours, then a reader comes 30 minutes after it stopped.
+    let end = 3 * 3600 * SEC;
+    state.on_file_write(&write_event(100, MIB, end));
+    state.on_file_open(&open_event(200, "curl", ARCHIVE_PATH, 0, end + 1800 * SEC));
+    let alerts = state.on_connect(&connect_to(200, "curl", [203, 0, 113, 9], end + 1802 * SEC));
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+}
+
+#[test]
+fn archive_exfil_a_recycled_pid_reading_the_archive_is_still_a_reader() {
+    let mut state = RuleState::new();
+    let mut writer_open = open_event(100, "tar", ARCHIVE_PATH, WRITE_FLAGS, 0);
+    writer_open.meta.process_generation = Some(1);
+    state.on_file_open(&writer_open);
+    for t in [SEC, 2 * SEC] {
+        let mut write = write_event(100, 100 * MIB, t);
+        write.meta.process_generation = Some(1);
+        state.on_file_write(&write);
+    }
+    // The same pid number, another process (generation 2), reads the archive and connects.
+    let mut read = open_event(100, "curl", ARCHIVE_PATH, 0, 60 * SEC);
+    read.meta.process_generation = Some(2);
+    state.on_file_open(&read);
+    let mut connect = connect_to(100, "curl", [203, 0, 113, 9], 62 * SEC);
+    connect.meta.process_generation = Some(2);
+    assert_eq!(state.on_connect(&connect).len(), 1);
+    // And a reader of generation 2 does not inherit another incarnation's connection.
+    let mut other = connect_to(100, "curl", [203, 0, 113, 10], 63 * SEC);
+    other.meta.process_generation = Some(3);
+    assert!(state.on_connect(&other).is_empty());
+}
+
+#[test]
+fn archive_exfil_a_small_rewrite_does_not_inherit_the_earlier_staging() {
+    let mut state = RuleState::new();
+    stage_archive(&mut state); // staged at ~2 s
+    // Ten minutes later the same name is reopened for writing and only 10 MiB are written:
+    // the earlier 200 MiB staging describes a file that no longer exists.
+    state.on_file_open(&open_event(
+        101,
+        "tar",
+        ARCHIVE_PATH,
+        WRITE_FLAGS,
+        600 * SEC,
+    ));
+    state.on_file_write(&write_event(101, 10 * MIB, 601 * SEC));
+    state.on_file_open(&open_event(200, "curl", ARCHIVE_PATH, 0, 1200 * SEC));
+    assert!(
+        state
+            .on_connect(&connect_to(200, "curl", [203, 0, 113, 9], 1202 * SEC))
+            .is_empty()
+    );
+}
