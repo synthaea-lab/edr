@@ -1,7 +1,7 @@
 # ADR-0035: Adaptive posture: a signed, short-lived, heighten-only overlay per agent
 
-- **Status**: proposed
-- **Date**: 2026-10-15
+- **Status**: accepted 2026-10-20 as a design, with the narrower first slice of "Owner's decisions, 2026-10-20"; the custody of the `posture` key is not decided
+- **Date**: 2026-10-15 (accepted 2026-10-20)
 
 ## Context
 
@@ -197,6 +197,32 @@ response gate, or a posture raised by an attacker-triggered case makes the fleet
   limits of Decision 6.
 - A lab scenario: a case on one VM heightens another VM, the change is visible in the beacon,
   and it expires on its own, with and without the control plane.
+
+## Owner's decisions, 2026-10-20
+
+Taken by the owner, who delegated the review; the reviewers of this change can contest them.
+
+1. **The `posture` key follows ADR-0033's decision 1:** a signing-only key the control plane can
+   ask but not read, accepted as the design, with the same open point (which service, who controls
+   its policy; #753 / ADR-0027). Until that is decided, overlays are signed with the `test-key`
+   feature in a lab only, and the analyst-approved overlay signed offline is the only production
+   path.
+2. **First slice: widened telemetry and a shorter heartbeat only; no detection-sensitivity step.**
+   The step has a cost in false positives that has not been measured, and it is the knob closest to
+   the response gate #652 is about. It comes as a later slice, with its own decision, once the
+   lab has numbers for the first slice. Decision 2's rule that nothing may move
+   `BAYES_THRESHOLD` or any response gate stands unchanged.
+3. **Trigger and limits: the starting points in Decision 6 are accepted as such** (a `high` case
+   with detections on two or more agents, or a `critical` one; 50 agents per set; one hour of
+   validity; a per-tenant ceiling), to be calibrated in the lab and changed by amendment, not
+   treated as conclusions.
+4. **One signed document per agent** (Decision 1 as written): a captured overlay cannot be
+   replayed to another host, and the cost of signing once per agent is accepted for the sets of at
+   most 50.
+
+What this unblocks: #62 box 2 in slices (the agent knobs, the document and verification, the
+endpoint and loop, the trigger), and box 1 (the cross-host join), which does not depend on the
+key. Follow-up issues listed above are to be opened.
 
 ## References
 

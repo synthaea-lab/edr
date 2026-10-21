@@ -75,6 +75,50 @@ recorded in the manifest entry's metadata (ADR-0020).
 - The file is read whole, capped at 64 MiB (the manifest allows 100 MiB per artifact; the
   server caps the snapshot it builds well below that), and swapped as one value.
 
-The path is fixed on the agent. The artifact store on the server is keyed by path and shared
-across tenants (slice 5 of `fleet-prevalence-snapshot-plan.md`), so slice 5 has to deliver a
-per-tenant artifact at this agent-side path, not a per-tenant path.
+The path is fixed on the agent: every tenant's manifest can use the same `path` for its own
+snapshot entry, because the server's artifact store is keyed by content hash, not path, and
+shared across tenants (#804) — two tenants' snapshots land under their own hash automatically,
+since their bytes differ, with no tenant-unique naming needed on either side (slice 5 of
+`fleet-prevalence-snapshot-plan.md`).
+
+## Delivery: the signed manifest (ADR-0033)
+
+The artifact above reaches an agent through a manifest of its own, not the content manifest and
+not the rings. One manifest per tenant, replaced by each build:
+
+```json
+{
+  "built_at": 1760000000,
+  "entry_count": 4096,
+  "hosts_covered": 12,
+  "kind": "common-set",
+  "min_hosts": 3,
+  "schema_version": 1,
+  "sha256": "<the artifact's SHA-256, lowercase hex>",
+  "signature": "<Ed25519, lowercase hex>",
+  "size": 5432
+}
+```
+
+The signature is over the canonical bytes of the same document with `signature` set to `""`:
+2-space-indented JSON, keys sorted at every level (the content manifest's scheme).
+`tests/fixtures/snapshot-manifest-golden.json` holds one signed by the public test key; the
+TypeScript signer (`server/lib/snapshot-manifest.ts`) and the Rust verifier (`crates/updater`)
+both test against it. `built_at` equals the artifact header's `built_at`.
+
+- **Endpoints**, agent mTLS, tenant from the certificate: `GET /api/snapshot/manifest` (404 when
+  nothing is published) and `GET /api/snapshot/artifact[?sha256=]` (409 when the hash is not the
+  stored one).
+- **Builder:** `GET /api/cron/build-snapshots` (CRON_SECRET), meant to run daily. Guards before a
+  signature is requested: the tenant has at least `SNAPSHOT_MIN_HOSTS_COVERED` reporting hosts;
+  `built_at` is later than the snapshot in force; the entry count is not below
+  `SNAPSHOT_MIN_ENTRY_FRACTION` of the previous one unless the hosts covered fell too; the set is
+  never truncated (`SNAPSHOT_MAX_ENTRIES`) or over `SNAPSHOT_MAX_BYTES`. A refusal keeps the
+  previous snapshot served. `SNAPSHOT_MIN_HOSTS` is K. The defaults are provisional until slice 6.
+- **Signing:** the `snapshot` key signs this kind only. Its custody is not decided (#753), so
+  the only signer is the **public test key**, enabled by `SYNTHAEA_SNAPSHOT_SIGNER=test`; without
+  it the cron answers 503 and nothing is published. Never set it on a production deployment.
+- **Not done here:** tenant binding (a `tenant_id` in the manifest, ADR-0033 decision 3, required
+  before production), and the agent's fetch loop (it verifies the signature, `built_at` freshness
+  and the maximum age).
+

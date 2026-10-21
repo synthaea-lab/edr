@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
-import { dueHunts, pruneHuntRuns, runHunt } from "@/lib/hunt";
+import { dueHunts, pruneHuntRuns, runHunt } from "@/lib/hunt-runner";
 
 /** Hunts one call runs, and the time after which it starts no more, so a backlog cannot make one request run for minutes. The rest wait for the next call. */
 const MAX_HUNTS_PER_CALL = 20;

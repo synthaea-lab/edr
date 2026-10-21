@@ -1,3 +1,4 @@
+import { dropHuntFromChannels } from "@/lib/notify/outbox";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
@@ -79,6 +80,9 @@ export async function DELETE(req: NextRequest, { params }: Params) {
     const tenantId = await getTenantId(req);
     const { count } = await prisma.hunt.deleteMany({ where: { id: params.id, tenantId } });
     if (count === 0) return NextResponse.json({ error: "Hunt not found" }, { status: 404 });
+    // The hunt leaves the lists of the notification channels that held it (ADR-0036). The hunt is
+    // already gone, so a failure here is logged and does not turn the delete into an error.
+    await dropHuntFromChannels(prisma, tenantId, params.id).catch((e) => console.error("Hunt channel cleanup failed:", e));
     return new NextResponse(null, { status: 204 });
   } catch (error) {
     console.error("Hunt delete error:", error);

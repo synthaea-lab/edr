@@ -30,13 +30,20 @@ run also measures, on the same test slice with the rarity forced to withheld:
   of the same corpus, each at its own calibrated threshold, with the tolerances of
   `train_site_model.py`'s floor check.
 
-What this does not do: ship a model, or compare it with the **global** model. The Rust extractor
-exists (`ml::features::rarity`, pinned to `rarity.py` by a golden file) but nothing hands the
-agent a common-set snapshot and no scorer loads an 11-feature model yet (ADR-0020); and the
-global-model-floor check of `train_site_model.py` (a site model must not lose detections the
-global model has) is still not made for this family, so the record says so. Detection quality
-with the rarity *known* is not measured either: a scenario event has no image hash, so only the
-withheld state can be scored, and only the false-positive side is measured on benign corpora.
+With `--global-model-dir` (the shipped `model.onnx`, and `model_metadata.json` for its
+threshold, scored through onnxruntime as the agent does) the same two checks are made against
+the **global** model: the candidate with the rarity withheld must not flag the benign test slice
+more than the global model does (plus `WITHHELD_FP_MARGIN`), nor be less robust on the scenario
+suite, each model at its own threshold. A model that fails that one is not written either.
+Without the option the record says the global comparison was NOT CHECKED. The global model is
+scored on this corpus, so its false-positive rate is that of a model that never saw the site:
+a figure of the site, not of the global model in general.
+
+What this does not do: ship a model. The Rust extractor exists (`ml::features::rarity`, pinned to
+`rarity.py` by a golden file) but nothing hands the agent a common-set snapshot and no scorer
+loads an 11-feature model yet (ADR-0020). Detection quality with the rarity *known* is not
+measured either: a scenario event has no image hash, so only the withheld state can be scored,
+and only the false-positive side is measured on benign corpora.
 
 Input: a site corpus JSONL (`{timestamp, event_type, event, agent_id}` per line, as
 `/api/corpus/finalize` exports it). Usage:
@@ -68,6 +75,7 @@ from synthaea_ml.data.common_set import (
     _timestamp_ns,
     point_in_time_snapshots,
 )
+from synthaea_ml.evaluation.onnx_model import ShippedModel, load_shipped_model
 from synthaea_ml.evaluation.robustness import run_robustness_evaluation
 from synthaea_ml.features import cmdline, rarity
 from synthaea_ml.registry.training_record import DatasetVersion, write_training_record
@@ -218,6 +226,58 @@ def withheld_fp_rate(model: IsolationForest, calibration: Any, x_base_test: np.n
     return float((scores < calibration.threshold).mean())
 
 
+def compare_on_scenarios(
+    candidate: IsolationForest,
+    candidate_threshold: float,
+    reference: Any,
+    reference_threshold: float,
+    reference_name: str,
+    scenario_yamls: Sequence[Path],
+) -> tuple[list[str], list[str]]:
+    """The candidate, with the rarity withheld, against `reference` on each scenario, each model at
+    its own threshold. Returns `(report lines, failures)`; a scenario `reference` detects nothing
+    of is skipped, one the candidate detects nothing of that `reference` detects is a failure."""
+    lines: list[str] = []
+    failures: list[str] = []
+    withheld_model = WithheldRarity(candidate)
+    for scenario in scenario_yamls:
+        name = Path(scenario).stem
+        try:
+            ref_card = run_robustness_evaluation(
+                reference, scenario, tier="T0", mutation_seed=42, threshold=reference_threshold
+            )
+        except ValueError as error:
+            # Nothing the reference detects: there is nothing for the candidate to lose here.
+            lines.append(f"{name}: skipped, the {reference_name} detects none of it ({error})")
+            continue
+        try:
+            cand_card = run_robustness_evaluation(
+                withheld_model, scenario, tier="T0", mutation_seed=42, threshold=candidate_threshold
+            )
+        except ValueError as error:
+            failures.append(
+                f"{name}: the candidate with the rarity withheld detects none of what the "
+                f"{reference_name} detects ({error})"
+            )
+            continue
+        lines.append(
+            f"{name}: escape rate {cand_card.escape_rate:.2%} vs {ref_card.escape_rate:.2%} "
+            f"({reference_name}), median degradation {cand_card.median_score_degradation:.3f} vs "
+            f"{ref_card.median_score_degradation:.3f}"
+        )
+        if cand_card.escape_rate > ref_card.escape_rate + ESCAPE_RATE_TOLERANCE:
+            failures.append(
+                f"{name}: escape rate {cand_card.escape_rate:.2%} is above the {reference_name}'s "
+                f"{ref_card.escape_rate:.2%} + {ESCAPE_RATE_TOLERANCE:.0%}"
+            )
+        if cand_card.median_score_degradation > ref_card.median_score_degradation + DEGRADATION_TOLERANCE:
+            failures.append(
+                f"{name}: median degradation {cand_card.median_score_degradation:.3f} is above "
+                f"the {reference_name}'s {ref_card.median_score_degradation:.3f} + {DEGRADATION_TOLERANCE:.2f}"
+            )
+    return lines, failures
+
+
 @dataclass(frozen=True)
 class RarityFloor:
     passed: bool
@@ -248,44 +308,57 @@ def check_rarity_floor(
             "a fleet with no snapshot yet would see that false-positive rate"
         )
 
-    lines: list[str] = []
-    withheld_model = WithheldRarity(candidate)
-    for scenario in scenario_yamls:
-        name = Path(scenario).stem
-        try:
-            base_card = run_robustness_evaluation(
-                baseline, scenario, tier="T0", mutation_seed=42, threshold=baseline_cal.threshold
-            )
-        except ValueError as error:
-            # Nothing the baseline detects: there is nothing for the candidate to lose here.
-            lines.append(f"{name}: skipped, the cmdline-only model detects none of it ({error})")
-            continue
-        try:
-            cand_card = run_robustness_evaluation(
-                withheld_model, scenario, tier="T0", mutation_seed=42, threshold=candidate_cal.threshold
-            )
-        except ValueError as error:
-            failures.append(
-                f"{name}: the candidate with the rarity withheld detects none of what the "
-                f"cmdline-only model detects ({error})"
-            )
-            continue
-        lines.append(
-            f"{name}: escape rate {cand_card.escape_rate:.2%} vs {base_card.escape_rate:.2%}, "
-            f"median degradation {cand_card.median_score_degradation:.3f} vs "
-            f"{base_card.median_score_degradation:.3f}"
-        )
-        if cand_card.escape_rate > base_card.escape_rate + ESCAPE_RATE_TOLERANCE:
-            failures.append(
-                f"{name}: escape rate {cand_card.escape_rate:.2%} is above the cmdline-only "
-                f"model's {base_card.escape_rate:.2%} + {ESCAPE_RATE_TOLERANCE:.0%}"
-            )
-        if cand_card.median_score_degradation > base_card.median_score_degradation + DEGRADATION_TOLERANCE:
-            failures.append(
-                f"{name}: median degradation {cand_card.median_score_degradation:.3f} is above "
-                f"the cmdline-only model's {base_card.median_score_degradation:.3f} + {DEGRADATION_TOLERANCE:.2f}"
-            )
+    lines, scenario_failures = compare_on_scenarios(
+        candidate, candidate_cal.threshold, baseline, baseline_cal.threshold,
+        "cmdline-only model", scenario_yamls,
+    )
+    failures += scenario_failures
     return RarityFloor(not failures, fp_base, fp_withheld, lines, failures)
+
+
+@dataclass(frozen=True)
+class GlobalFloor:
+    passed: bool
+    fp_global: float
+    fp_withheld: float
+    scenario_lines: list[str]
+    failures: list[str]
+    threshold: float
+    threshold_source: str
+
+
+def check_global_floor(
+    candidate: IsolationForest,
+    candidate_cal: Any,
+    global_model: ShippedModel,
+    x_base_test: np.ndarray,
+    scenario_yamls: Sequence[Path] = (),
+) -> GlobalFloor:
+    """The same two checks as `check_rarity_floor`, against the global model: the candidate with
+    the rarity withheld must not flag this corpus's benign test slice more than the global model
+    does (plus `WITHHELD_FP_MARGIN`), nor be less robust on the scenario suite, each model at its
+    own threshold. Collects every failure."""
+    failures: list[str] = []
+    fp_global = (
+        float((global_model.decision_function(x_base_test) < global_model.threshold).mean())
+        if len(x_base_test) else 0.0
+    )
+    fp_withheld = withheld_fp_rate(candidate, candidate_cal, x_base_test)
+    if fp_withheld > fp_global + WITHHELD_FP_MARGIN:
+        failures.append(
+            f"with the rarity withheld the candidate flags {fp_withheld:.2%} of the benign test "
+            f"slice, above the global model's {fp_global:.2%} + {WITHHELD_FP_MARGIN:.2%}: "
+            "a fleet with no snapshot yet would see more false positives than with the global model"
+        )
+    lines, scenario_failures = compare_on_scenarios(
+        candidate, candidate_cal.threshold, global_model, global_model.threshold,
+        "global model", scenario_yamls,
+    )
+    failures += scenario_failures
+    return GlobalFloor(
+        not failures, fp_global, fp_withheld, lines, failures,
+        global_model.threshold, global_model.threshold_source,
+    )
 
 
 def _describe_floor(floor: RarityFloor, with_scenarios: bool) -> str:
@@ -302,6 +375,18 @@ def _describe_floor(floor: RarityFloor, with_scenarios: bool) -> str:
         + "; ".join(floor.scenario_lines)
         + ")"
     )
+
+
+def _describe_global_floor(floor: GlobalFloor, with_scenarios: bool) -> str:
+    """One line for the training record: what the global comparison covered."""
+    text = (
+        f"PASSED against the global model at its threshold {floor.threshold:g} "
+        f"({floor.threshold_source}): withheld false-positive rate {floor.fp_withheld:.2%} "
+        f"against {floor.fp_global:.2%} + {WITHHELD_FP_MARGIN:.2%}"
+    )
+    if with_scenarios:
+        return text + "; " + "; ".join(floor.scenario_lines)
+    return text + "; no scenarios given, so the escape rate was not checked"
 
 
 def main() -> None:
@@ -333,7 +418,16 @@ def main() -> None:
         help="Scenario YAMLs for the floor check: the candidate with the rarity withheld must "
         "not be less robust than the cmdline-only model of the same corpus.",
     )
+    parser.add_argument(
+        "--global-model-dir",
+        type=Path,
+        default=None,
+        help="Directory of the global model (`model.onnx`, and `model_metadata.json` for its "
+        "threshold): the candidate with the rarity withheld must not be worse than it on the "
+        "benign test slice or the scenarios. Without it the global comparison is not made.",
+    )
     args = parser.parse_args()
+    global_model = load_shipped_model(args.global_model_dir) if args.global_model_dir else None
 
     records = load_corpus(args.site_corpus)
     interval_ns = int(args.interval_hours * 3_600_000_000_000)
@@ -361,6 +455,23 @@ def main() -> None:
         raise ValueError(
             "the rarity floor failed, no model written:\n  - " + "\n  - ".join(floor.failures)
         )
+
+    global_floor = None
+    if global_model is not None:
+        global_floor = check_global_floor(
+            clf, cal, global_model, x_base[test_rows], args.robustness_scenarios
+        )
+        print(
+            f"against the global model: false-positive rate {global_floor.fp_withheld:.2%} "
+            f"with the rarity withheld, {global_floor.fp_global:.2%} for the global model"
+        )
+        for line in global_floor.scenario_lines:
+            print(f"  scenario {line}")
+        if not global_floor.passed:
+            raise ValueError(
+                "the global model floor failed, no model written:\n  - "
+                + "\n  - ".join(global_floor.failures)
+            )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     onnx_model = to_onnx(clf, x_rare[:1], target_opset={"": 18, "ai.onnx.ml": 3})
@@ -409,9 +520,16 @@ def main() -> None:
             "fp_rate_test_with_rarity_withheld": f"{floor.fp_withheld:.4f}",
             "rarity_floor": _describe_floor(floor, bool(args.robustness_scenarios)),
             "global_model_floor": (
-                "NOT CHECKED against the global model: the floor above compares the candidate "
-                "with this corpus's cmdline-only model; run the global comparison before this "
-                "model leaves the lab"
+                _describe_global_floor(global_floor, bool(args.robustness_scenarios))
+                if global_floor is not None
+                else "NOT CHECKED against the global model: the floor above compares the "
+                "candidate with this corpus's cmdline-only model; pass --global-model-dir to "
+                "compare with the global model before this model leaves the lab"
+            ),
+            **(
+                {"fp_rate_test_global_model": f"{global_floor.fp_global:.4f}"}
+                if global_floor is not None
+                else {}
             ),
         },
     )

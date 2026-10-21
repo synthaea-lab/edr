@@ -84,8 +84,16 @@ scenario suite for the candidate (rarity withheld) with the cmdline-only model o
 each at its own calibrated threshold and with the tolerances of `train_site_model.py`.
 `--withhold-fraction F` (default 0) withholds the rarity of a random share of the training rows so
 the model learns that state; on the synthetic corpus 0.1 still fails (67% flagged) and 0.2 and above
-pass, a figure to calibrate on a real corpus, not to copy. The comparison with the **global** model
-is still not made for this family: the record says `NOT CHECKED against the global model`.
+pass, a figure to calibrate on a real corpus, not to copy. With `--global-model-dir` (a directory
+holding the shipped `model.onnx` and, for its threshold, `model_metadata.json`; without the metadata
+the threshold is 0, as in the agent's scorer, and the record says so) the same two checks are made
+against the **global** model, scored through onnxruntime at its own threshold: the candidate with the
+rarity withheld must not flag the benign test slice more than the global model does (plus the same
+margin) nor be less robust on the scenarios, and a run that fails writes no model either. The global
+model is scored on the site's corpus, so its false-positive rate is that of a model that never saw the
+site. Without the option the record says `NOT CHECKED against the global model`. Not measured: a run on
+a real site corpus (the figures above come from the synthetic one), and `registry/cmdline-iforest-linux`
+is reference-only with no metadata, so a comparison with it uses threshold 0.
 
 **The Rust mirror** is `ml::features::rarity` (`crates/ml/src/features/rarity.rs`). It takes the
 two inputs ADR-0020 names, through a `CommonSet` trait (a membership test and the number of hosts

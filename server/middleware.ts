@@ -24,6 +24,10 @@ export async function middleware(req: NextRequest) {
     // listed and stay behind the session check.
     /^\/api\/content\/manifest\/[^/]+$/.test(req.nextUrl.pathname) ||
     req.nextUrl.pathname === "/api/content/artifact" ||
+    // Agent common-set snapshot download (ADR-0033): the agent's mTLS identity is the
+    // credential, checked by the handlers (`authenticateAgent`); no browser session exists.
+    req.nextUrl.pathname === "/api/snapshot/manifest" ||
+    req.nextUrl.pathname === "/api/snapshot/artifact" ||
     // Scheduled jobs: the caller is a scheduler with no browser session. Each
     // handler authenticates itself with `verifyCronRequest` (CRON_SECRET, fails
     // closed when unset); without this the middleware redirected every cron call

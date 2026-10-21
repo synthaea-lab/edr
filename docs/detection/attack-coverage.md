@@ -86,7 +86,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1071 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/reverse_shell.yml` |
-| T1071.004 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1071.004 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/stateless.rs` |
 | T1105 | 1, 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs`, `yara:rules/yara/lab/synthaea_lab_payload.yar` |
 | T1571 | 3 | `rules:crates/rules/src/state.rs` |
 
@@ -113,13 +113,14 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1087.002 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml`, `sigma:rules/sigma/windows/powershell_add_sid_to_local_group.yml` |
+| T1110.001 | 3 | `rules:crates/rules/src/sudo.rs` |
 | T1187 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
 | T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
-| T1548.003 | 3 | `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
+| T1548.003 | 3 | `rules:crates/rules/src/sudo.rs`, `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1557 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1558 | 3 | `rules:crates/rules/src/stateless.rs` |
