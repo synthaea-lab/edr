@@ -14,9 +14,14 @@ Decision items 3 and 4 are implemented (#753): `crates/updater/keys/{release,con
 `release-tool` (default on for development and the lab), `SYNTHAEA_UPDATER_TEST_KEY` derived from
 it, `--allow-test-key` only in a `test-key` build and now also required by
 `apply-content-manifest`, a build without the feature or a key refusing with a clear error, and
-`tools/check-no-test-key.sh` in CI. Not implemented: the `recovery` verification and the rotation
-release (a separate PR with golden fixtures), `release-tool` custody backends, the custody and
-holder decisions below, the runbook and the lab drills. Windows and macOS got the same
+`tools/check-no-test-key.sh` in CI. `release-tool` signs from a PKCS#11 token (#944:
+`--pkcs11 <module> --pkcs11-token --pkcs11-key`, the PIN from an environment variable or a
+0600 file, a `Signer` trait, a signature that does not verify under the signer's own public key
+refused), tested against a software token only: no real token or HSM has been exercised.
+`--key-file` is documented as for the lab but **is not restricted to the test key** (the
+decision below says it should be). Not implemented: the `recovery` verification and the rotation
+release (a separate PR with golden fixtures), a cloud-KMS backend, the holder and approver
+decisions below, the runbook and the lab drills. Windows and macOS got the same
 `--no-default-features` treatment in #855: the MSI build command in `packaging/windows/README.md`,
 a scan of `agent.exe` and `watchdog.exe` in `packaging/windows/build.ps1` (not run by any CI job,
 it needs WiX), a `tools/assert-no-test-key.sh` step in the two static-agent workflows, and
@@ -94,7 +99,8 @@ owner's decisions and are marked as such.
   signed envelope, so it gets its own PR and golden fixtures; this ADR does not specify the
   bytes.
 - `release-tool` has to sign without a key file: the custody choice in 2 decides whether it
-  grows a token or KMS backend. Until then it keeps `--key-file` for the test key only.
+  grows a token or KMS backend. #944 added the PKCS#11 one; `--key-file` is meant for the test key
+  only and is not yet restricted to it.
 - The residual risk is named: losing or compromising **`recovery`** is not recoverable by an
   update and needs a package reinstall of every endpoint. It is the one key whose compromise
   the update channel cannot repair, which is why it is offline and split.
