@@ -215,3 +215,127 @@ def test_the_malicious_matrix_leaves_the_runner_itself_out(tmp_path: Path) -> No
     ]
     matrix = gain.malicious_matrix(_capture(tmp_path, events), 100, 5 * S, 20 * S)
     assert matrix.shape == (1, gain.MEASURED_FEATURE_COUNT)
+
+
+# ── The benign matrix is built the way the malicious one is ─────────────────────────
+
+
+def _benign_dataset(tmp_path: Path, name: str, events: list[dict]) -> Path:
+    directory = tmp_path / name
+    directory.mkdir()
+    _capture(directory, events)
+    return directory
+
+
+def _exec(pid: int, gen: int, argv: list[str], parent_image: str) -> dict:
+    return _event(
+        "exec",
+        pid,
+        1,
+        10 * S + pid,
+        gen,
+        0,
+        argv=argv,
+        parent_comm=Path(parent_image).name,
+        parent_image_path=parent_image,
+        image_path=f"/usr/bin/{argv[0]}",
+    )
+
+
+def test_the_benign_matrix_carries_the_lineage_columns_the_comparison_needs(
+    tmp_path: Path,
+) -> None:
+    dataset = _benign_dataset(tmp_path, "benign", [_exec(200, 1, ["ls", "-l"], "/usr/sbin/sshd")])
+    matrix = gain.benign_matrix([dataset])
+    assert matrix.shape == (1, gain.MEASURED_FEATURE_COUNT)
+    # The trainer's `load_matrix` is the 17-feature T1 vector: this tool must not use it.
+    assert matrix.shape[1] != t1.FEATURE_COUNT
+
+
+def test_the_benign_matrix_lineage_block_is_the_one_the_malicious_matrix_gets(
+    tmp_path: Path,
+) -> None:
+    events = [_exec(200, 1, ["ls", "-l"], "/tmp/mybash")]
+    benign = gain.benign_matrix([_benign_dataset(tmp_path, "benign", events)])
+    runner = _exec(100, 1, ["run"], "/usr/sbin/sshd")
+    child = _event(
+        "exec",
+        102,
+        100,
+        12 * S,
+        3,
+        1,
+        argv=["ls", "-l"],
+        parent_comm="mybash",
+        parent_image_path="/tmp/mybash",
+        image_path="/usr/bin/ls",
+    )
+    malicious = gain.malicious_matrix(_capture(tmp_path, [runner, child]), 100, 5 * S, 20 * S)
+    assert benign[0, LINEAGE_COLUMNS].tolist() == malicious[0, LINEAGE_COLUMNS].tolist()
+
+
+def test_identical_benign_vectors_across_datasets_count_once(tmp_path: Path) -> None:
+    same = [_exec(200, 1, ["ls", "-l"], "/usr/sbin/sshd")]
+    first = _benign_dataset(tmp_path, "first", same)
+    second = _benign_dataset(tmp_path, "second", same)
+    other = _benign_dataset(tmp_path, "other", [_exec(300, 1, ["ls", "-l"], "/tmp/mybash")])
+    assert len(gain.benign_matrix([first, second])) == 1
+    assert len(gain.benign_matrix([first, second, other])) == 2
+
+
+def test_the_command_line_hands_the_comparison_a_23_column_benign_matrix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression of the first real run after ADR-0034: `main` read the benign matrix with
+    the trainer's 17-column loader and `measure_gain` refused it ("must have 23 columns")."""
+
+    class Reached(Exception):
+        pass
+
+    seen: dict[str, tuple[int, ...]] = {}
+
+    def spy(benign: np.ndarray, malicious: np.ndarray, seeds: int) -> None:
+        seen["benign"], seen["malicious"] = benign.shape, malicious.shape
+        raise Reached
+
+    monkeypatch.setattr(gain, "measure_gain", spy)
+    dataset = _benign_dataset(tmp_path, "benign", [_exec(200, 1, ["ls", "-l"], "/usr/sbin/sshd")])
+    malicious = _capture(
+        tmp_path,
+        [
+            _exec(100, 1, ["run"], "/usr/sbin/sshd"),
+            _event(
+                "exec",
+                102,
+                100,
+                12 * S,
+                3,
+                1,
+                argv=["nc", "-l"],
+                parent_comm="mybash",
+                parent_image_path="/tmp/mybash",
+                image_path="/usr/bin/nc",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "t1_lineage_gain",
+            "--benign-dataset",
+            str(dataset),
+            "--malicious-capture",
+            str(malicious),
+            "--root-pid",
+            "100",
+            "--start-ns",
+            str(5 * S),
+            "--end-ns",
+            str(20 * S),
+            "--output",
+            str(tmp_path / "out.json"),
+        ],
+    )
+    with pytest.raises(Reached):
+        gain.main()
+    assert seen["benign"][1] == seen["malicious"][1] == gain.MEASURED_FEATURE_COUNT

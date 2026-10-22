@@ -114,6 +114,37 @@ describe("extractGraphFacts", () => {
     );
   });
 
+  describe("an auth event", () => {
+    const auth = (outcome: string, kind: string, target_user: unknown) => ({
+      type: "auth",
+      meta: { pid: 811, ppid: 1, comm: "sshd", timestamp_ns: 1 },
+      outcome,
+      kind,
+      target_user,
+    });
+
+    it("a successful logon yields a logged_in edge from an identity to the host", () => {
+      const { nodes, edges } = extractGraphFacts("host-1", auth("success", "logon", "alice"), T0);
+      expect(nodes.find((n) => n.kind === "identity")?.key).toBe("alice");
+      expect(edges).toContainEqual(
+        expect.objectContaining({ kind: "logged_in", to: { kind: "host", key: "host-1" } })
+      );
+    });
+
+    it.each([
+      ["a failed logon", "failure", "logon_failure"],
+      ["a failed logon marked as a success by a malformed event", "failure", "logon"],
+      ["explicit credentials", "success", "explicit_credentials"],
+      ["a privileged session", "success", "privileged_session"],
+    ])("%s yields nothing: its user name is not proof of who signed in", (_label, outcome, kind) => {
+      expect(extractGraphFacts("host-1", auth(outcome, kind, "mallory"), T0)).toEqual({ nodes: [], edges: [] });
+    });
+
+    it.each([undefined, "", 12, null, {}])("a logon whose user is %j yields nothing", (user) => {
+      expect(extractGraphFacts("host-1", auth("success", "logon", user), T0)).toEqual({ nodes: [], edges: [] });
+    });
+  });
+
   it("an event of an unrecognized shape yields nothing, not an error", () => {
     expect(extractGraphFacts("host-1", { type: "registry_set" }, T0)).toEqual({ nodes: [], edges: [] });
     expect(extractGraphFacts("host-1", null, T0)).toEqual({ nodes: [], edges: [] });

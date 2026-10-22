@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -8,11 +8,13 @@ import { join } from "path";
 const db = vi.hoisted(() => ({
   contentRelease: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
   auditLog: { create: vi.fn() },
+  member: { findFirst: vi.fn() },
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST as publish } from "@/app/api/content/release/route";
 import { POST as rollback } from "@/app/api/content/rollback/route";
+import { POST as halt } from "@/app/api/content/halt/route";
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
 
@@ -40,12 +42,15 @@ function manifestFor(overrides: Record<string, unknown> = {}) {
   );
 }
 
-/** Puts a manifest at storage://manifests/<name> and the given artifacts under storage/artifacts. */
+/**
+ * Puts a manifest at storage://manifests/<name> and the given artifacts' bytes in
+ * storage/artifacts, under their own hash (#804) — the map's keys are only there to make
+ * call sites at tests below readable, the store itself does not key on them.
+ */
 function store(manifest: Buffer, artifacts: Record<string, Buffer>, name = "content-canary_0-v5.json") {
   writeFileSync(join(sandbox, "storage", "manifests", name), manifest);
-  for (const [p, bytes] of Object.entries(artifacts)) {
-    mkdirSync(join(sandbox, "storage", "artifacts", p, ".."), { recursive: true });
-    writeFileSync(join(sandbox, "storage", "artifacts", p), bytes);
+  for (const bytes of Object.values(artifacts)) {
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(bytes)), bytes);
   }
 }
 
@@ -79,6 +84,9 @@ beforeEach(() => {
   db.contentRelease.findFirst.mockResolvedValue({ releaseVersion: 4, status: "rolled_back" });
   db.contentRelease.create.mockImplementation(async ({ data }) => ({ id: "r5", ...data }));
   db.auditLog.create.mockResolvedValue({});
+  // The caller is the tenant's owner by default (#803); tests of the admin check itself
+  // override this.
+  db.member.findFirst.mockResolvedValue({ role: "owner" });
 });
 
 afterEach(() => {
@@ -151,26 +159,17 @@ describe("POST /api/content/release: nothing is published that an agent could no
     expect(db.contentRelease.create).not.toHaveBeenCalled();
   });
 
-  it("refuses a corrective release over a modified path until the earlier bytes are back in the store", async () => {
-    // Release 4 changed rules/x.sigma. The store is keyed by path and shared across releases,
-    // so it holds release 4's bytes; the corrective release lists release 2's hash for that
-    // path. Published anyway, every agent on release 4 would get a 502 on that fetch, pruning
-    // would never run and the bad rule would stay (review of #782).
+  it("publishes a corrective release over a modified path with nothing restored first (#804)", async () => {
+    // Release 2 uploaded RULE_V2 under its own hash; release 4 later changed rules/x.sigma
+    // and uploaded RULE_V4 under ITS hash — content-addressed, so this never touched RULE_V2's
+    // bytes. A corrective release naming RULE_V2's hash for rules/x.sigma again (ADR-0032)
+    // needs nothing put back: those bytes never moved.
     const manifest = manifestFor(); // lists RULE_V2's hash for rules/x.sigma
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
+    store(manifest, GOOD_ARTIFACTS); // RULE_V2 and OTHER, as release 2 (or the test fixture) uploaded them
+    writeFileSync(join(sandbox, "storage", "artifacts", sha(RULE_V4)), RULE_V4); // release 4's separate upload
     const res = await publish(post(publishBody(manifest)));
-    expect(res.status).toBe(422);
-    const { error } = await res.json();
-    expect(error).toContain("rules/x.sigma");
-    expect(error).toMatch(/earlier bytes|put .* back/i);
-    expect(db.contentRelease.create).not.toHaveBeenCalled();
-  });
-
-  it("publishes that corrective release once the earlier bytes have been put back", async () => {
-    const manifest = manifestFor();
-    store(manifest, { "rules/x.sigma": RULE_V4, "rules/y.sigma": OTHER });
-    writeFileSync(join(sandbox, "storage", "artifacts", "rules/x.sigma"), RULE_V2); // restored
-    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.create).toHaveBeenCalledOnce();
   });
 
   it("refuses an entry path that would leave the store", async () => {
@@ -179,6 +178,43 @@ describe("POST /api/content/release: nothing is published that an agent could no
     });
     store(manifest, {});
     expect((await publish(post(publishBody(manifest)))).status).toBe(422);
+  });
+
+  it("refuses an entry sha256 that is not 64 lowercase hex characters, before it ever reaches the filesystem", async () => {
+    // The store now reads an entry by its sha256 as a path component (#804): without the
+    // schema's regex, a crafted manifest could point that read outside storage/artifacts
+    // (review of #835). An empty store already answers 422 "not in the store" for ANY
+    // sha256, traversal or not, which made the original version of this test pass whether
+    // or not the regex existed (SherlockOmss's review): removing the regex left all tests
+    // green. A file genuinely readable at the path the traversal targets, outside
+    // storage/artifacts, makes the two cases diverge: without the regex, the read would
+    // succeed and the loop would move on to the next entry; with it,
+    // `ContentManifest.safeParse` rejects the manifest before any file lookup runs. The
+    // error text is schema wording ("does not match the content manifest schema"), not the
+    // store's ("is not in the store") — asserting on it is what actually pins the regex.
+    // A per-run unique name, not a fixed one: `sandbox`'s parent is the real project
+    // directory (`originalCwd`), shared by every test file and worker, not a sandbox
+    // of its own — a fixed name would collide under parallel test execution, and a
+    // crash before the `finally` below would leave a stray file for the next run to
+    // trip over (review of #835).
+    const traversalName = `escaped-by-835-test-${randomBytes(8).toString("hex")}.txt`;
+    const traversalTarget = join(sandbox, "..", traversalName);
+    writeFileSync(traversalTarget, "should never be read as an artifact");
+    try {
+      const manifest = manifestFor({
+        entries: [
+          { path: "rules/x.sigma", type: "rule", sha256: `../../../${traversalName}`, size: 1 },
+        ],
+      });
+      store(manifest, {});
+      const res = await publish(post(publishBody(manifest)));
+      const body = await res.json();
+      expect(res.status).toBe(422);
+      expect(body.error).toContain("does not match the content manifest schema");
+      expect(body.error).not.toContain("is not in the store");
+    } finally {
+      rmSync(traversalTarget, { force: true });
+    }
   });
 
   it("answers 409, not 500, when a concurrent publish took the number first", async () => {
@@ -235,5 +271,156 @@ describe("POST /api/content/rollback: it says what it does not do (#665)", () =>
       orderBy: { releaseVersion: "desc" },
       select: { releaseVersion: true },
     });
+  });
+});
+
+describe("content/release, content/rollback and content/halt require the admin role (#803)", () => {
+  function rollbackReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
+    return new NextRequest("http://localhost/api/content/rollback", {
+      method: "POST",
+      headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function haltReq(body: unknown = { ring: "canary_0", reason: "bad rule" }) {
+    return new NextRequest("http://localhost/api/content/halt", {
+      method: "POST",
+      headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("refuses a plain member on all three routes, before any of them reads its body", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+
+    const publishRes = await publish(post(publishBody(manifest)));
+    expect(publishRes.status).toBe(403);
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+
+    const rollbackRes = await rollback(rollbackReq());
+    expect(rollbackRes.status).toBe(403);
+    expect(db.contentRelease.update).not.toHaveBeenCalled();
+
+    const haltRes = await halt(haltReq());
+    expect(haltRes.status).toBe(403);
+    expect(db.contentRelease.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller with no membership row at all", async () => {
+    db.member.findFirst.mockResolvedValue(null);
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(403);
+  });
+
+  it("accepts an admin member, not only an owner", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "admin" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+  });
+
+  it("accepts a member whose role is a comma-separated list including admin or owner", async () => {
+    // better-auth stores several roles as one comma-separated string (`updateMemberRole`
+    // takes an array); a caller given two roles must not be refused because the whole
+    // string never equals "admin" or "owner".
+    db.member.findFirst.mockResolvedValue({ role: "admin,member" });
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    expect((await publish(post(publishBody(manifest)))).status).toBe(200);
+  });
+
+  it("looks the membership up by the caller's own tenant and user id", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest)));
+    expect(db.member.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: "t1", userId: "u1" },
+      select: { role: true },
+    });
+  });
+
+  it("refuses a member with an invalid body with 403, not the schema's 400 (review of #831)", async () => {
+    // Pins the gate running before the body is parsed: if a route were reordered to
+    // validate the body first, a member sending garbage would get 400 instead of 403.
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await publish(post({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid rollback body with 403, not the schema's 400", async () => {
+    // The first such test (above) only exercised /release; the gate runs identically before
+    // the body is read on every one of the three routes, not just that one (review of #831).
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await rollback(rollbackReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("refuses a member with an invalid halt body with 403, not the schema's 400", async () => {
+    db.member.findFirst.mockResolvedValue({ role: "member" });
+    const res = await halt(haltReq({ ring: "not-a-real-ring" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("accepts a comma-separated role including admin or owner on a route other than release", async () => {
+    // The release-only version of this test (above) could pass even if another route's own
+    // split/compare had a bug of its own; this pins the same behavior on rollback too
+    // (review of #831).
+    db.contentRelease.findFirst
+      .mockResolvedValueOnce({ id: "r4", releaseVersion: 4, status: "active" })
+      .mockResolvedValueOnce({ id: "r2", releaseVersion: 2, status: "active" })
+      .mockResolvedValueOnce({ releaseVersion: 4 });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    db.member.findFirst.mockResolvedValue({ role: "member,admin" });
+    expect((await rollback(rollbackReq())).status).toBe(200);
+  });
+
+  it("a caller with no tenant context (no active organization) gets a clean 401, not a 500", async () => {
+    // getTenantId/getUserId throw when the middleware found no active organization to set
+    // x-tenant-id/x-user-id from; requireTenantAdmin must not let that fall through to the
+    // route's generic catch, which would answer 500 (review of #831).
+    const req = new NextRequest("http://localhost/api/content/release", {
+      method: "POST",
+      headers: { "content-type": "application/json" }, // no x-tenant-id, no x-user-id
+      body: JSON.stringify({ ring: "canary_0" }),
+    });
+    const res = await publish(req);
+    expect(res.status).toBe(401);
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+  });
+
+  it("halts the ring for an admin and audits it", async () => {
+    db.contentRelease.findFirst.mockResolvedValue({ id: "r4", releaseVersion: 4, status: "active" });
+    db.contentRelease.update.mockImplementation(async ({ where, data }) => ({ id: where.id, ...data }));
+    const res = await halt(haltReq());
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.update).toHaveBeenCalledWith({
+      where: { id: "r4" },
+      data: { status: "halted" },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe("content/release marks a corrective release in its audit entry (#803)", () => {
+  it("records restoresVersion and corrective:true when the publish names the release it restores", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest, { restoresVersion: 2 })));
+    const details = db.auditLog.create.mock.calls[0][0].data.details;
+    expect(details.corrective).toBe(true);
+    expect(details.restoresVersion).toBe(2);
+  });
+
+  it("records corrective:false for an ordinary release", async () => {
+    const manifest = manifestFor();
+    store(manifest, GOOD_ARTIFACTS);
+    await publish(post(publishBody(manifest)));
+    const details = db.auditLog.create.mock.calls[0][0].data.details;
+    expect(details.corrective).toBe(false);
+    expect(details.restoresVersion).toBeNull();
   });
 });

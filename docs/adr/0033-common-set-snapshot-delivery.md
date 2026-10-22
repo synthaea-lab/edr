@@ -1,11 +1,11 @@
 # ADR-0033: Delivering the fleet common-set snapshot: its own signed manifest, signing key and freshness bound
 
-- **Status**: proposed
-- **Date**: 2026-10-14
+- **Status**: accepted 2026-10-20 as a design; the custody of the `snapshot` key is not decided (see "Owner's decisions, 2026-10-20")
+- **Date**: 2026-10-14 (accepted 2026-10-20)
 
 Proposed for the owner to accept, change or reject. The points that are the owner's to decide
 (custody technology, who controls the key policy, whether to bind a tenant at enrollment) are
-marked, and listed again at the end.
+marked, and listed again at the end. The owner's answers are recorded in the last section.
 
 ## Context
 
@@ -161,3 +161,26 @@ should stay true.
 - ADR-0020 (what the snapshot is), ADR-0016 (content rings), ADR-0027 (the trust set), ADR-0032
   (withdrawal by corrective release); `docs/detection/common-set-snapshot-format.md`;
   `docs/detection/fleet-prevalence-snapshot-plan.md`; #76, #640, #814, #815, #817.
+
+## Owner's decisions, 2026-10-20
+
+Taken by the owner, who delegated the review; the reviewers of this change can contest them.
+
+1. **A fourth, signing-only, automated `snapshot` key: accepted as the design.** Neither the
+   weekly content-key path nor unsigned delivery. **Not decided:** which key service holds it and
+   who may change its policy. That is the custody question of #753 / ADR-0027 and is answered
+   together with it. Until then the snapshot endpoints and the fetch loop run only with the
+   `test-key` feature, as Decision 4 already says; nothing here makes them available in a
+   production build.
+2. **No canary progression for snapshots: accepted**, with the builder guards, the maximum age
+   and the beacon counters as the substitute.
+3. **Tenant binding: yes, required before the fetch loop is enabled in a production build.** A
+   tenant identifier delivered at enrollment and a `tenant_id` the agent compares in the manifest.
+   It is not needed for the lab slices, where the server's tenant scoping is relied on. To be filed
+   as its own issue (an enrollment change).
+4. **The fetch loop in `agent run`, ahead of the release and content timers: accepted**, gated on
+   the `snapshot` key being provisioned.
+
+What this unblocks: the agent-side slices of #76 box 2 and the Rust mirror of #640 can be built
+against the `test-key` build. What it does not unblock: shipping them to production, which waits
+on the custody decision.

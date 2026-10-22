@@ -33,7 +33,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1136.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.002 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/persistence.yml` |
-| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml` |
+| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml`, `sigma:rules/sigma/windows/service_created_with_shell_binpath.yml` |
 | T1546.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1547.015 | 3 | `rules:crates/rules/src/stateless.rs` |
 
@@ -71,8 +71,22 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1003.002 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
 | T1003.003 | 3 | `sigma:rules/sigma/windows/ntds_ifm_export.yml` |
 | T1003.004 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
-| T1003.008 | 3 | `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
+| T1003.008 | 3 | `rules:crates/rules/src/credfiles.rs`, `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
 | T1110 | 3 | `rules:crates/rules/src/state.rs` |
+| T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1552.004 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.003 | 3 | `rules:crates/rules/src/credfiles.rs` |
+
+## Discovery
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1016 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1057 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1082 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1087 | 3 | `rules:crates/rules/src/recon.rs` |
 
 ## Lateral Movement
 
@@ -86,7 +100,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1071 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/state.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/reverse_shell.yml` |
-| T1071.004 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1071.004 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/stateless.rs` |
 | T1105 | 1, 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs`, `yara:rules/yara/lab/synthaea_lab_payload.yar` |
 | T1571 | 3 | `rules:crates/rules/src/state.rs` |
 
@@ -109,22 +123,26 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | --- | --- | --- |
 | T1021.001 | 3 | `rules:crates/rules/src/rdp.rs` |
 | T1046 | 3 | `rules:crates/rules/src/state.rs` |
+| T1048 | 3 | `rules:crates/rules/src/state.rs` |
 | T1059.005 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1059.007 | 3 | `rules:crates/rules/src/amsi.rs` |
 | T1087.002 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml`, `sigma:rules/sigma/windows/powershell_add_sid_to_local_group.yml` |
+| T1110.001 | 3 | `rules:crates/rules/src/sudo.rs` |
 | T1187 | 3 | `rules:crates/rules/src/ntlm.rs` |
 | T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
 | T1505.003 | 1, 6 | `correlator:crates/correlator/src/rules.rs`, `yara:rules/yara/webshell/webshell_jsp_runtime_exec.yar`, `yara:rules/yara/webshell/webshell_php_superglobal_exec.yar` |
-| T1548.003 | 3 | `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
-| T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1548.003 | 3 | `rules:crates/rules/src/sudo.rs`, `sigma:rules/sigma/linux/sudo_vim_shell_escape.yml` |
 | T1557 | 3 | `rules:crates/rules/src/ntlm.rs` |
+| T1558 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1558.003 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1558.004 | 3 | `rules:crates/rules/src/ldap.rs` |
+| T1560 | 3 | `rules:crates/rules/src/state.rs` |
 | T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |
 | T1562 | 3 | `rules:crates/rules/src/state.rs` |
+| T1564.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1567.002 | 3 | `sigma:rules/sigma/linux/curl_upload_to_cloud_storage.yml`, `sigma:rules/sigma/windows/curl_upload_to_cloud_storage.yml` |
 

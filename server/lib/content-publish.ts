@@ -26,13 +26,15 @@ export function isSafeArtifactPath(entryPath: string): boolean {
 
 /**
  * The manifest must be the one it is published as (bytes, schema with at least one entry,
- * ring and number), and every artifact it lists must already be in the store and hash to the
- * value the manifest signs.
+ * ring and number), and every artifact it lists must already be in the store under its own
+ * hash.
  *
- * The store (`storage/artifacts/<path>`) is keyed by path and shared across releases, so a
+ * The store (`storage/artifacts/<sha256>`, #804) is keyed by content hash, not by path: a
  * release that lists content an earlier release later modified (a corrective release over a
- * changed path) needs those earlier bytes put back first: otherwise every agent that applies
- * it gets a 502 on that fetch and the bad content stays (ADR-0032).
+ * changed path, ADR-0032) needs nothing restored first, since the earlier bytes never moved —
+ * they are still sitting under their own hash, wherever they were first uploaded. The only way
+ * this still refuses (422) is an artifact that was genuinely never uploaded under the hash the
+ * manifest lists.
  */
 export async function validatePublishable(input: {
   ring: string;
@@ -79,27 +81,34 @@ export async function validatePublishable(input: {
     };
   }
   for (const entry of manifest.entries) {
+    // `path` no longer addresses the store (the store is keyed by `sha256`), but it is
+    // still what the agent queries `/api/content/artifact` with and still needs to be a
+    // sane relative path for that, display, and the diff tooling.
     if (!isSafeArtifactPath(entry.path)) {
       return { ok: false, error: `Entry path ${JSON.stringify(entry.path)} is not a path inside the artifact store` };
     }
     let stored: Buffer;
     try {
-      stored = await readFile(path.join(process.cwd(), "storage", "artifacts", entry.path));
+      stored = await readFile(path.join(process.cwd(), "storage", "artifacts", entry.sha256));
     } catch (error) {
       if ((error as { code?: string }).code === "ENOENT") {
-        return { ok: false, error: `Artifact ${entry.path} is not in the store` };
+        return {
+          ok: false,
+          error: `Artifact ${entry.sha256} for ${entry.path} is not in the store`,
+        };
       }
       throw error;
     }
+    // Belt and braces: the file is looked up by its own claimed hash, so this can only
+    // fail if the bytes on disk were corrupted or the upload was mislabeled — never
+    // because a later release changed what lives at `entry.path` (#804).
     const actual = crypto.createHash("sha256").update(stored).digest("hex");
     if (actual !== entry.sha256) {
       return {
         ok: false,
         error:
-          `Artifact ${entry.path} in the store hashes to ${actual}, but the manifest lists ` +
-          `${entry.sha256}. The store is keyed by path and shared across releases: put the bytes ` +
-          `this release lists back at ${entry.path} first (a corrective release that restores ` +
-          `content a later release modified needs the earlier bytes back in the store).`,
+          `The artifact stored under ${entry.sha256} (for ${entry.path}) actually hashes to ` +
+          `${actual} — corrupted on disk or uploaded under the wrong name`,
       };
     }
   }

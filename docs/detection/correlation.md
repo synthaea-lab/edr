@@ -18,7 +18,7 @@ Two sources move it:
 | Source | Tier | What it reads | Status |
 | --- | --- | --- | --- |
 | Per-feature Bayesian LLRs | T1 | `BehaviorVector` (has_connect, exec→connect timing, suspicious path, connect count, external dest, ...), summed under a naive-independence assumption | built — `bayes::log_likelihood_ratio`, calibrated on the NjRAT capture (n=97/23, 2026-08-28) |
-| Correlation ML score | T2 | the 8-feature window vector (`ml::features::correlation`) scored by an Isolation Forest | scorer built (`ml::CorrelationScorer`); fusion seam + trained model pending |
+| Correlation ML score | T2 | the 8-feature window vector (`ml::features::correlation`) scored by an Isolation Forest | scorer built and wired (`ml::CorrelationScorer` → `CorrelationEngine::update_belief_with_ml`, #345); trained model pending (#132) |
 
 An alert fires when `log_odds` crosses `+2.0` (~88%), once per crossing.
 
@@ -49,20 +49,34 @@ from the parsed forest (a T2 detection is never a bare number, same rule as T0).
 
 `score_to_llr` is **provisional**. Its slope and clamps are placeholders; the real
 values come from the pipeline's LLR calibration on a benign multi-event baseline
-(the same step that regenerates `bayes::log_likelihood_ratio`), which needs the
-capture campaign that does not exist yet (`ml/synthaea_ml/data/correlation_train.jsonl`,
-issue #44). Until then T2 can only ever contribute to a belief, never alert alone, and
+(the same step that regenerates `bayes::log_likelihood_ratio`), which needs a
+capture campaign specific to this model that does not exist yet
+(`ml/synthaea_ml/data/correlation_train.jsonl`) — #44 built the general scenario
+corpus and benign capture infrastructure this would run on, but closed without a
+correlation-specific run; #132 tracks training the model itself. Until then T2 can
+only ever contribute to a belief, never alert alone, and
 the clamps bound its influence: `[-1.0, +3.0]` log-odds, asymmetric because a behaviour
 model exonerates far more weakly than it accuses.
 
-### Wiring seam (pending)
+### Wiring seam
 
 `ml` depends on `correlator` (for `EventBus`); the reverse edge would be a dependency
-cycle, so the correlator cannot call the scorer directly. The intended wiring is
-"compute in `ml`, inject through `correlator`": the agent runs `CorrelationScorer`
-against the engine's bus and hands the LLR back through a small `correlator` API
-(a score-provider trait on the engine, or an extra term on the belief update). That
-seam is not implemented — see the T2 handoff note.
+cycle, so the correlator cannot call the scorer directly. The wiring is "compute in
+`ml`, inject through `correlator`" (#132, #345): `agent::DetectionSink` holds the
+loaded `ml::CorrelationScorer` and, per event, calls `scorer.score(engine.bus(), pid,
+generation)`, maps the result through `score_to_llr`, and hands it to
+`CorrelationEngine::update_belief_with_ml(pid, generation, ml_llr)` — an extra term on
+the belief, not a score-provider trait on the engine (the simpler of the two shapes
+`#132` originally weighed, since the agent already owns both the scorer and the
+engine).
+
+`update_belief_with_ml` deliberately does not re-run the feature-LLR update itself —
+`CorrelationEngine::on_event` already did that earlier in the same cycle, before the
+scorer had a chance to run (it needs the event on the bus first). PR #345's review
+caught a real bug from getting this wrong: calling the full update path a second time
+summed the hand-calibrated feature LLRs on top of themselves, roughly doubling
+`log_odds` once a correlation model was loaded and causing premature `BAYES` alerts
+(and, via issue #25, premature auto-kill) on benign processes.
 
 ## Web request and web-server shell (T1505.003)
 

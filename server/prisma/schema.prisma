@@ -20,6 +20,7 @@ model Tenant {
   agents              Agent[]
   detections          Detection[]
   cases               Case[]
+  fleetCases          FleetCase[]
   caseNarratives      CaseNarrative[]
   auditLogs           AuditLog[]           @relation("TenantAuditLogs")
   contentReleases     ContentRelease[]
@@ -27,9 +28,13 @@ model Tenant {
   corpusVersions      CorpusVersion[]
   corpusSamples       CorpusSample[]
   prevalenceSightings PrevalenceSighting[]
+  ingestStats         IngestStat[]
+  commonSetSnapshot   CommonSetSnapshot?
   hunts               Hunt[]
   huntRuns            HuntRun[]
   decoyTokens         DecoyToken[]
+  notificationChannels NotificationChannel[]
+  notifications       Notification[]
 
   @@map("tenants")
 }
@@ -44,7 +49,6 @@ model Agent {
   ring         String   @default("prod") // Canary ring: canary_0, canary_1, canary_2, prod
   lastSeen     DateTime @map("last_seen")
   createdAt    DateTime @default(now()) @map("created_at")
-
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   health      AgentHealth?
   decoyTokens DecoyToken[]
@@ -60,24 +64,31 @@ model Agent {
 // each beacon: bounded by fleet size, not by uptime. A time series (loss-counter
 // rates, sensor flapping) is a later slice and needs its own retention.
 model AgentHealth {
-  agentId         String    @id @map("agent_id")
-  tenantId        String    @map("tenant_id")
-  beaconAt        DateTime  @map("beacon_at") // the agent's own clock
-  receivedAt      DateTime  @map("received_at")
-  agentVersion    String    @map("agent_version")
-  spoolBytes      BigInt    @map("spool_bytes")
-  spoolDropped    BigInt    @map("spool_dropped")
-  enrichDropped   BigInt    @map("enrich_dropped")
+  agentId                String    @id @map("agent_id")
+  tenantId               String    @map("tenant_id")
+  beaconAt               DateTime  @map("beacon_at") // the agent's own clock
+  receivedAt             DateTime  @map("received_at")
+  agentVersion           String    @map("agent_version")
+  spoolBytes             BigInt    @map("spool_bytes")
+  spoolDropped           BigInt    @map("spool_dropped")
+  enrichDropped          BigInt    @map("enrich_dropped")
   // When the control plane last saw a loss counter (spool or enrichment queue) rise between two
   // beacons, by its own clock (issue #83). The counters are cumulative since the agent started and
   // only the latest beacon is kept, so "recent loss" has to be remembered, not derived.
-  lossObservedAt  DateTime? @map("loss_observed_at")
+  lossObservedAt         DateTime? @map("loss_observed_at")
   // The common-set rarity evidence counters (ADR-0020, issue #76); zero for an agent that
   // predates them.
-  rarityApplied   BigInt    @default(0) @map("rarity_applied")
-  rarityWithheld  BigInt    @default(0) @map("rarity_withheld")
-  rarityUnapplied BigInt    @default(0) @map("rarity_unapplied")
-  sensors         Json // [{ name, pulse_count, silent }]
+  rarityApplied          BigInt    @default(0) @map("rarity_applied")
+  rarityWithheld         BigInt    @default(0) @map("rarity_withheld")
+  rarityUnapplied        BigInt    @default(0) @map("rarity_unapplied")
+  // Self-protection and cache counters (issue #863); zero for an agent that predates them.
+  // Cumulative since the agent started, except `watchdogRestarts`, which is the watchdog's own
+  // count since it started. Shown on the fleet page; none of them makes a host degraded.
+  watchdogRestarts       BigInt    @default(0) @map("watchdog_restarts")
+  tamperEvents           BigInt    @default(0) @map("tamper_events")
+  parentImageEvictedLive BigInt    @default(0) @map("parent_image_evicted_live")
+  parentImageEvictedDead BigInt    @default(0) @map("parent_image_evicted_dead")
+  sensors                Json // [{ name, pulse_count, silent }]
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
@@ -120,6 +131,10 @@ model Detection {
   // Grouped into a Case by the cron/group-detections sweep (issue #50); null
   // until grouped, so "caseId: null" is the query for "ungrouped evidence".
   caseId            String?  @map("case_id")
+  // The fleet-level case this detection was joined into across hosts by the
+  // cron/join-fleet-cases sweep (issue #62); independent of `caseId`, which is
+  // one host's grouping. Null when it joined nothing.
+  fleetCaseId       String?  @map("fleet_case_id")
   timestamp         DateTime
   technique         String // MITRE ATT&CK technique (e.g., T1059.001)
   severity          String // low/medium/high/critical
@@ -149,12 +164,14 @@ model Detection {
   // SetNull, not Cascade: deleting a Case must not delete the underlying
   // evidence it was built from.
   case   Case?  @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  fleetCase FleetCase? @relation(fields: [fleetCaseId], references: [id], onDelete: SetNull)
 
   @@unique([agentId, ingestId])
   @@index([tenantId, timestamp])
   @@index([agentId, timestamp])
   @@index([technique])
   @@index([caseId])
+  @@index([fleetCaseId])
   @@map("detections")
 }
 
@@ -176,6 +193,47 @@ model Case {
   @@index([tenantId, status, createdAt])
   @@index([severity])
   @@map("cases")
+}
+
+// Fleet case (issue #62, box 1): detections of two or more agents joined by a
+// shared entity (a file hash or an identity, `lib/fleet-case.ts`). Written only
+// by cron/join-fleet-cases; rebuildable from the detections, which stay the
+// evidence. `severity` is the highest of its detections and never goes down.
+model FleetCase {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  severity   String // low/medium/high/critical
+  status     String   @default("open") // open/investigating/resolved/false_positive
+  agentCount Int      @map("agent_count")
+  firstAt    DateTime @map("first_at")
+  lastAt     DateTime @map("last_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entities   FleetCaseEntity[]
+  detections Detection[]
+
+  @@index([tenantId, status, createdAt])
+  @@map("fleet_cases")
+}
+
+// One entity a fleet case joined on. Unique per tenant: an entity belongs to
+// one fleet case, so a later sighting of it grows that case instead of opening
+// a second one, and a detection that bridges two cases merges them.
+model FleetCaseEntity {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  fleetCaseId String   @map("fleet_case_id")
+  kind        String // sha256 | identity
+  key         String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  fleetCase FleetCase @relation(fields: [fleetCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, kind, key])
+  @@index([fleetCaseId])
+  @@map("fleet_case_entities")
 }
 
 // Case narrative - one row per LLM-generated narration of a case's evidence
@@ -330,6 +388,34 @@ model PrevalenceSighting {
   @@unique([tenantId, kind, key, agentId])
   @@index([tenantId, kind, key])
   @@map("prevalence_sightings")
+}
+
+// Ingest health (issue #899, lib/ingest-stats.ts): what /api/ingest/* took, skipped and refused
+// per agent, kind (events | detection | beacon) and hour. Best-effort counters; hourly rows are
+// pruned by the prune-prevalence cron.
+model IngestStat {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  agentId        String    @map("agent_id")
+  kind           String
+  bucket         DateTime
+  received       Int       @default(0)
+  accepted       Int       @default(0)
+  skipped        Int       @default(0)
+  refused4xx     Int       @default(0) @map("refused_4xx")
+  refused5xx     Int       @default(0) @map("refused_5xx")
+  // Event lag (ingest time minus event time), ms. BigInt: a reconnecting agent uploads events
+  // weeks old. Sum and count give the mean; a bucket row cannot give a median.
+  lagSumMs       BigInt    @default(0) @map("lag_sum_ms")
+  lagCount       Int       @default(0) @map("lag_count")
+  lagMaxMs       BigInt?   @map("lag_max_ms")
+  lastAcceptedAt DateTime? @map("last_accepted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, agentId, kind, bucket])
+  @@index([tenantId, bucket])
+  @@map("ingest_stats")
 }
 
 // Saved hunt (issue #61): a versioned, structured query over the tenant's
@@ -517,4 +603,111 @@ model Invitation {
 
   @@index([organizationId])
   @@map("auth_invitation")
+}
+
+// Operator notification channel (ADR-0036, #863): a signed webhook a tenant admin registered.
+// The signing secret is sealed (AES-256-GCM, channel id as AAD); it is never returned.
+model NotificationChannel {
+  id                  String    @id @default(uuid())
+  tenantId            String    @map("tenant_id")
+  kind                String    @default("webhook")
+  // The URL is sealed like the secret (its path is often a bearer credential); `host` is the
+  // only part shown anywhere (console, audit rows, logs).
+  host                String
+  urlKeyId            String    @map("url_key_id")
+  urlSealed           String    @map("url_sealed")
+  secretKeyId         String    @map("secret_key_id")
+  secretSealed        String    @map("secret_sealed")
+  // For 24 hours after a rotation the previous secret also signs (two v1= values).
+  prevSecretKeyId     String?   @map("prev_secret_key_id")
+  prevSecretSealed    String?   @map("prev_secret_sealed")
+  prevSecretUntil     DateTime? @map("prev_secret_until")
+  events              String[]  // subscribed event names; empty means none
+  huntIds             String[]  @map("hunt_ids") // hunts whose hunt.new_matches this channel receives
+  status              String    @default("active") // active | paused | disabled
+  cooldownSeconds     Int       @default(1800) @map("cooldown_seconds")
+  lastStatusCode      Int?      @map("last_status_code")
+  lastError           String?   @map("last_error")
+  lastDeliveredAt     DateTime? @map("last_delivered_at")
+  // Set when an admin re-enables a paused channel: "five consecutive failed rows" counts from here.
+  pauseCountFrom      DateTime? @map("pause_count_from")
+  createdBy           String    @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+  states        NotificationState[]
+
+  @@index([tenantId])
+  @@map("notification_channels")
+}
+
+// The last state a channel was told about a subject (a host): per channel, not per agent, so a
+// channel in cooldown does not make another one miss a transition (ADR-0036 point 2). It
+// advances only when a row is enqueued for that channel.
+model NotificationState {
+  channelId String   @map("channel_id")
+  subject   String // the agent id
+  state     String // healthy | degraded | silent
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, subject])
+  @@map("notification_states")
+}
+
+// The outbox: one row per (channel, event occurrence). `id` is the event id the receiver
+// de-duplicates on. Delivery is at least once.
+model Notification {
+  id            String    @id @default(uuid())
+  tenantId      String    @map("tenant_id")
+  channelId     String    @map("channel_id")
+  event         String
+  subject       String // agent id or hunt id
+  seq           Int // per (channel, subject), so a receiver can check order
+  payload       Json
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at")
+  lockedUntil   DateTime? @map("locked_until")
+  // Which claim holds the row: every write of a delivery's outcome names it, so a tick whose
+  // lease expired cannot overwrite what the tick that took the row over recorded.
+  leaseId       String?   @map("lease_id")
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  failedAt      DateTime? @map("failed_at")
+  lastStatus    Int?      @map("last_status")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, subject, seq])
+  @@index([deliveredAt, failedAt, nextAttemptAt])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, lastAttemptAt])
+  @@map("notifications")
+}
+
+// The tenant's latest common-set snapshot (ADR-0033, #76 box 2): the artifact bytes and the
+// signed manifest that names them. One row per tenant, replaced by each build; the agent fetches
+// both through /api/snapshot/*. The builder's guards compare a new build with this row.
+model CommonSetSnapshot {
+  id         String   @id @default(uuid())
+  tenantId   String   @unique @map("tenant_id")
+  builtAt    DateTime @map("built_at")
+  hostsCovered Int     @map("hosts_covered")
+  minHosts   Int      @map("min_hosts")
+  entryCount Int      @map("entry_count")
+  sha256     String
+  size       Int
+  // The SnapshotManifest as signed (lib/snapshot-manifest.ts).
+  manifest   Json
+  artifact   Bytes
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("common_set_snapshots")
 }

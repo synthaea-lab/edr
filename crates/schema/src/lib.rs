@@ -273,7 +273,13 @@ pub mod time;
 /// address, NTLM version). Windows-only. It claimed 41 while #632 (`LdapSearch`)
 /// was open, then 43 after #263 (`SocketCreate`, 42) merged, then 44 after #772
 /// (`PackageChange`) took 43; same coordination note as above.
-pub const SCHEMA_VERSION: u32 = 44;
+///
+/// Bumped 44 → 45 for [`Event::LogCleared`] (#799): a Windows event log
+/// cleared, from the record the Event Log service writes into the fresh log
+/// (Security 1102, System 104), whatever did the clearing. Windows-only.
+/// #577 (`BitsJob`) was open at the same time; whichever merges second
+/// renumbers, same coordination note as above.
+pub const SCHEMA_VERSION: u32 = 45;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -1129,6 +1135,37 @@ pub struct NtlmAuthEvent {
     pub status: Option<String>,
 }
 
+/// A Windows event log was cleared (#799), from the record the Event Log
+/// service itself writes as the first entry of the fresh log: Security **1102**
+/// ("The audit log was cleared") or System **104** ("The log file was
+/// cleared", naming the channel). Windows writes it whatever did the clearing
+/// (`wevtutil cl`, the `EvtClearLog` API, .NET `EventLogSession.ClearLog`, a
+/// renamed tool), and no audit subcategory gates it.
+///
+/// `meta.pid` is the process that asked for the clear (`ClientProcessId`,
+/// written by Windows 11 26200, lab 2026-10-15), or the Event Log service when
+/// an older build leaves it out; `comm` is empty either way. `meta.user` is the
+/// account that cleared the log (`SubjectUserSid` for 1102, the event's
+/// `Security UserID` for 104), [`User::Unknown`] when the event names none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogClearedEvent {
+    pub meta: EventMeta,
+    /// The channel cleared, as Windows names it (`Security`, `System`,
+    /// `Microsoft-Windows-PowerShell/Operational`, ...).
+    pub channel: String,
+    /// The clearing account as `DOMAIN\user`, or `user` alone when the event
+    /// gives no domain. Empty when it names none.
+    pub subject_user: String,
+    /// 1102 only: the clearing account's logon session (`0x3e7`), to join with
+    /// that session's 4624. `None` for 104, which does not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_logon_id: Option<String>,
+    /// 104 only: where the log was saved before it was cleared, when the
+    /// clearer asked for a backup (`wevtutil cl <channel> /bu:<file>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_path: Option<String>,
+}
+
 /// An LDAP search a process sent, from EID 30 of the
 /// Microsoft-Windows-LDAP-Client provider (#364): the directory-reconnaissance
 /// fingerprint an endpoint can see. Kerberoasting / AS-REP roasting start with
@@ -1545,6 +1582,26 @@ pub struct HealthBeacon {
     /// evicted or never created it): the loss, counted. Absent in an older beacon: zero.
     #[serde(default)]
     pub rarity_unapplied: u64,
+    /// How many times the watchdog has respawned the agent since the watchdog started (the
+    /// watchdog tells the agent at spawn). Zero when the agent is not run under a watchdog, and
+    /// in a beacon from an older agent (issue #863).
+    #[serde(default)]
+    pub watchdog_restarts: u64,
+    /// Cumulative tamper-class alerts raised since the agent started: a sensor confirmed silent,
+    /// a shipped binary or its signed manifest that no longer verifies, plus the self-protection
+    /// events the watchdog reported (service definition drift, a binary that no longer matches its
+    /// pinned hash). Absent in a beacon from an older agent: zero (issue #863).
+    #[serde(default)]
+    pub tamper_events: u64,
+    /// Cumulative entries of the Linux parent-image cache the cap dropped while their process was
+    /// still alive: the loss, a later child of such a process carries no `parent_image_path`
+    /// (issue #783). Zero on other platforms and in a beacon from an older agent (issue #863).
+    #[serde(default)]
+    pub parent_image_evicted_live: u64,
+    /// Cumulative entries the cap dropped whose process had already exited: nothing lost, counted
+    /// to show how full the cache runs. Zero on other platforms and in an older beacon.
+    #[serde(default)]
+    pub parent_image_evicted_dead: u64,
 }
 
 /// A logon/authentication outcome, or a privileged-session assignment — shared
@@ -2231,6 +2288,7 @@ pub enum Event {
     Defender(DefenderEvent),
     LdapSearch(LdapSearchEvent),
     NtlmAuth(NtlmAuthEvent),
+    LogCleared(LogClearedEvent),
     WmiActivity(WmiActivityEvent),
     AssemblyLoad(AssemblyLoadEvent),
     SmbConnect(SmbConnectEvent),
@@ -2295,6 +2353,7 @@ impl Event {
             Event::Defender(e) => &e.meta,
             Event::LdapSearch(e) => &e.meta,
             Event::NtlmAuth(e) => &e.meta,
+            Event::LogCleared(e) => &e.meta,
             Event::WmiActivity(e) => &e.meta,
             Event::AssemblyLoad(e) => &e.meta,
             Event::SmbConnect(e) => &e.meta,
