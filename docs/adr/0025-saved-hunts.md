@@ -73,7 +73,7 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    rules as point 1: validated, unknown fields refused, compiled to parameterized SQL scoped to
    the tenant, a value never interpolated. A case query is not a hunt: saved hunts, runs, new
    matches and graduation stay on detections. A row carries ids, times, technique, severity,
-   the case title and a rule title when the stored event has one, never the event's other
+   the case title and a rule title when the detection's `meta` has one (never read from the stored event), never the event's other
    contents (a command line is not shown). Paging is by a cursor over (time, id), validated like
    any input, so rows that share a timestamp are neither skipped nor repeated; the count comes
    with the first page only. A search runs under the statement timeout of point 4 (a 504), and a

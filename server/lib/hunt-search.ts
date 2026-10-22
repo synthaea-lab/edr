@@ -62,7 +62,11 @@ export type DetectionRow = {
   agentId: string;
   caseId: string | null;
   caseTitle: string | null;
-  /** The detection's rule title when its stored event has one; never the event's other contents. */
+  /**
+   * The detection's rule title when its `meta` has one (`parseDetectionPayload` stores a structured
+   * detection's `title` there, and its first triggering event in `event`); never anything read from
+   * the event.
+   */
   title: string | null;
 };
 
@@ -259,7 +263,7 @@ async function detectionPage(
     { id: string; timestamp: Date; technique: string; severity: string; agentId: string; caseId: string | null; title: unknown }[]
   >(Prisma.sql`
     SELECT id, "timestamp", technique, severity, agent_id AS "agentId", case_id AS "caseId",
-           CASE WHEN jsonb_typeof(event::jsonb) = 'object' THEN event::jsonb ->> 'title' END AS title
+           CASE WHEN jsonb_typeof(meta::jsonb -> 'title') = 'string' THEN meta::jsonb ->> 'title' END AS title
     FROM detections WHERE ${where}${keyset}
     ORDER BY "timestamp" DESC, id DESC LIMIT ${SEARCH_PAGE_SIZE + 1}
   `);

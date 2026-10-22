@@ -278,9 +278,9 @@ describe("console pages read the session with the request's headers (real databa
         const other = await createTestTenant();
         const agent = await createTestAgent(mine.id);
         const grouped = await prisma.case.create({ data: { tenantId: mine.id, title: "T1059 activity", severity: "high", status: "open" } });
-        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", caseId: grouped.id, event: { title: "Encoded <b>PowerShell</b>" } });
+        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", caseId: grouped.id, meta: { title: "Encoded <b>PowerShell</b>" } });
         const theirAgent = await createTestAgent(other.id);
-        await createTestDetection(other.id, theirAgent.id, { technique: "T1059.001", event: { title: "someone else's finding" } });
+        await createTestDetection(other.id, theirAgent.id, { technique: "T1059.001", meta: { title: "someone else's finding" } });
         activeOrganizationId = mine.id;
 
         const html = await render("hunts/search/page", { searchParams: { source: "detections", hours: "24", techniques: "T1059" } });
@@ -339,8 +339,8 @@ describe("console pages read the session with the request's headers (real databa
         const mine = await createTestTenant();
         const other = await createTestTenant();
         const agent = await createTestAgent(mine.id);
-        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", event: { title: "Encoded PowerShell" } });
-        await createTestDetection(mine.id, agent.id, { technique: "T1105", event: { title: "Download" } });
+        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", meta: { title: "Encoded PowerShell" }, event: { cmdline: "powershell -enc AAAA" } });
+        await createTestDetection(mine.id, agent.id, { technique: "T1105", meta: { title: "Download" }, event: { cmdline: "curl http://x" } });
         const h = await hunt(mine.id, "powershell");
         const theirs = await hunt(other.id, "secret hunt name");
         activeOrganizationId = mine.id;
