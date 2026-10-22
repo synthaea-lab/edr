@@ -7,8 +7,8 @@ description: >
   that the process pair alone proves exploitation. Apache ships with macOS but is off by
   default; nginx and PHP come from a package manager, so the common case is a development
   machine.
-  The engine loads every platform's content on every host, so the rule also matches the
-  same lineage on Linux, beside the service-lineage rule of the rule engine (T1059).
+  The agent loads only its own platform's directory, so the rule runs on macOS hosts and
+  does not duplicate the Linux service-lineage rule of the rule engine (T1059).
 tags:
   - attack.initial_access
   - attack.t1190
