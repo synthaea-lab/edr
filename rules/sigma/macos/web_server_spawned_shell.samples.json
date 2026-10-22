@@ -1,0 +1,13 @@
+{
+  "matching": {
+    "parentimage": "/usr/sbin/httpd",
+    "image": "/bin/sh",
+    "cmdline": "sh -c id"
+  },
+  "non_matching": {
+    "parentimage": "/sbin/launchd",
+    "image": "/bin/sh",
+    "cmdline": "sh -c id",
+    "note": "launchd starting a shell is not a web server: the parent is the condition"
+  }
+}

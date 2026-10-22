@@ -34,8 +34,10 @@ store URL is fetched over the network, as for content manifests).
    directory), prints the signing key's public half, and says whether the key embedded
    in this build of `updater` accepts the result; if it does not, agents built with
    that key will refuse the release. The key file holds the 32-byte Ed25519 seed as 64
-   hex characters and must not be readable by group or others. `--test-key` signs with
-   the public checked-in test key, for lab releases only. Content manifests
+   hex characters and must not be readable by group or others, and it must hold one of the
+   public test seeds (ADR-0027: any other key file is refused, and a build without the
+   `test-key` feature takes none). `--test-key` signs with the public checked-in test key, for
+   lab releases only. Content manifests
    (`--kind content`) are signed the same way; they are written by hand or by a
    script, `release-tool` only signs them.
 
@@ -63,7 +65,27 @@ store URL is fetched over the network, as for content manifests).
    who approves a release are the owner's decisions (ADR-0027), not the tool's.
 
    Key generation, custody and rotation are decided in ADR-0027; until the real keys exist
-   the tool signs with whatever key file or test key it is given.
+   the tool signs with the public test keys or with a token.
+
+   **Key rotation (ADR-0027).** A rotation names a new `release` and/or `content` key and the
+   key each replaces, and is signed by the offline `recovery` key and nothing else:
+
+   ```
+   release-tool rotation --release-version 9 --reason "scheduled" \
+       --new-release-key <hex> --retire-release-key <hex> --out rotation.json
+   release-tool sign --kind rotation --pkcs11 <module> --pkcs11-token recovery --pkcs11-key recovery \
+       rotation.json --out rotation-signed.json
+   ```
+
+   On an endpoint, `agent apply-key-rotation` (from the control plane, or `--file`) verifies it
+   against the embedded `recovery` key and the keys in force, and records it in
+   `<state_dir>/key-rotations.json`; from then on the release and content commands and the
+   integrity check use the rotated keys. A rotation takes its number from the release counter
+   (it must be above the installed release and any earlier rotation, and the next release above
+   it) and is applicable for at most 30 days after it is issued. A record that exists and does
+   not verify makes those commands refuse, on purpose: see ADR-0027, "How an install holds the
+   rotated keys", for what absent, older and corrupt records do. The control plane does not serve
+   rotations yet.
 
    **Which key a build trusts (ADR-0027).** An agent embeds a trust set of `release`,
    `content` and `recovery` public keys from `crates/updater/keys/*.pub`. Those files say
