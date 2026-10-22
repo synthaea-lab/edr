@@ -27,10 +27,18 @@
 //! join (`crates/rules/src/sudo.rs`) can still silently miss failures on a host
 //! using either. A host stacking `pam_unix` and `pam_sss` as two authenticators for
 //! the *same* account (not the usual one-module-per-account-source arrangement)
-//! could also double-count one failed password as two — open question, not ruled
-//! out. Neither `pam_unix` nor `pam_sss`'s lines are live-validated against a real
-//! sssd host here (no such host in this dev sandbox) — same documented-format
-//! caveat as the sshd lines above.
+//! would otherwise double-count one failed password as two, and `pam_sss` itself
+//! logs its own "authentication failure" line even for an account it doesn't
+//! manage (`PAM_USER_UNKNOWN`) — both mitigated one level up, in `tail.rs`'s
+//! `ClassifiedJournal` (#881 review, `SherlockOmss` 2026-10-22): a one-line
+//! lookahead retracts a `pam_sss` failure confirmed as `PAM_USER_UNKNOWN` by
+//! [`pam_sss_reports_user_unknown`], and a pid-keyed dedup window drops a second
+//! failure from the same pid as the first double-logged by a second stacked
+//! module. `classify_pam` itself stays a stateless, one-record-at-a-time
+//! classifier — neither mitigation needed state here. Neither `pam_unix` nor
+//! `pam_sss`'s lines are live-validated against a real sssd host here (no such
+//! host in this dev sandbox) — same documented-format caveat as the sshd lines
+//! above.
 
 use crate::JournalRecord;
 
@@ -269,26 +277,17 @@ fn classify_pam(message: &str) -> Option<JournalEvent> {
     // matched: its own log lines (lockout bookkeeping) are a different shape
     // entirely. Both are still open gaps (#881).
     //
-    // Known open question, not resolved here: a host where pam_unix and pam_sss
-    // are BOTH stacked as authenticators for the same account (rather than one
-    // module handling local accounts and the other remote ones, which is the
-    // usual authselect/sssd arrangement) could log two PamAuthFailure events for
-    // one wrong password, double-counting toward sudo.rs's T1548.003 threshold.
-    // Nothing in this crate can tell which arrangement a given host uses from
-    // the journal lines alone.
-    //
-    // Also from the source (review by SherlockOmss, not just the format string):
-    // that logger() line fires for every non-success reply, not only a wrong
-    // password — pam_sss special-cases PAM_USER_UNKNOWN right after it when
-    // deciding whether to also log "received for user %s: %d (%s)", so a "this
-    // account isn't ours" reply produces the same "authentication failure" line
-    // this crate classifies as PamAuthFailure. On a stack where pam_sss is
-    // consulted for an account it doesn't manage before a pam_unix that then
-    // succeeds, the journal carries a failure immediately followed by a
-    // success for the same invocation — exactly the shape sudo.rs's
-    // burst-then-success join looks for. The usual authselect ordering tries
-    // pam_unix first for local accounts, which would avoid this, but nothing
-    // here can confirm a given host's order from the journal lines alone.
+    // Two risks were open here (host stacking pam_unix and pam_sss as two
+    // authenticators for the same account could double-count one wrong password;
+    // pam_sss's own "authentication failure" line also fires for PAM_USER_UNKNOWN,
+    // an account it simply doesn't manage, not a wrong password) — both mitigated
+    // one level up, in tail.rs's ClassifiedJournal, rather than here: this function
+    // stays a stateless, one-record-at-a-time classifier, and both mitigations
+    // need to look at more than one record (a pid-keyed dedup window for the
+    // double-count; a one-line lookahead at the following "received for user
+    // %s: %d (%s)" line for PAM_USER_UNKNOWN, via pam_sss_reports_user_unknown
+    // below). See tail.rs's struct doc for the detail (#881 review, SherlockOmss
+    // 2026-10-22).
     let rest = ["pam_unix(", "pam_sss("]
         .into_iter()
         .find_map(|prefix| message.strip_prefix(prefix))?;
@@ -317,6 +316,40 @@ fn classify_pam(message: &str) -> Option<JournalEvent> {
         });
     }
     None
+}
+
+/// True when `message` is `pam_sss`'s own "received for user %s: %d (...)" line
+/// (`send_and_receive()`, SSSD/sssd@master, checked 2026-10-22) reporting
+/// status 10 (`PAM_USER_UNKNOWN`) for `service` — the line `pam_sss` logs right
+/// after an "authentication failure" line, in the same function call, when the
+/// account it was asked about isn't one it manages. Only suppressed by the
+/// host's `pam_sss.conf` `quiet_mode`, which this crate has no way to detect
+/// from the journal alone — when it's set, this helper simply never confirms,
+/// which is the documented, pre-existing gap, not a new one.
+///
+/// `(pam_sss review, #881)`. Used by `tail.rs`'s one-line lookahead to retract
+/// a just-classified `PamAuthFailure`; not part of the classification
+/// allowlist itself — this line is never, by itself, any `JournalEvent`.
+pub(crate) fn pam_sss_reports_user_unknown(message: &str, service: &str) -> bool {
+    let Some(rest) = message.strip_prefix("pam_sss(") else {
+        return false;
+    };
+    let Some((msg_service, rest)) = rest.split_once(':') else {
+        return false;
+    };
+    if normalize_pam_service(msg_service) != service {
+        return false;
+    }
+    let Some((_, rest)) = rest.split_once("): ") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix("received for user ") else {
+        return false;
+    };
+    let Some((_, status)) = rest.split_once(": ") else {
+        return false;
+    };
+    status.starts_with("10 (")
 }
 
 /// Substring strictly between the first `start` and the next `end` after it.
@@ -843,6 +876,54 @@ mod tests {
              tty=pts/0 ruser=lab rhost=  user=lab",
         )]);
         assert_eq!(classify(&r), None);
+    }
+
+    #[test]
+    fn pam_sss_reports_user_unknown_recognizes_status_ten_for_the_matching_service() {
+        assert!(pam_sss_reports_user_unknown(
+            "pam_sss(sudo:auth): received for user baduser: 10 (User not known to the \
+             underlying authentication module)",
+            "sudo",
+        ));
+    }
+
+    #[test]
+    fn pam_sss_reports_user_unknown_is_false_for_a_different_status() {
+        // Status 7 (PAM_AUTH_ERR, a real wrong password) must not be read as
+        // PAM_USER_UNKNOWN - only the literal "10 (" is the signal.
+        assert!(!pam_sss_reports_user_unknown(
+            "pam_sss(sudo:auth): received for user omss: 7 (Authentication failure)",
+            "sudo",
+        ));
+    }
+
+    #[test]
+    fn pam_sss_reports_user_unknown_is_false_for_a_different_service() {
+        // A su-l's "received for user" line must not confirm a pending sudo failure,
+        // and vice versa - normalize_pam_service still applies on both sides.
+        assert!(!pam_sss_reports_user_unknown(
+            "pam_sss(su-l:auth): received for user baduser: 10 (User not known to the \
+             underlying authentication module)",
+            "sudo",
+        ));
+        assert!(pam_sss_reports_user_unknown(
+            "pam_sss(su-l:auth): received for user baduser: 10 (User not known to the \
+             underlying authentication module)",
+            "su",
+        ));
+    }
+
+    #[test]
+    fn pam_sss_reports_user_unknown_is_false_for_an_unrelated_line() {
+        assert!(!pam_sss_reports_user_unknown(
+            "pam_sss(sudo:auth): authentication failure; logname=omss uid=1000 euid=0 \
+             tty=/dev/pts/2 ruser=omss rhost=  user=omss",
+            "sudo",
+        ));
+        assert!(!pam_sss_reports_user_unknown(
+            "pam_unix(sudo:auth): received for user baduser: 10 (whatever)",
+            "sudo",
+        ));
     }
 
     #[test]
