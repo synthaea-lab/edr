@@ -63,7 +63,7 @@ export type ContentManifest = z.infer<typeof ContentManifest>;
  * regardless of property insertion order, at every nesting level — not just
  * the top one.
  */
-function sortKeysDeep(value: unknown): unknown {
+export function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sortKeysDeep);
   }

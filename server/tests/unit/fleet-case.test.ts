@@ -1,0 +1,321 @@
+import { describe, expect, it } from "vitest";
+import {
+  COMMON_HOST_FRACTION,
+  FLEET_JOIN_WINDOW_MS,
+  type FleetDetection,
+  isCommonHash,
+  joinDetections,
+  joinKeys,
+  MAX_AGENTS_PER_ENTITY,
+  MIN_FLEET_FOR_COMMON,
+} from "@/lib/fleet-case";
+
+const SHA = "a".repeat(64);
+const OTHER_SHA = "b".repeat(64);
+const T0 = new Date("2026-10-20T10:00:00Z");
+const minutes = (n: number) => new Date(T0.getTime() + n * 60_000);
+
+const exec = (sha256: string = SHA) => ({
+  type: "exec",
+  meta: { pid: 100, ppid: 1, comm: "curl", timestamp_ns: 1 },
+  image_path: "/tmp/payload",
+  sha256,
+});
+const logon = (user: string, outcome = "success", kind = "logon") => ({
+  type: "auth",
+  outcome,
+  kind,
+  target_user: user,
+  meta: {},
+});
+const session = (user: string) => ({ type: "session", target_user: user, meta: {} });
+
+let seq = 0;
+function detection(
+  agentId: string,
+  event: unknown,
+  at: Date = T0,
+  severity = "high"
+): FleetDetection {
+  return { id: `d${++seq}`, agentId, timestamp: at, severity, event };
+}
+
+describe("joinKeys", () => {
+  it("an exec with a hash is keyed by the hash, lower-cased", () => {
+    expect(joinKeys("a1", exec(SHA.toUpperCase()), T0)).toEqual([{ kind: "sha256", key: SHA }]);
+  });
+
+  it("an exec with no hash gives no key: a path alone is not an entity worth joining hosts on", () => {
+    const event = { ...exec(), sha256: undefined };
+    expect(joinKeys("a1", event, T0)).toEqual([]);
+  });
+
+  it("a session is keyed by its user, lower-cased", () => {
+    expect(joinKeys("a1", session("Alice"), T0)).toEqual([{ kind: "identity", key: "alice" }]);
+  });
+
+  it.each(["root", "SYSTEM", "NT AUTHORITY\\SYSTEM", "Administrator", "nobody"])(
+    "the generic account %s gives no key: every host has it",
+    (user) => {
+      expect(joinKeys("a1", session(user), T0)).toEqual([]);
+    }
+  );
+
+  it("a successful logon is keyed by its user, lower-cased", () => {
+    expect(joinKeys("a1", logon("Alice"), T0)).toEqual([{ kind: "identity", key: "alice" }]);
+  });
+
+  it.each([
+    ["a failed logon", logon("mallory", "failure", "logon_failure")],
+    ["explicit credentials (su, sudo -u)", logon("mallory", "success", "explicit_credentials")],
+    ["a privileged session (sudo)", logon("mallory", "success", "privileged_session")],
+  ])("%s gives no key: the user name is not proof of who signed in", (_label, event) => {
+    expect(joinKeys("a1", event, T0)).toEqual([]);
+  });
+
+  it.each([
+    "root",
+    "CORP\\Administrator",
+    "WS-01$",
+    "CORP\\WS-01$",
+    "DWM-2",
+    "UMFD-0",
+    "ANONYMOUS LOGON",
+    "NT AUTHORITY\\LOCAL SERVICE",
+  ])("a successful logon of the generic account %s gives no key", (user) => {
+    expect(joinKeys("a1", logon(user), T0)).toEqual([]);
+  });
+
+  it.each(["ubuntu", "ec2-user", "debian", "fedora", "centos", "rocky", "cloud-user", "azureuser", "admin"])(
+    "a successful logon of the default image account %s gives no key: every host built from the image has it",
+    (user) => {
+      expect(joinKeys("a1", logon(user), T0)).toEqual([]);
+    }
+  );
+
+  it("a successful logon of vagrant is a key: the lab VMs sign in as vagrant, and the join has to be provable there", () => {
+    expect(joinKeys("a1", logon("vagrant"), T0)).toEqual([{ kind: "identity", key: "vagrant" }]);
+  });
+
+  it.each(["alice", "CORP\\alice", "svc-backup", "dollar$sign"])(
+    "a successful logon of %s is not mistaken for a generic account",
+    (user) => {
+      expect(joinKeys("a1", logon(user), T0)).toHaveLength(1);
+    }
+  );
+
+  it("two agents' successful logons of one user are one entity, and a failed one joins nothing", () => {
+    const groups = joinDetections([
+      detection("a1", logon("mallory")),
+      detection("a2", logon("Mallory"), minutes(3)),
+      detection("a3", logon("mallory", "failure", "logon_failure"), minutes(4)),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].agentIds).toEqual(["a1", "a2"]);
+  });
+
+  it.each([null, "text", 12, {}, { type: "exec" }, { type: "unknown", sha256: SHA }])(
+    "an event of an unknown shape (%j) gives nothing and no error",
+    (event) => {
+      expect(joinKeys("a1", event, T0)).toEqual([]);
+    }
+  );
+});
+
+describe("joinDetections", () => {
+  it("joins detections of two agents that carry the same hash", () => {
+    const a = detection("a1", exec());
+    const b = detection("a2", exec(), minutes(5));
+
+    const groups = joinDetections([a, b]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].agentIds).toEqual(["a1", "a2"]);
+    expect(groups[0].detectionIds.sort()).toEqual([a.id, b.id].sort());
+    expect(groups[0].entities).toEqual([{ kind: "sha256", key: SHA }]);
+  });
+
+  it("does not join two detections of one agent: that is a host case, not a fleet case", () => {
+    expect(joinDetections([detection("a1", exec()), detection("a1", exec(), minutes(1))])).toEqual([]);
+  });
+
+  it("does not join different hashes", () => {
+    expect(joinDetections([detection("a1", exec()), detection("a2", exec(OTHER_SHA))])).toEqual([]);
+  });
+
+  it("joins on a shared identity too", () => {
+    const groups = joinDetections([
+      detection("a1", session("mallory")),
+      detection("a2", session("Mallory"), minutes(3)),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].entities).toEqual([{ kind: "identity", key: "mallory" }]);
+  });
+
+  it("one group when two entities connect the same agents, and when a third agent bridges two groups", () => {
+    const groups = joinDetections([
+      detection("a1", exec()),
+      detection("a2", exec(), minutes(1)),
+      detection("a2", session("mallory"), minutes(2)),
+      detection("a3", session("mallory"), minutes(3)),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].agentIds).toEqual(["a1", "a2", "a3"]);
+    expect(groups[0].entities).toEqual([
+      { kind: "identity", key: "mallory" },
+      { kind: "sha256", key: SHA },
+    ]);
+  });
+
+  it("keeps unrelated groups apart", () => {
+    const groups = joinDetections([
+      detection("a1", exec()),
+      detection("a2", exec(), minutes(1)),
+      detection("a3", exec(OTHER_SHA)),
+      detection("a4", exec(OTHER_SHA), minutes(1)),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.agentIds)).toEqual([["a1", "a2"], ["a3", "a4"]]);
+  });
+
+  it("takes the highest severity, and the first and last time of the group", () => {
+    const [group] = joinDetections([
+      detection("a1", exec(), minutes(0), "medium"),
+      detection("a2", exec(), minutes(9), "critical"),
+      detection("a3", exec(), minutes(4), "low"),
+    ]);
+
+    expect(group.severity).toBe("critical");
+    expect(group.firstAt).toEqual(minutes(0));
+    expect(group.lastAt).toEqual(minutes(9));
+  });
+
+  describe("the window", () => {
+    it("does not join two sightings of the same entity further apart than the window", () => {
+      const late = new Date(T0.getTime() + FLEET_JOIN_WINDOW_MS + 1);
+      expect(joinDetections([detection("a1", exec()), detection("a2", exec(), late)])).toEqual([]);
+    });
+
+    it("joins them at exactly the window: the bound is inclusive", () => {
+      const edge = new Date(T0.getTime() + FLEET_JOIN_WINDOW_MS);
+      expect(joinDetections([detection("a1", exec()), detection("a2", exec(), edge)])).toHaveLength(1);
+    });
+
+    it("a chain of sightings each within the window of the next is one group, however long", () => {
+      const step = FLEET_JOIN_WINDOW_MS - 1;
+      const groups = joinDetections([
+        detection("a1", exec(), new Date(T0.getTime())),
+        detection("a2", exec(), new Date(T0.getTime() + step)),
+        detection("a3", exec(), new Date(T0.getTime() + 2 * step)),
+      ]);
+      expect(groups).toHaveLength(1);
+      expect(groups[0].agentIds).toEqual(["a1", "a2", "a3"]);
+    });
+  });
+
+  describe("an entity that is everywhere", () => {
+    const fleet = (n: number) =>
+      Array.from({ length: n }, (_, i) => detection(`agent-${String(i).padStart(3, "0")}`, exec(), minutes(i % 5)));
+
+    it("joins up to the cap", () => {
+      const [group] = joinDetections(fleet(MAX_AGENTS_PER_ENTITY));
+      expect(group.agentIds).toHaveLength(MAX_AGENTS_PER_ENTITY);
+    });
+
+    it("joins nothing past the cap: a hash on that many hosts is software, not an intrusion, and one decoy hash must not link the whole fleet", () => {
+      expect(joinDetections(fleet(MAX_AGENTS_PER_ENTITY + 1))).toEqual([]);
+    });
+
+    it("the cap does not stop other entities from joining", () => {
+      const groups = joinDetections([
+        ...fleet(MAX_AGENTS_PER_ENTITY + 1),
+        detection("x1", exec(OTHER_SHA)),
+        detection("x2", exec(OTHER_SHA), minutes(1)),
+      ]);
+      expect(groups).toHaveLength(1);
+      expect(groups[0].entities).toEqual([{ kind: "sha256", key: OTHER_SHA }]);
+    });
+  });
+
+  describe("a hash that most of the fleet runs (#62)", () => {
+    const pair = [detection("a", exec()), detection("b", exec(), minutes(1))];
+    const prevalence = (hostsWithHash: number, reportingHosts: number, sha = SHA) => ({
+      reportingHosts,
+      hostsWithHash: new Map([[sha, hostsWithHash]]),
+    });
+
+    it("joins nothing on a hash that is on half of the reporting hosts or more: it is the system shell, not an intrusion", () => {
+      expect(joinDetections(pair, prevalence(6, 10))).toEqual([]);
+      expect(joinDetections(pair, prevalence(5, 10))).toEqual([]);
+    });
+
+    it("joins on a hash that is on a small part of the fleet", () => {
+      const [group] = joinDetections(pair, prevalence(2, 10));
+      expect(group.agentIds).toEqual(["a", "b"]);
+    });
+
+    it("cannot tell on a fleet too small to judge, and joins: two or three hosts sharing a hash is the signal", () => {
+      expect(joinDetections(pair, prevalence(2, 2))).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(MIN_FLEET_FOR_COMMON - 1, MIN_FLEET_FOR_COMMON - 1))).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(MIN_FLEET_FOR_COMMON, MIN_FLEET_FOR_COMMON))).toEqual([]);
+    });
+
+    it("joins as before when no prevalence is known: a hash with no sighting, or no figures given", () => {
+      expect(joinDetections(pair)).toHaveLength(1);
+      expect(joinDetections(pair, prevalence(0, 10))).toHaveLength(1);
+      expect(joinDetections(pair, { reportingHosts: 10, hostsWithHash: new Map() })).toHaveLength(1);
+    });
+
+    it("only the common hash is dropped: another entity of the same detections still joins", () => {
+      const groups = joinDetections(
+        [
+          detection("a", exec()),
+          detection("b", exec(), minutes(1)),
+          detection("c", exec(OTHER_SHA)),
+          detection("d", exec(OTHER_SHA), minutes(1)),
+        ],
+        prevalence(8, 10)
+      );
+      expect(groups).toHaveLength(1);
+      expect(groups[0].entities).toEqual([{ kind: "sha256", key: OTHER_SHA }]);
+    });
+
+    it("never applies to an identity, which has no sightings to count", () => {
+      const groups = joinDetections(
+        [detection("a", session("alice")), detection("b", session("alice"), minutes(1))],
+        prevalence(10, 10)
+      );
+      expect(groups).toHaveLength(1);
+    });
+
+    it("isCommonHash is the whole rule: at the fraction of a fleet big enough, and not below", () => {
+      expect(isCommonHash(5, 10)).toBe(true);
+      expect(isCommonHash(4, 10)).toBe(false);
+      expect(isCommonHash(1, 0)).toBe(false);
+      expect(COMMON_HOST_FRACTION).toBeGreaterThan(0);
+      expect(COMMON_HOST_FRACTION).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it("gives the same groups whatever the order of the input", () => {
+    const input = [
+      detection("a1", exec(), minutes(0)),
+      detection("a2", exec(), minutes(1)),
+      detection("a2", session("mallory"), minutes(2)),
+      detection("a3", session("mallory"), minutes(3)),
+      detection("a4", exec(OTHER_SHA)),
+      detection("a5", exec(OTHER_SHA), minutes(2)),
+    ];
+    const forward = joinDetections(input);
+
+    expect(joinDetections([...input].reverse())).toEqual(forward);
+    expect(joinDetections([input[3], input[0], input[5], input[2], input[4], input[1]])).toEqual(forward);
+  });
+
+  it("detections that carry no entity are ignored", () => {
+    expect(joinDetections([detection("a1", { test: "data" }), detection("a2", { test: "data" })])).toEqual([]);
+  });
+});

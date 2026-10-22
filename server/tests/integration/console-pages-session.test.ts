@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { cleanDatabase, createTestAgent, createTestTenant, prisma } from "../helpers/db";
+import { cleanDatabase, createTestAgent, createTestDetection, createTestTenant, prisma } from "../helpers/db";
 
 // Every console page reads its tenant from the session. Like the real one, `getSession` refuses a
 // call without the request's headers; the pages called it bare, so once a user could sign in
@@ -125,6 +125,8 @@ describe("console pages read the session with the request's headers (real databa
       ["hunts/page", {}],
       ["hunts/[id]/page", { params: { id: "x" } }],
       ["hunts/new/page", {}],
+      ["hunts/search/page", { searchParams: {} }],
+      ["hunts/[id]/matches/page", { params: { id: "x" }, searchParams: {} }],
       ["hunts/[id]/edit/page", { params: { id: "x" } }],
       ["cases/[id]/page", { params: { id: "x" } }],
     ] as const) {
@@ -166,6 +168,19 @@ describe("console pages read the session with the request's headers (real databa
       expect(html).toContain("never ran");
       expect(html).toContain("Never run");
       expect(html).not.toContain("someone else's hunt");
+    });
+
+    it("offers to delete each of the tenant's hunts, naming it, and escapes the name", async () => {
+      const tenant = await createTestTenant();
+      await hunt(tenant.id, "plain hunt");
+      await hunt(tenant.id, "<img src=x> hunt");
+      activeOrganizationId = tenant.id;
+
+      const html = await render("hunts/page");
+
+      expect(html).toContain('aria-label="Delete plain hunt"');
+      expect(html).toContain('aria-label="Delete &lt;img src=x&gt; hunt"');
+      expect(html).not.toContain("<img src=x>");
     });
 
     it("shows a run in flight as running and keeps the numbers of the run before it, a failed one as failed", async () => {
@@ -244,6 +259,116 @@ describe("console pages read the session with the request's headers (real databa
       expect(html).toMatch(/<td[^>]*>9<\/td>/);
       expect(html).toMatch(/<td[^>]*>3<\/td>/);
       expect(html.match(/from \d{4}-/g)).toHaveLength(1);
+    });
+
+    describe("search and a hunt's matches (#61)", () => {
+
+      it("shows the form and nothing else on a first visit", async () => {
+        const tenant = await createTestTenant();
+        activeOrganizationId = tenant.id;
+        const html = await render("hunts/search/page", { searchParams: {} });
+        expect(html).toContain("Search in");
+        expect(html).toContain('name="hours"');
+        expect(html).not.toContain("Nothing matches");
+        expect(html).not.toContain('role="alert"');
+      });
+
+      it("lists the detections a search matches, with the rule title and the case, never another tenant's", async () => {
+        const mine = await createTestTenant();
+        const other = await createTestTenant();
+        const agent = await createTestAgent(mine.id);
+        const grouped = await prisma.case.create({ data: { tenantId: mine.id, title: "T1059 activity", severity: "high", status: "open" } });
+        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", caseId: grouped.id, meta: { title: "Encoded <b>PowerShell</b>" } });
+        const theirAgent = await createTestAgent(other.id);
+        await createTestDetection(other.id, theirAgent.id, { technique: "T1059.001", meta: { title: "someone else's finding" } });
+        activeOrganizationId = mine.id;
+
+        const html = await render("hunts/search/page", { searchParams: { source: "detections", hours: "24", techniques: "T1059" } });
+
+        expect(html).toContain("1 detection matches.");
+        expect(html).toContain("T1059.001");
+        expect(html).toContain("Encoded &lt;b&gt;PowerShell&lt;/b&gt;");
+        expect(html).not.toContain("<b>PowerShell</b>");
+        expect(html).toContain(`href="/console/cases/${grouped.id}"`);
+        expect(html).toContain("T1059 activity");
+        expect(html).not.toContain("someone else's finding");
+      });
+
+      it("says in the validator's words why a form is not a query, and runs nothing", async () => {
+        const tenant = await createTestTenant();
+        activeOrganizationId = tenant.id;
+        const html = await render("hunts/search/page", { searchParams: { source: "detections", hours: "0" } });
+        expect(html).toContain('role="alert"');
+        expect(html).toContain("query.lastHours must be an integer from 1 to 2160");
+        expect(html).not.toContain("Nothing matches");
+      });
+
+      it("searches cases, escapes their titles, and links them", async () => {
+        const tenant = await createTestTenant();
+        const c = await prisma.case.create({ data: { tenantId: tenant.id, title: "<script>alert(1)</script> ransomware", severity: "critical", status: "open" } });
+        activeOrganizationId = tenant.id;
+
+        const html = await render("hunts/search/page", { searchParams: { source: "cases", hours: "24", text: "ransomware", status: "open" } });
+
+        expect(html).toContain("1 case matches.");
+        expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+        expect(html).not.toContain("<script>alert(1)");
+        expect(html).toContain(`href="/console/cases/${c.id}"`);
+      });
+
+      it("links to the older page of a long result, and the older page has no further link", async () => {
+        const tenant = await createTestTenant();
+        const agent = await createTestAgent(tenant.id);
+        const base = Date.now() - 3_600_000;
+        for (let i = 0; i < 51; i++) await createTestDetection(tenant.id, agent.id, { timestamp: new Date(base - i * 1000) });
+        activeOrganizationId = tenant.id;
+
+        const first = await render("hunts/search/page", { searchParams: { source: "detections", hours: "24" } });
+        expect(first).toContain("51 detections match.");
+        const link = /href="(\?[^"]*cursor=[^"]+)"/.exec(first)?.[1];
+        expect(link).toBeTruthy();
+        expect(link).toContain("source=detections");
+
+        const cursor = new URLSearchParams(link!.replace(/&amp;/g, "&")).get("cursor")!;
+        const second = await render("hunts/search/page", { searchParams: { source: "detections", hours: "24", cursor } });
+        expect(second).not.toContain("Older");
+        expect(second).not.toContain("detections match.");
+      });
+
+      it("lists what a saved hunt matches now, and answers not found for another tenant's hunt", async () => {
+        const mine = await createTestTenant();
+        const other = await createTestTenant();
+        const agent = await createTestAgent(mine.id);
+        await createTestDetection(mine.id, agent.id, { technique: "T1059.001", meta: { title: "Encoded PowerShell" }, event: { cmdline: "powershell -enc AAAA" } });
+        await createTestDetection(mine.id, agent.id, { technique: "T1105", meta: { title: "Download" }, event: { cmdline: "curl http://x" } });
+        const h = await hunt(mine.id, "powershell");
+        const theirs = await hunt(other.id, "secret hunt name");
+        activeOrganizationId = mine.id;
+
+        const html = await render("hunts/[id]/matches/page", { params: { id: h.id }, searchParams: {} });
+
+        expect(html).toContain("Encoded PowerShell");
+        expect(html).not.toContain("Download");
+        expect(html).toContain("last 7 d · T1059 · high");
+        await expect(render("hunts/[id]/matches/page", { params: { id: theirs.id }, searchParams: {} })).rejects.toThrow("not found");
+      });
+
+      it("tells the analyst to edit a hunt whose stored query no longer parses", async () => {
+        const tenant = await createTestTenant();
+        const h = await prisma.hunt.create({ data: { tenantId: tenant.id, ownerId: "a", name: "old", query: { version: 99, lastHours: 2 } } });
+        activeOrganizationId = tenant.id;
+        const html = await render("hunts/[id]/matches/page", { params: { id: h.id }, searchParams: {} });
+        expect(html).toContain("no longer parses");
+        expect(html).not.toContain("Nothing matches");
+      });
+
+      it("links to the search from the list and to the matches from a hunt", async () => {
+        const tenant = await createTestTenant();
+        const h = await hunt(tenant.id, "linked");
+        activeOrganizationId = tenant.id;
+        expect(await render("hunts/page")).toContain('href="/console/hunts/search"');
+        expect(await render("hunts/[id]/page", { params: { id: h.id } })).toContain(`href="/console/hunts/${h.id}/matches"`);
+      });
     });
 
     describe("the create and edit pages", () => {

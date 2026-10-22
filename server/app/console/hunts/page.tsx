@@ -1,3 +1,4 @@
+import { DeleteHuntButton } from "@/components/DeleteHuntButton";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { describeQuery, describeSchedule, formatTime, runState, STATE_LABEL, STATE_STYLE } from "@/lib/hunt-view";
@@ -51,12 +52,20 @@ export default async function HuntsPage() {
             detections that match in its window, and how many of them arrived since the previous run.
           </p>
         </div>
-        <a
-          href="/console/hunts/new"
-          className="shrink-0 px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
-        >
-          New hunt
-        </a>
+        <div className="flex shrink-0 gap-2">
+          <a
+            href="/console/hunts/search"
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-800 hover:bg-gray-50"
+          >
+            Search
+          </a>
+          <a
+            href="/console/hunts/new"
+            className="px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+          >
+            New hunt
+          </a>
+        </div>
       </div>
 
       {hunts.length === 0 ? (
@@ -75,6 +84,7 @@ export default async function HuntsPage() {
                 <th className="px-4 py-2">Last run</th>
                 <th className="px-4 py-2 text-right">Matches</th>
                 <th className="px-4 py-2 text-right">New</th>
+                <th className="px-4 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -113,6 +123,9 @@ export default async function HuntsPage() {
                       {from}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-900">{withResult ? withResult.newMatchCount : "–"}</td>
+                    <td className="px-4 py-2 text-right">
+                      <DeleteHuntButton huntId={hunt.id} name={hunt.name} />
+                    </td>
                   </tr>
                 );
               })}
