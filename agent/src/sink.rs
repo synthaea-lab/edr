@@ -4271,6 +4271,19 @@ rule response_marker {
     /// not just any temp dir) matching on an image path no other rule in
     /// this crate's tests, or `crates/rules`' deterministic checks, would
     /// ever incidentally match.
+    /// The directory a test writes its Sigma rule to: the one the agent reads on the host it
+    /// runs on (`Platform::rule_dirs`, #980), not a fixed `linux/`: a Windows host loads only
+    /// `windows/`, so a rule written elsewhere is never loaded. The rule below matches the
+    /// image path of a synthetic exec event (`/opt/reload-content-marker`), so it fires on
+    /// any host once it is loaded.
+    fn host_sigma_dir(dir: &std::path::Path) -> std::path::PathBuf {
+        let platform = sigma::Platform::host().expect("tests run on a platform with rules");
+        dir.join("content")
+            .join("rules")
+            .join("sigma")
+            .join(platform.rule_dirs()[0])
+    }
+
     const RELOAD_TEST_SIGMA_RULE: &str = r#"
 title: reload-content test marker rule
 tags:
@@ -4298,11 +4311,7 @@ detection:
             "no sigma engine should be loaded before the first reload"
         );
 
-        let sigma_dir = dir
-            .join("content")
-            .join("rules")
-            .join("sigma")
-            .join("linux");
+        let sigma_dir = host_sigma_dir(&dir);
         std::fs::create_dir_all(&sigma_dir).unwrap();
         std::fs::write(sigma_dir.join("marker.yml"), RELOAD_TEST_SIGMA_RULE).unwrap();
 
@@ -4329,11 +4338,7 @@ detection:
     /// (#131): the rule below is `critical` and must still never terminate anything.
     fn critical_sigma_sink(name: &str) -> (std::path::PathBuf, Arc<DetectionSink>) {
         let dir = tmp(name);
-        let sigma_dir = dir
-            .join("content")
-            .join("rules")
-            .join("sigma")
-            .join("linux");
+        let sigma_dir = host_sigma_dir(&dir);
         std::fs::create_dir_all(&sigma_dir).unwrap();
         std::fs::write(
             sigma_dir.join("critical.yml"),
@@ -4899,11 +4904,7 @@ rule reload_content_test_marker {
     fn reload_content_drops_a_rule_whose_file_was_removed() {
         let dir = tmp("reload-remove");
         let sink = sink_in(&dir);
-        let sigma_dir = dir
-            .join("content")
-            .join("rules")
-            .join("sigma")
-            .join("linux");
+        let sigma_dir = host_sigma_dir(&dir);
         std::fs::create_dir_all(&sigma_dir).unwrap();
         std::fs::write(sigma_dir.join("marker.yml"), RELOAD_TEST_SIGMA_RULE).unwrap();
         assert_eq!(sink.reload_content().sigma_rule_count, Some(1));
