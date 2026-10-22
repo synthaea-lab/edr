@@ -19,22 +19,49 @@ use crate::{
     parse_record,
 };
 
-/// Distinct `(pid, realtime_us)` pairs remembered for [`is_duplicate_pam_failure`].
-/// Small on purpose: only recent, nearby-in-time entries are ever looked up, so
-/// nothing is lost by evicting the oldest once a host has enough concurrent
-/// `sudo`/`su` invocations in flight to fill this.
+/// Distinct `(pid, module, realtime_us)` entries remembered for
+/// [`is_duplicate_pam_failure`]. Small on purpose: only recent, nearby-in-time
+/// entries are ever looked up, so nothing is lost by evicting the oldest once a
+/// host has enough concurrent `sudo`/`su` invocations in flight to fill this.
 const RECENT_PAM_FAILURES_CAP: usize = 64;
-/// How close two `PamAuthFailure`s from the same pid have to be to treat the
-/// second as the first double-logged by a second stacked PAM module, not a
-/// second real attempt (#881 review, `SherlockOmss` 2026-10-22: `pam_unix` and
-/// `pam_sss` both authenticating one account would otherwise double-count one
-/// wrong password toward `sudo.rs`'s T1548.003 threshold). One second is a
-/// reasoned guess, not a measurement from a real stacked host: two PAM modules
-/// called synchronously in the same libpam stack evaluation log within
-/// microseconds of each other in practice, while even a fast human's second
-/// password attempt takes noticeably longer — but nothing here has verified
-/// that gap against a real sssd-stacked `sudo`.
+/// How close two `PamAuthFailure`s from the same pid but **different** PAM
+/// modules have to be to treat the second as the first double-logged by a
+/// second stacked module, not a second real attempt (#881 review,
+/// `SherlockOmss` 2026-10-22: `pam_unix` and `pam_sss` both authenticating one
+/// account would otherwise double-count one wrong password toward `sudo.rs`'s
+/// T1548.003 threshold). Module, not just pid, is the signal that matters here:
+/// `sudo`'s own password retries reuse the *same* pid and the *same* module for
+/// each real attempt (see `agent`'s `sudo_join_tests::five_failed_sudo_passwords_then_a_success_alert_once`,
+/// which spaces five genuine same-module failures exactly one second apart on
+/// one pid) — pid alone would have wrongly folded those into one. Two PAM
+/// modules stacked for the one account instead both log their own failure line
+/// from within the *same* libpam stack evaluation, microseconds apart; one
+/// second is a reasoned guess at a safe upper bound on that gap, not a
+/// measurement from a real stacked host — nothing here has verified it against
+/// a real sssd-stacked `sudo`.
 const DOUBLE_LOG_DEDUP_WINDOW_US: u64 = 1_000_000;
+
+/// Which PAM module logged a `PamAuthFailure` line — the signal
+/// [`ClassifiedJournal::is_duplicate_pam_failure`] keys on, since only a
+/// *different* module for the same pid in the same instant indicates one
+/// attempt double-logged by two stacked authenticators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PamModule {
+    Unix,
+    Sss,
+}
+
+/// The PAM module that logged `message`, if any — `None` for a record this
+/// crate doesn't otherwise treat as PAM-sourced.
+fn pam_module(message: &str) -> Option<PamModule> {
+    if message.starts_with("pam_unix(") {
+        Some(PamModule::Unix)
+    } else if message.starts_with("pam_sss(") {
+        Some(PamModule::Sss)
+    } else {
+        None
+    }
+}
 
 /// Reads classified events out of any line-oriented `journalctl -o json` source.
 /// Generic over [`BufRead`] so tests feed canned journal captures without a real
@@ -62,9 +89,9 @@ pub struct ClassifiedJournal<R> {
     /// Carries the normalized service (`"sudo"`/`"su"`) the failure matched, to
     /// compare against [`pam_sss_reports_user_unknown`].
     pending_sss_failure: Option<(JournalRecord, JournalEvent, String)>,
-    /// `(pid, realtime_us)` of recently yielded `PamAuthFailure`s, oldest first —
-    /// see [`is_duplicate_pam_failure`].
-    recent_pam_failures: VecDeque<(u32, u64)>,
+    /// `(pid, module, realtime_us)` of recently yielded `PamAuthFailure`s,
+    /// oldest first — see [`is_duplicate_pam_failure`].
+    recent_pam_failures: VecDeque<(u32, PamModule, u64)>,
 }
 
 impl<R: BufRead> ClassifiedJournal<R> {
@@ -119,24 +146,36 @@ impl<R: BufRead> ClassifiedJournal<R> {
         }
     }
 
-    /// True when `pid`/`realtime_us` are close enough in time to an already-
-    /// yielded `PamAuthFailure` from the same pid to be the same attempt,
-    /// double-logged by a second stacked PAM module rather than a second real
-    /// one — and, if not, remembers this one for the next call. A record with
-    /// no parseable `_PID` is never treated as a duplicate: there is nothing to
-    /// correlate it against, and silently dropping an event over a missing
-    /// optional field is worse than double-counting it.
+    /// True when `record` shares a pid with an already-yielded `PamAuthFailure`
+    /// from a **different** PAM module, close enough in time to be the same
+    /// attempt double-logged by a second stacked module rather than a second
+    /// real one — and, if not, remembers this one for the next call. Two
+    /// failures from the same pid and the *same* module (e.g. `sudo`'s own
+    /// password retries, all `pam_unix`) are never treated as duplicates
+    /// regardless of spacing: pid alone doesn't distinguish a double-log from a
+    /// second real attempt, only the module does. A record with no parseable
+    /// `_PID`, or no recognized PAM module prefix, is never treated as a
+    /// duplicate: there is nothing to correlate it against, and silently
+    /// dropping an event over a missing optional field is worse than
+    /// double-counting it.
     fn is_duplicate_pam_failure(&mut self, record: &JournalRecord) -> bool {
         let Some(pid) = record.pid.as_deref().and_then(|p| p.parse::<u32>().ok()) else {
             return false;
         };
-        let is_duplicate = self.recent_pam_failures.iter().any(|&(seen_pid, seen_us)| {
-            seen_pid == pid
-                && record.realtime_us.saturating_sub(seen_us) <= DOUBLE_LOG_DEDUP_WINDOW_US
-        });
+        let Some(module) = pam_module(&record.message) else {
+            return false;
+        };
+        let is_duplicate =
+            self.recent_pam_failures
+                .iter()
+                .any(|&(seen_pid, seen_module, seen_us)| {
+                    seen_pid == pid
+                        && seen_module != module
+                        && record.realtime_us.saturating_sub(seen_us) <= DOUBLE_LOG_DEDUP_WINDOW_US
+                });
         if !is_duplicate {
             self.recent_pam_failures
-                .push_back((pid, record.realtime_us));
+                .push_back((pid, module, record.realtime_us));
             if self.recent_pam_failures.len() > RECENT_PAM_FAILURES_CAP {
                 self.recent_pam_failures.pop_front();
             }
@@ -439,6 +478,32 @@ mod tests {
             it.next().is_none(),
             "same pid, 0.5s apart: pam_unix and pam_sss double-logging one attempt"
         );
+    }
+
+    #[test]
+    fn repeated_same_module_failures_from_the_same_pid_are_never_deduped() {
+        // Regression pin (caught by agent's own
+        // sudo_join_tests::five_failed_sudo_passwords_then_a_success_alert_once):
+        // `sudo` retrying a wrong password reuses the same pid and the same PAM
+        // module for every real attempt — pid alone, without the module check,
+        // wrongly folded these five distinct failures down to one.
+        let input = (1..=5)
+            .map(|second| {
+                format!(
+                    r#"{{"__CURSOR":"c{second}","__REALTIME_TIMESTAMP":"{}","SYSLOG_IDENTIFIER":"sudo","_PID":"100","MESSAGE":"pam_unix(sudo:auth): authentication failure; logname=omss uid=1000 euid=0 tty=/dev/pts/2 ruser=omss rhost=  user=omss"}}"#,
+                    second * 1_000_000
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut it = ClassifiedJournal::new(Cursor::new(input));
+        for expected_cursor in ["c1", "c2", "c3", "c4", "c5"] {
+            let (record, event) = it.next().unwrap().unwrap();
+            assert_eq!(record.cursor, expected_cursor);
+            assert!(matches!(event, JournalEvent::PamAuthFailure { .. }));
+        }
+        assert!(it.next().is_none());
     }
 
     #[test]
