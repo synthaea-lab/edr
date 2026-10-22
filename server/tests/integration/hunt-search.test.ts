@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { cleanDatabase, createTestAgent, createTestDetection, createTestTenant, prisma } from "../helpers/db";
 import { createTenantHeaders } from "../helpers/http";
 import { POST as searchRoute } from "@/app/api/hunts/search/route";
@@ -27,8 +27,8 @@ function post(tenantId: string, body: unknown) {
 const ids = (page: SearchPage) => page.rows.map((r) => r.id);
 const detectionRows = (page: SearchPage) => page.rows as DetectionRow[];
 
-async function run(tenantId: string, request: SearchRequest): Promise<SearchPage> {
-  const outcome = await searchWithinLimit(prisma, tenantId, request);
+async function run(tenantId: string, request: SearchRequest, client: PrismaClient = prisma): Promise<SearchPage> {
+  const outcome = await searchWithinLimit(client, tenantId, request);
   if (outcome.status !== "ok") throw new Error("busy");
   return outcome.page;
 }
@@ -129,30 +129,65 @@ describe("ad-hoc search over detections and cases (real database)", () => {
     expect(detectionRows(page)[0].title).toBe("x".repeat(200));
   });
 
-  it("pages through every match exactly once, also when many share one timestamp", async () => {
+  it("pages through every match exactly once with a non-UTC database session, also when many share one timestamp", async () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
-    const base = Date.now() - HOUR;
+    const now = Date.now();
+    const base = now - HOUR;
     const created: string[] = [];
     for (let i = 0; i < 60; i++) created.push((await createTestDetection(tenant.id, agent.id, { timestamp: new Date(base) })).id);
     for (let i = 0; i < 45; i++) created.push((await createTestDetection(tenant.id, agent.id, { timestamp: new Date(base - (i + 1) * 1000) })).id);
 
-    const seen: string[] = [];
-    let cursor: string | undefined;
-    const sizes: number[] = [];
-    const totals: (number | null)[] = [];
-    do {
-      const page = await run(tenant.id, { source: "detections", query: huntQuery, cursor });
-      seen.push(...ids(page));
-      sizes.push(page.rows.length);
-      totals.push(page.total);
-      cursor = page.nextCursor ?? undefined;
-    } while (cursor);
+    const testUrl = new URL(process.env.DATABASE_URL!);
+    testUrl.searchParams.set("connection_limit", "1");
+    const nonUtcClient = new PrismaClient({ datasources: { db: { url: testUrl.toString() } } });
+    try {
+      await nonUtcClient.$executeRawUnsafe("SET TIME ZONE 'Europe/Paris'");
+      const [{ zone }] = await nonUtcClient.$queryRaw<{ zone: string }[]>(Prisma.sql`SELECT current_setting('TimeZone') AS zone`);
+      expect(zone).toBe("Europe/Paris");
 
-    expect(sizes).toEqual([SEARCH_PAGE_SIZE, SEARCH_PAGE_SIZE, 105 - 2 * SEARCH_PAGE_SIZE]);
-    expect(totals).toEqual([105, null, null]);
-    expect(new Set(seen).size).toBe(105);
-    expect([...seen].sort()).toEqual([...created].sort());
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      const sizes: number[] = [];
+      const totals: (number | null)[] = [];
+      do {
+        const page = await run(tenant.id, { source: "detections", query: huntQuery, cursor }, nonUtcClient);
+        if (cursor) expect(page.nextCursor).not.toBe(cursor);
+        seen.push(...ids(page));
+        sizes.push(page.rows.length);
+        totals.push(page.total);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+
+      expect(sizes).toEqual([SEARCH_PAGE_SIZE, SEARCH_PAGE_SIZE, 105 - 2 * SEARCH_PAGE_SIZE]);
+      expect(totals).toEqual([105, null, null]);
+      expect(new Set(seen).size).toBe(105);
+      expect([...seen].sort()).toEqual([...created].sort());
+
+      await prisma.case.createMany({
+        data: Array.from({ length: SEARCH_PAGE_SIZE + 5 }, (_, i) => ({
+          tenantId: tenant.id, title: `case ${i}`, severity: "high", status: "open", createdAt: new Date(base),
+        })),
+      });
+      const caseQuery = { kind: "cases" as const, version: 1 as const, lastHours: 24 };
+      const first = await run(tenant.id, { source: "cases", query: caseQuery }, nonUtcClient);
+      const second = await run(tenant.id, { source: "cases", query: caseQuery, cursor: first.nextCursor! }, nonUtcClient);
+      expect([first.rows.length, second.rows.length]).toEqual([SEARCH_PAGE_SIZE, 5]);
+      expect(new Set([...ids(first), ...ids(second)]).size).toBe(SEARCH_PAGE_SIZE + 5);
+      expect(second.nextCursor).toBeNull();
+
+      await createTestDetection(tenant.id, agent.id, { technique: "T1486", timestamp: new Date(now - 23 * HOUR) });
+      await createTestDetection(tenant.id, agent.id, { technique: "T1486", timestamp: new Date(now - 25 * HOUR) });
+      expect((await run(tenant.id, { source: "detections", query: { ...huntQuery, techniques: ["T1486"] } }, nonUtcClient)).total).toBe(1);
+      await prisma.case.createMany({
+        data: [23, 25].map((hours) => ({
+          tenantId: tenant.id, title: `edge ${hours}`, severity: "high", status: "investigating", createdAt: new Date(now - hours * HOUR),
+        })),
+      });
+      expect((await run(tenant.id, { source: "cases", query: { ...caseQuery, statuses: ["investigating"] } }, nonUtcClient)).total).toBe(1);
+    } finally {
+      await nonUtcClient.$disconnect();
+    }
   });
 
   it("finds cases by window, severity, status, technique of a detection and text, with their detection count", async () => {

@@ -222,6 +222,9 @@ export async function searchWithinLimit(
   return prisma.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${statementTimeoutMs}`);
+      // Prisma stores DateTime as a UTC timestamp without time zone. Bind dates against
+      // that same clock even when the PostgreSQL session uses another time zone.
+      await tx.$executeRawUnsafe("SET LOCAL TIME ZONE 'UTC'");
       let admitted = false;
       for (let slot = 0; slot < MAX_CONCURRENT_SEARCHES_PER_TENANT && !admitted; slot++) {
         const [{ ok }] = await tx.$queryRaw<{ ok: boolean }[]>(
