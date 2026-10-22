@@ -8,7 +8,7 @@ use std::{
 };
 
 use schema::{
-    AuthEvent, AuthKind, AuthOutcome, ConnectEvent, Event, ExecEvent,
+    AuthEvent, AuthKind, AuthOutcome, ConnectEvent, DnsQueryEvent, Event, ExecEvent,
     FLAG_PERSISTENCE_TASK_ACTION_UNKNOWN, FileDeleteEvent, FileOpenEvent, FileQuarantineEvent,
     FileRenameEvent, FileWriteEvent, ListenPortEvent, MemfdCreateEvent, NetworkFlowEvent, O_CREAT,
     POLICY_MECHANISM_SELINUX, PolicyDenialEvent, SessionEvent, SessionState, User,
@@ -19,25 +19,27 @@ use store::BoundedMap;
 use crate::{
     Alert,
     credfiles::{self, CredFile},
+    egressdomain::{self, DomainClass},
     exclusions::{
         AGENT_CHILD_EXCLUSIONS, APK_STAGING_FILE_PREFIX, ARCHIVE_EGRESS_WINDOW_NS,
         ARCHIVE_READ_WINDOW_NS, ARCHIVE_STAGED_BYTES, ARCHIVE_SUFFIXES, AUTH_FAILURE_THRESHOLD,
         AUTH_FAILURE_WINDOW_NS, BEACON_THRESHOLD, BEACON_WINDOW_NS, BROWSERS,
         BURST_WRITE_BYTES_THRESHOLD, COMPRESSION_DRIVER_COMMS, COMPRESSION_SUFFIXES,
         COMPRESSOR_COMMS, CREATE_UNLINK_HISTORY_PER_PID, CREATE_UNLINK_PAIR_WINDOW_NS,
-        CREATE_UNLINK_PID_CAP, CREDENTIAL_READ_ALERT_WINDOW_NS, DOWNLOAD_EXEC_WINDOW_NS,
-        DOWNLOADER_COMMS, EGRESS_BYTES_THRESHOLD, EGRESS_WINDOW_NS, IN_PLACE_EDIT_COMMS,
-        LOLBIN_LEGIT_PARENTS, LOLBINS, MAILDIR_FLAG_LETTERS, MEMFD_EXEC_WINDOW_NS,
-        PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, POLICY_DENIAL_ALERT_CAP,
-        QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX,
-        RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD,
-        SCAN_SPREAD_WINDOW_NS, SCAN_VERTICAL_THRESHOLD, SCAN_VERTICAL_WINDOW_NS,
-        SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_SCRIPT_HOSTS,
-        SELF_SPAWN_THRESHOLD, SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS,
-        SERVICE_COMM_PREFIXES, SERVICE_COMMS, SHELL_COMMS, STAGING_PID_CAP, STAGING_READ_DIRS,
-        STAGING_READ_FILES, STAGING_WINDOW_NS, STAGING_WRITE_FILES, STANDARD_PORTS,
-        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
-        TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
+        CREATE_UNLINK_PID_CAP, CREDENTIAL_READ_ALERT_WINDOW_NS, DNS_CLASS_WINDOW_NS,
+        DOWNLOAD_EXEC_WINDOW_NS, DOWNLOADER_COMMS, EGRESS_BYTES_THRESHOLD,
+        EGRESS_CLASSED_BYTES_THRESHOLD, EGRESS_DOMAIN_BROWSER_COMMS, EGRESS_WINDOW_NS,
+        IN_PLACE_EDIT_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MAILDIR_FLAG_LETTERS,
+        MEMFD_EXEC_WINDOW_NS, PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES,
+        POLICY_DENIAL_ALERT_CAP, QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES,
+        RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS,
+        SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS, SCAN_VERTICAL_THRESHOLD,
+        SCAN_VERTICAL_WINDOW_NS, SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS,
+        SELF_SPAWN_SCRIPT_HOSTS, SELF_SPAWN_THRESHOLD, SELF_SPAWN_TRUSTED_THRESHOLD,
+        SELF_SPAWN_WINDOW_NS, SERVICE_COMM_PREFIXES, SERVICE_COMMS, SHELL_COMMS, STAGING_PID_CAP,
+        STAGING_READ_DIRS, STAGING_READ_FILES, STAGING_WINDOW_NS, STAGING_WRITE_FILES,
+        STANDARD_PORTS, SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN,
+        TASK_REGISTRATION_DEDUP_WINDOW_NS, TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
     },
     has_write_intent,
     rdp::RdpSuccessAfterFailures,
@@ -54,6 +56,19 @@ use crate::{
 struct EgressVolume {
     sum: SlidingSum,
     last_alert_ns: Option<u64>,
+    /// The last EGRESS-DOMAIN alert for this entry, kept apart from `last_alert_ns` so that
+    /// one finding does not hide the other.
+    last_class_alert_ns: Option<u64>,
+}
+
+/// A storage or paste service a pid resolved, and the address its lookup returned
+/// (EGRESS-DOMAIN). Keyed by (pid, address) in `RuleState::dns_class`.
+struct DnsClassSighting {
+    generation: Option<u64>,
+    class: DomainClass,
+    /// The name the process asked for, kept for the alert message.
+    domain: String,
+    timestamp_ns: u64,
 }
 
 /// The archive a pid has open for writing (ARCHIVE-EXFIL).
@@ -257,6 +272,10 @@ pub struct RuleState {
     /// key leaves the port out on purpose: an exfiltration split over many connections
     /// to one host is the shape to catch. LRU-bounded.
     egress_volume: BoundedMap<(String, IpAddr), EgressVolume>,
+    /// (pid, address) → the storage or paste service that pid resolved to that address, for
+    /// EGRESS-DOMAIN (T1567, #380). Only a lookup of a listed service is recorded, so the
+    /// history grows with those, not with all DNS; LRU-bounded like every other table.
+    dns_class: BoundedMap<(u32, IpAddr), DnsClassSighting>,
     /// pid → the archive it opened for writing and the bytes it has written since, for
     /// ARCHIVE-EXFIL (T1560/T1041, #380). `FileWriteEvent` carries no path, so the bytes
     /// are everything the pid writes (any fd): an archiver's output dominates them, a
@@ -273,6 +292,14 @@ pub struct RuleState {
     /// staging directories are recorded (see [`staging::staging_dir`]). LRU-bounded by
     /// [`STAGING_PID_CAP`].
     staging_dirs: BoundedMap<(u32, String), StagingDir>,
+    /// pid → the lineage it was exec'd under, for the rules that see a process later
+    /// (SSH-FANOUT reads it on the process's connects). LRU-bounded.
+    exec_lineage: BoundedMap<u32, crate::recon::ExecLineage>,
+    /// Lineage → distinct SSH destinations, for SSH-FANOUT (T1021.004, #378). LRU-bounded.
+    ssh_fanout: BoundedMap<crate::recon::Lineage, SlidingDistinct<IpAddr>>,
+    /// Lineage → distinct security-software discovery commands, for SECURITY-DISCOVERY
+    /// (T1518.001, #378). LRU-bounded.
+    security_discovery: BoundedMap<crate::recon::Lineage, SlidingDistinct<&'static str>>,
     /// (pid, dport) → sliding distinct-destination counter for SCAN-SPREAD
     /// (T1046/T1210, issue #465). LRU-bounded.
     scan_spread: BoundedMap<(u32, u16), SlidingDistinct<IpAddr>>,
@@ -475,6 +502,7 @@ impl RuleState {
             beacon_flow_dedup: BoundedMap::new(COUNTER_CAP),
             egress_flow_last: BoundedMap::new(COUNTER_CAP),
             egress_volume: BoundedMap::new(COUNTER_CAP),
+            dns_class: BoundedMap::new(COUNTER_CAP),
             archive_writers: BoundedMap::new(COUNTER_CAP),
             staged_archives: BoundedMap::new(COUNTER_CAP),
             archive_readers: BoundedMap::new(COUNTER_CAP),
@@ -484,6 +512,9 @@ impl RuleState {
             scan_vertical: BoundedMap::new(COUNTER_CAP),
             recon_burst: BoundedMap::new(COUNTER_CAP),
             recon_wrappers: BoundedMap::new(COUNTER_CAP),
+            exec_lineage: BoundedMap::new(PID_COMM_CAP),
+            ssh_fanout: BoundedMap::new(COUNTER_CAP),
+            security_discovery: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
             known_policy_denials: BoundedMap::new(COUNTER_CAP),
             policy_denial_alerts: 0,
@@ -1100,11 +1131,11 @@ impl RuleState {
         )
     }
 
-    /// RECON-BURST (T1057/T1082/T1016/T1087, #378): six distinct discovery commands
-    /// across three categories from one lineage in 30 s. See [`crate::recon`] for what
-    /// counts, what a lineage is, and the false positives accepted.
-    fn check_recon_burst(&mut self, event: &ExecEvent) -> Option<Alert> {
-        use crate::recon::{self, Wrapper};
+    /// The lineage this exec belongs to (see [`crate::recon`]): the parent, or the parent of a
+    /// one-shot wrapper the parent is. Records a wrapper's own lineage for its children and
+    /// this process's lineage for the rules that see it later.
+    fn record_lineage(&mut self, event: &ExecEvent) -> crate::recon::Lineage {
+        use crate::recon::{self, ExecLineage, Wrapper};
 
         let ppid = event.meta.ppid;
         let lineage = Wrapper::lineage_for(
@@ -1121,6 +1152,26 @@ impl RuleState {
                 },
             );
         }
+        self.exec_lineage.insert(
+            event.meta.pid,
+            ExecLineage {
+                generation: event.meta.process_generation,
+                lineage,
+            },
+        );
+        lineage
+    }
+
+    /// RECON-BURST (T1057/T1082/T1016/T1087, #378): six distinct discovery commands
+    /// across three categories from one lineage in 30 s. See [`crate::recon`] for what
+    /// counts, what a lineage is, and the false positives accepted.
+    fn check_recon_burst(
+        &mut self,
+        event: &ExecEvent,
+        lineage: crate::recon::Lineage,
+    ) -> Option<Alert> {
+        use crate::recon;
+
         let (command, category) = recon::discovery(event)?;
         let burst = self
             .recon_burst
@@ -1143,6 +1194,87 @@ impl RuleState {
         })
     }
 
+    /// SECURITY-DISCOVERY (T1518.001, #378): three distinct security-software discovery
+    /// commands from one lineage in 60 s: the posture questions (`getenforce`, `csrutil
+    /// status`, `Get-MpComputerStatus`, `netsh advfirewall show`, `fltmc`) and lookups of a
+    /// named security product (`ps | grep falcon`, `sc query windefend`). One command is
+    /// what a hardening check does; three different ones in a minute is a host being sized
+    /// up. Low: compliance scanners (`OpenSCAP`, lynis, Qualys-style audits) run the same set.
+    fn check_security_discovery(
+        &mut self,
+        event: &ExecEvent,
+        lineage: crate::recon::Lineage,
+    ) -> Option<Alert> {
+        use crate::recon::{SECURITY_DISCOVERY_THRESHOLD, SECURITY_DISCOVERY_WINDOW_NS};
+
+        let label = crate::recon::security_discovery(event)?;
+        let ts = event.meta.timestamp_ns;
+        let entry = self
+            .security_discovery
+            .get_or_insert_with(lineage, SlidingDistinct::default);
+        let distinct = entry.record(label, ts, SECURITY_DISCOVERY_WINDOW_NS);
+        if distinct >= SECURITY_DISCOVERY_THRESHOLD
+            && entry.try_alert(ts, SECURITY_DISCOVERY_WINDOW_NS)
+        {
+            let seen: Vec<&str> = entry.values().copied().collect();
+            return Some(Alert {
+                technique: "T1518.001",
+                severity: Severity::Low,
+                message: format!(
+                    "pid={} comm={}: lineage of pid={} ran {distinct} distinct security-software \
+                     discovery commands ({}) in {}s — the host's defences being sized up",
+                    event.meta.pid,
+                    event.meta.comm,
+                    lineage.0,
+                    seen.join(", "),
+                    SECURITY_DISCOVERY_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+
+    /// SSH-FANOUT (T1021.004, #378): outbound SSH to eight distinct hosts from one lineage in
+    /// 60 s. The lineage is the one the connecting process was exec'd under, so a loop that
+    /// runs `ssh host cmd` per host (one process, one connect each) adds up where a per-pid
+    /// counter such as SCAN-SPREAD sees one connection per process. Whether the lineage is
+    /// interactive is not observable here, so a human typing eight `ssh` commands in a
+    /// minute is indistinguishable from a script; what fires in practice is `pssh` and
+    /// similar fleet tools run from one shell, the accepted cost. Loopback is not counted.
+    /// A process the rules never saw exec'd (started before the agent) has no lineage and is
+    /// not counted.
+    fn check_ssh_fanout(&mut self, event: &ConnectEvent) -> Option<Alert> {
+        use crate::recon::{ExecLineage, SSH_FANOUT_THRESHOLD, SSH_FANOUT_WINDOW_NS, SSH_PORT};
+
+        if event.dport != SSH_PORT || event.daddr.is_loopback() || event.daddr.is_unspecified() {
+            return None;
+        }
+        let lineage = ExecLineage::current(
+            self.exec_lineage.peek(&event.meta.pid),
+            event.meta.process_generation,
+        )?;
+        let ts = event.meta.timestamp_ns;
+        let entry = self
+            .ssh_fanout
+            .get_or_insert_with(lineage, SlidingDistinct::default);
+        let distinct = entry.record(event.daddr, ts, SSH_FANOUT_WINDOW_NS);
+        if distinct >= SSH_FANOUT_THRESHOLD && entry.try_alert(ts, SSH_FANOUT_WINDOW_NS) {
+            return Some(Alert {
+                technique: "T1021.004",
+                severity: Severity::Medium,
+                message: format!(
+                    "pid={} comm={}: lineage of pid={} opened SSH sessions to {distinct} distinct \
+                     hosts in {}s — lateral movement by script, or a fleet tool run from one shell",
+                    event.meta.pid,
+                    event.meta.comm,
+                    lineage.0,
+                    SSH_FANOUT_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+
     /// To be called for every `ExecEvent` in the stream, in chronological order.
     /// Updates the state (pid→comm table) after evaluation, so a process cannot match
     /// itself.
@@ -1155,7 +1287,9 @@ impl RuleState {
         alerts.extend(self.check_parent_suspect(event));
         alerts.extend(self.check_lolbin(event));
         alerts.extend(self.check_memfd_exec(event));
-        alerts.extend(self.check_recon_burst(event));
+        let lineage = self.record_lineage(event);
+        alerts.extend(self.check_recon_burst(event, lineage));
+        alerts.extend(self.check_security_discovery(event, lineage));
         alerts.extend(crate::stateless::check_ld_preload_hijack(
             event,
             &self.ld_trust_extra,
@@ -1188,6 +1322,7 @@ impl RuleState {
         alerts.extend(self.check_scan_spread(event));
         alerts.extend(self.check_scan_vertical(event));
         alerts.extend(self.check_archive_egress(&event.meta, event.daddr));
+        alerts.extend(self.check_ssh_fanout(event));
         alerts
     }
 
@@ -1198,6 +1333,33 @@ impl RuleState {
         alerts.extend(self.check_egress_volume(event));
         alerts.extend(self.check_archive_egress(&event.meta, event.daddr));
         alerts
+    }
+
+    /// To be called for every `DnsQueryEvent` in the stream (the Linux `getaddrinfo` probe,
+    /// opt-in; the Windows DNS-Client provider; the macOS network extension). Never alerts: it
+    /// remembers that this pid resolved a listed storage or paste service to these addresses, for
+    /// [`Self::check_egress_volume`] to join with the volume it later sends there.
+    pub fn on_dns_query(&mut self, event: &DnsQueryEvent) {
+        let Some(class) = egressdomain::classify_domain(&event.query) else {
+            return;
+        };
+        if event.status != 0 {
+            return;
+        }
+        let Some(result) = event.result.as_deref() else {
+            return;
+        };
+        for address in egressdomain::resolved_addresses(result) {
+            self.dns_class.insert(
+                (event.meta.pid, address),
+                DnsClassSighting {
+                    generation: event.meta.process_generation,
+                    class,
+                    domain: event.query.to_ascii_lowercase(),
+                    timestamp_ns: event.meta.timestamp_ns,
+                },
+            );
+        }
     }
 
     /// ARCHIVE-EXFIL, first link: a pid that opens an archive-named file for writing starts
@@ -1323,10 +1485,22 @@ impl RuleState {
     /// multicast and unspecified peers are excluded: a backup to the local network is
     /// not the signal this rule looks for. No name exclusion list yet, for the reason
     /// given at [`EGRESS_BYTES_THRESHOLD`].
-    fn check_egress_volume(&mut self, event: &NetworkFlowEvent) -> Option<Alert> {
-        let sent = event.bytes_sent?;
+    ///
+    /// **EGRESS-DOMAIN (T1567, #380)** reads the same sum. When the pid itself resolved a listed
+    /// storage or paste service to this address ([`Self::on_dns_query`],
+    /// [`Self::resolved_service`]), the lower [`EGRESS_CLASSED_BYTES_THRESHOLD`] applies and the
+    /// alert names the technique of the class (T1567.002 or T1567.003) and the domain. It is
+    /// **dormant on a default host**: it needs `nf_conntrack_acct` for the volume *and* a DNS
+    /// source for the lookup (the Linux `getaddrinfo` probe is opt-in, `UprobesConfig::with_dns_enabled`).
+    /// Without the lookup the generic threshold above is all there is. Only the first address of a
+    /// Linux lookup is recorded, so a connection to another address of the same answer is not
+    /// joined (the Windows provider lists them all).
+    fn check_egress_volume(&mut self, event: &NetworkFlowEvent) -> Vec<Alert> {
+        let Some(sent) = event.bytes_sent else {
+            return Vec::new();
+        };
         if !is_public_address(event.daddr) {
-            return None;
+            return Vec::new();
         }
         let flow = (
             event.meta.comm.clone(),
@@ -1339,25 +1513,46 @@ impl RuleState {
         // First poll of the flow: baseline only. A counter that went down is a new
         // flow on a reused local port: its whole value is new volume.
         let delta = match previous {
-            None => return None,
+            None => return Vec::new(),
             Some(last) if sent >= last => sent - last,
             Some(_) => sent,
         };
         if delta == 0 {
-            return None;
+            return Vec::new();
         }
         let ts = event.meta.timestamp_ns;
+        let class = self.resolved_service(event);
         let entry = self.egress_volume.get_or_insert_with(
             (event.meta.comm.clone(), event.daddr),
             EgressVolume::default,
         );
         let total = entry.sum.add(ts, delta, EGRESS_WINDOW_NS);
-        let alerted_recently = entry
-            .last_alert_ns
-            .is_some_and(|t| ts.saturating_sub(t) < EGRESS_WINDOW_NS);
-        if total >= EGRESS_BYTES_THRESHOLD && !alerted_recently {
+        let mut alerts = Vec::new();
+        let recently =
+            |last: Option<u64>| last.is_some_and(|t| ts.saturating_sub(t) < EGRESS_WINDOW_NS);
+        if let Some((class, domain)) = class
+            && total >= EGRESS_CLASSED_BYTES_THRESHOLD
+            && !recently(entry.last_class_alert_ns)
+        {
+            entry.last_class_alert_ns = Some(ts);
+            alerts.push(Alert {
+                technique: class.technique(),
+                severity: Severity::Medium,
+                message: format!(
+                    "pid={} comm={} sent {}MB to {} ({domain}, a {} service) in {}s — possible \
+                     exfiltration to a web service",
+                    event.meta.pid,
+                    event.meta.comm,
+                    total / (1024 * 1024),
+                    event.daddr,
+                    class.label(),
+                    EGRESS_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        if total >= EGRESS_BYTES_THRESHOLD && !recently(entry.last_alert_ns) {
             entry.last_alert_ns = Some(ts);
-            return Some(Alert {
+            alerts.push(Alert {
                 technique: "T1041/T1048",
                 severity: Severity::Medium,
                 message: format!(
@@ -1371,7 +1566,33 @@ impl RuleState {
                 ),
             });
         }
-        None
+        alerts
+    }
+
+    /// EGRESS-DOMAIN's join key: the storage or paste service this very pid resolved to the
+    /// flow's address, within [`DNS_CLASS_WINDOW_NS`], unless the pid is a browser (see
+    /// [`EGRESS_DOMAIN_BROWSER_COMMS`]). The class comes from the process's own lookup because
+    /// the address alone is shared with every other site behind the same CDN. A sighting
+    /// recorded for another incarnation of the pid (a recycled number) is not an answer.
+    fn resolved_service(&self, event: &NetworkFlowEvent) -> Option<(DomainClass, String)> {
+        let sighting = self.dns_class.peek(&(event.meta.pid, event.daddr))?;
+        let ts = event.meta.timestamp_ns;
+        if ts.saturating_sub(sighting.timestamp_ns) > DNS_CLASS_WINDOW_NS
+            || matches!(
+                (sighting.generation, event.meta.process_generation),
+                (Some(recorded), Some(current)) if recorded != current
+            )
+        {
+            return None;
+        }
+        let image = PidFact::current(
+            &self.pid_image_path,
+            event.meta.pid,
+            event.meta.process_generation,
+        );
+        let is_browser = EGRESS_DOMAIN_BROWSER_COMMS.contains(&event.meta.comm.as_str())
+            && policy::name_exclusion_applies(image);
+        (!is_browser).then(|| (sighting.class, sighting.domain.clone()))
     }
 
     /// LISTENER-DRIFT (issue #92, T1571 — non-standard port is the closest

@@ -404,6 +404,7 @@ fn captured_logs_sees_a_callsite_another_thread_registered_first() {
 mod ads;
 mod coverage;
 mod credfiles;
+mod egressdomain;
 mod linux;
 mod motw_removal;
 mod persistence;
@@ -411,7 +412,9 @@ mod quarantine;
 mod rdp;
 mod recon;
 mod scan_vertical;
+mod security_discovery;
 mod session;
+mod ssh_fanout;
 mod staging;
 mod sudo;
 mod tamper;
