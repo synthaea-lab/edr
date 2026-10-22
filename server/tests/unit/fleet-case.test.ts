@@ -21,6 +21,13 @@ const exec = (sha256: string = SHA) => ({
   image_path: "/tmp/payload",
   sha256,
 });
+const logon = (user: string, outcome = "success", kind = "logon") => ({
+  type: "auth",
+  outcome,
+  kind,
+  target_user: user,
+  meta: {},
+});
 const session = (user: string) => ({ type: "session", target_user: user, meta: {} });
 
 let seq = 0;
@@ -53,6 +60,59 @@ describe("joinKeys", () => {
       expect(joinKeys("a1", session(user), T0)).toEqual([]);
     }
   );
+
+  it("a successful logon is keyed by its user, lower-cased", () => {
+    expect(joinKeys("a1", logon("Alice"), T0)).toEqual([{ kind: "identity", key: "alice" }]);
+  });
+
+  it.each([
+    ["a failed logon", logon("mallory", "failure", "logon_failure")],
+    ["explicit credentials (su, sudo -u)", logon("mallory", "success", "explicit_credentials")],
+    ["a privileged session (sudo)", logon("mallory", "success", "privileged_session")],
+  ])("%s gives no key: the user name is not proof of who signed in", (_label, event) => {
+    expect(joinKeys("a1", event, T0)).toEqual([]);
+  });
+
+  it.each([
+    "root",
+    "CORP\\Administrator",
+    "WS-01$",
+    "CORP\\WS-01$",
+    "DWM-2",
+    "UMFD-0",
+    "ANONYMOUS LOGON",
+    "NT AUTHORITY\\LOCAL SERVICE",
+  ])("a successful logon of the generic account %s gives no key", (user) => {
+    expect(joinKeys("a1", logon(user), T0)).toEqual([]);
+  });
+
+  it.each(["ubuntu", "ec2-user", "debian", "fedora", "centos", "rocky", "cloud-user", "azureuser", "admin"])(
+    "a successful logon of the default image account %s gives no key: every host built from the image has it",
+    (user) => {
+      expect(joinKeys("a1", logon(user), T0)).toEqual([]);
+    }
+  );
+
+  it("a successful logon of vagrant is a key: the lab VMs sign in as vagrant, and the join has to be provable there", () => {
+    expect(joinKeys("a1", logon("vagrant"), T0)).toEqual([{ kind: "identity", key: "vagrant" }]);
+  });
+
+  it.each(["alice", "CORP\\alice", "svc-backup", "dollar$sign"])(
+    "a successful logon of %s is not mistaken for a generic account",
+    (user) => {
+      expect(joinKeys("a1", logon(user), T0)).toHaveLength(1);
+    }
+  );
+
+  it("two agents' successful logons of one user are one entity, and a failed one joins nothing", () => {
+    const groups = joinDetections([
+      detection("a1", logon("mallory")),
+      detection("a2", logon("Mallory"), minutes(3)),
+      detection("a3", logon("mallory", "failure", "logon_failure"), minutes(4)),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].agentIds).toEqual(["a1", "a2"]);
+  });
 
   it.each([null, "text", 12, {}, { type: "exec" }, { type: "unknown", sha256: SHA }])(
     "an event of an unknown shape (%j) gives nothing and no error",
