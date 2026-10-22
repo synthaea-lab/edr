@@ -26,6 +26,9 @@ pub(crate) enum Manifest {
 /// applied, replayed and re-verified from the record under the state directory
 /// ([`updater::trust_state`]). Loaded where the verification happens, never cached across
 /// commands, so a rotation applied by another process is in force at the next check.
+// The release key, the shared counter and the lineage are read by `apply-release` and the
+// integrity check, which are Linux-only (ADR-0015 Deferred).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Keys {
     /// Verifies binary release manifests; `None` when no `release` key is provisioned.

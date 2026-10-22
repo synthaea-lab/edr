@@ -132,7 +132,7 @@ mod tests {
         assert!(load(&path).is_ok());
     }
 
-    #[cfg(feature = "test-key")]
+    #[cfg(all(unix, feature = "test-key"))]
     #[test]
     fn a_key_file_holds_a_public_test_key_or_it_is_refused() {
         use std::os::unix::fs::PermissionsExt as _;

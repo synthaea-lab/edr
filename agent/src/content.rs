@@ -274,7 +274,7 @@ pub(crate) fn build_client(
 }
 
 /// Resolves `entry_path` (already checked safe by
-/// [`ContentManifest::validate_entry_paths`], called from [`plan`]) onto
+/// [`ContentManifest::validate_entry_paths`], called from [`plan_with_key`]) onto
 /// `root`, one path segment at a time — content paths are forward-slash-only
 /// by contract (the field's own doc comment) regardless of the host's path
 /// separator, so segments are joined individually rather than handing the
@@ -401,7 +401,7 @@ pub(crate) struct Applied {
 /// A file that cannot be removed (it crosses a symlink, a directory sits at its path, a
 /// permission error) is warned about and **kept in the state**, and the rest of the release
 /// still applies: one stuck file must not stop new rules from reaching the agent. The next
-/// run retries it ([`plan`] re-plans an equal release while something is left to do).
+/// run retries it ([`plan_with_key`] re-plans an equal release while something is left to do).
 ///
 /// # Errors
 ///
