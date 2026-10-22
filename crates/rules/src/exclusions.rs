@@ -507,3 +507,10 @@ pub(crate) const POLICY_DENIAL_ALERT_WINDOW_NS: u64 = 3_600_000_000_000;
 /// `/home` opens the same credential files again and again, and the first open is the finding.
 /// Sliding (timestamp-based), never a reset bucket. Uncalibrated (first cut, 2026-10-21).
 pub(crate) const CREDENTIAL_READ_ALERT_WINDOW_NS: u64 = 300_000_000_000; // 5 min
+
+/// FIRST-SEEN-LOGON (T1078, #376): how long after its first successful logon the rule state
+/// only learns accounts. **Provisional**: 24 hours is one working day, long enough for the
+/// accounts that log on to a host in an ordinary day to be in the baseline, with no
+/// measurement behind it. The baseline is in memory only, so an agent restart begins a new
+/// learning window.
+pub(crate) const LOGON_LEARNING_NS: u64 = 86_400_000_000_000; // 24 h
