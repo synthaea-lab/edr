@@ -65,7 +65,32 @@ const GENERIC_IDENTITIES = new Set([
   "administrator",
   "nobody",
   "daemon",
+  // The default login of a cloud or distribution image: every host built from the same image
+  // has it, so two hosts that each log in as one are not the same intruder.
+  "ubuntu",
+  "ec2-user",
+  "debian",
+  "fedora",
+  "centos",
+  "rocky",
+  "cloud-user",
+  "azureuser",
+  "admin",
+  // `vagrant` is NOT here, on purpose: the lab VMs are signed in to as `vagrant`, and with it
+  // listed no lab run could ever show the identity join. Put it back with the first fleet
+  // that really has a `vagrant` account on every host.
 ]);
+
+/** Accounts a Windows host logs on by itself (machine accounts, session helpers, anonymous). */
+const GENERIC_ACCOUNT_PATTERN = /^(?:.*\$|dwm-\d+|umfd-\d+|anonymous logon|local service|network service)$/;
+
+/** Whether `user` (`name` or `DOMAIN\name`, any case) is an account every host has. Only the name
+ * counts: `HOST\Administrator` is as generic as `Administrator`. */
+export function isGenericIdentity(user: string): boolean {
+  const lower = user.toLowerCase();
+  const name = lower.slice(lower.lastIndexOf("\\") + 1);
+  return GENERIC_IDENTITIES.has(lower) || GENERIC_IDENTITIES.has(name) || GENERIC_ACCOUNT_PATTERN.test(name);
+}
 
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -107,7 +132,7 @@ export function joinKeys(hostKey: string, event: unknown, at: Date): JoinKey[] {
       keys.set(node.key, { kind: "sha256", key: node.key.slice("sha256:".length) });
     } else if (node.kind === "identity") {
       const user = node.key.toLowerCase();
-      if (!GENERIC_IDENTITIES.has(user)) keys.set(`identity:${user}`, { kind: "identity", key: user });
+      if (!isGenericIdentity(user)) keys.set(`identity:${user}`, { kind: "identity", key: user });
     }
   }
   return Array.from(keys.values());
