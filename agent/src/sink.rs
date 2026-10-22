@@ -2440,6 +2440,7 @@ mod tests {
             policy: policy::ResponsePolicy {
                 kill_enabled: false,
                 quarantine_enabled,
+                isolate_enabled: false,
             },
             terminate: Box::new(|_| panic!("quarantine never terminates")),
             quarantine_dir: dir.join("quarantine"),
@@ -3183,6 +3184,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: true,
+                isolate_enabled: false,
             },
         );
         let alerts = wait_for_alert(&dir, "RESPONSE-QUARANTINE");
@@ -3443,6 +3445,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: false,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -3476,6 +3479,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -3503,6 +3507,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -3558,6 +3563,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: false,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             |_| panic!("terminate must not be called in observe mode"),
             dir.join("quarantine"),
@@ -3587,6 +3593,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -3807,6 +3814,7 @@ rule response_marker {
             policy::ResponsePolicy {
                 kill_enabled,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 recorder.lock().unwrap().push(pid);
@@ -4368,6 +4376,7 @@ detection:
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: true,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -4430,6 +4439,7 @@ detection:
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
@@ -4703,6 +4713,7 @@ detection:
             policy::ResponsePolicy {
                 kill_enabled: true,
                 quarantine_enabled: false,
+                isolate_enabled: false,
             },
             move |pid| {
                 killed_rec.lock().unwrap().push(pid);
