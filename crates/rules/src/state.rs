@@ -33,7 +33,8 @@ use crate::{
         MEMFD_EXEC_WINDOW_NS, PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES,
         POLICY_DENIAL_ALERT_CAP, QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES,
         RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS,
-        SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS, SELF_SPAWN_EXCLUSIONS,
+        SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS, SCAN_VERTICAL_THRESHOLD,
+        SCAN_VERTICAL_WINDOW_NS, SELF_SPAWN_EXCLUSIONS,
         SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_SCRIPT_HOSTS, SELF_SPAWN_THRESHOLD,
         SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS, SERVICE_COMM_PREFIXES, SERVICE_COMMS,
         SHELL_COMMS, STANDARD_PORTS, SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN,
@@ -252,6 +253,9 @@ pub struct RuleState {
     /// [`FlowPortDedup`]'s doc); `on_connect`'s discrete syscall trace needs no
     /// dedup, each `ConnectEvent` already is one real connection attempt.
     beacon_flow_dedup: BoundedMap<(String, String, u16), FlowPortDedup>,
+    /// (pid, daddr) → distinct destination ports, for SCAN-VERTICAL (T1046, #378).
+    /// LRU-bounded.
+    scan_vertical: BoundedMap<(u32, IpAddr), SlidingDistinct<u16>>,
     /// Lineage → the discovery commands it ran inside the window, for RECON-BURST
     /// (T1057/T1082/T1016/T1087, #378). LRU-bounded.
     recon_burst: BoundedMap<crate::recon::Lineage, crate::recon::ReconWindow>,
@@ -486,6 +490,7 @@ impl RuleState {
             staged_archives: BoundedMap::new(COUNTER_CAP),
             archive_readers: BoundedMap::new(COUNTER_CAP),
             scan_spread: BoundedMap::new(COUNTER_CAP),
+            scan_vertical: BoundedMap::new(COUNTER_CAP),
             recon_burst: BoundedMap::new(COUNTER_CAP),
             recon_wrappers: BoundedMap::new(COUNTER_CAP),
             known_listeners: BoundedMap::new(COUNTER_CAP),
@@ -1034,6 +1039,37 @@ impl RuleState {
         None
     }
 
+    /// SCAN-VERTICAL (T1046, #378): many distinct ports on one host from one pid in a short
+    /// window, the vertical mirror of [`Self::check_scan_spread`] (many hosts, one port). A
+    /// TCP connect scan of a target; the horizontal rule cannot see it, as it keys on the
+    /// port. Loopback destinations are not counted (see [`SCAN_VERTICAL_THRESHOLD`]). Only
+    /// pid 4 (Windows System) is excluded, as in SCAN-SPREAD.
+    fn check_scan_vertical(&mut self, event: &ConnectEvent) -> Option<Alert> {
+        if event.meta.pid == 4 || event.daddr.is_loopback() || event.daddr.is_unspecified() {
+            return None;
+        }
+        let ts = event.meta.timestamp_ns;
+        let entry = self
+            .scan_vertical
+            .get_or_insert_with((event.meta.pid, event.daddr), SlidingDistinct::default);
+        let distinct = entry.record(event.dport, ts, SCAN_VERTICAL_WINDOW_NS);
+        if distinct >= SCAN_VERTICAL_THRESHOLD && entry.try_alert(ts, SCAN_VERTICAL_WINDOW_NS) {
+            return Some(Alert {
+                technique: "T1046",
+                severity: Severity::Medium,
+                message: format!(
+                    "pid={} comm={} contacted {distinct} distinct ports on {} in {}s — \
+                     suspected port scan",
+                    event.meta.pid,
+                    event.meta.comm,
+                    event.daddr,
+                    SCAN_VERTICAL_WINDOW_NS / 1_000_000_000,
+                ),
+            });
+        }
+        None
+    }
+
     /// T1071/T1041 via conntrack polling (issue #92) — same rule as
     /// [`Self::check_beacon`], fed by a periodic flow snapshot instead of a discrete
     /// `connect()` trace. This is the "probe-free" source `sensor-linux-netlink`
@@ -1159,6 +1195,7 @@ impl RuleState {
     pub fn on_connect(&mut self, event: &ConnectEvent) -> Vec<Alert> {
         let mut alerts: Vec<Alert> = self.check_beacon(event).into_iter().collect();
         alerts.extend(self.check_scan_spread(event));
+        alerts.extend(self.check_scan_vertical(event));
         alerts.extend(self.check_archive_egress(&event.meta, event.daddr));
         alerts
     }
@@ -1930,7 +1967,9 @@ impl RuleState {
 
     /// CREDENTIAL-READ (#377), on the file opens of a Unix host: T1003.008 for the shadow files,
     /// T1552.004 for an SSH private key, T1552.001 for the other credential files of a home
-    /// directory (see `credfiles` for the paths and what the sensor cannot see).
+    /// directory, and on macOS T1555.001 for a keychain database and T1555.003 for a browser's
+    /// saved-login and cookie stores (see `credfiles` for the paths and what the sensor cannot
+    /// see).
     ///
     /// Only a read counts: a write-only open (`ssh-keygen` writing a key, `passwd` rewriting
     /// the file) is not one. Who may read differs by file, because who legitimately does
@@ -1940,14 +1979,17 @@ impl RuleState {
     ///   an administrator's `cat`, a backup or integrity tool (`tar`, `rsync`, `rpm -V`,
     ///   AIDE) and a PAM service the list lacks look the same, and none is excluded here
     ///   because each is also what an attacker runs.
-    /// - A **home credential file** has no fixed list: `python3` with `boto3`, `terraform`,
+    /// - A **home credential file, keychain or browser store** has no fixed list: `python3` with `boto3`, `terraform`,
     ///   `kubectl`, `git` and `ssh` all read their own, from `/usr/bin`. So a read alerts only
     ///   when the reader is *unexpected* in a way the telemetry can show: a web or database
     ///   service (or a child of one), or a binary run from outside the system directories
     ///   (`/tmp`, a home directory, `/dev/shm`). Not caught: a system binary (`cat`, `tar`) run
     ///   by an intruder, and a tool a developer installed under their home (`~/.local/bin`,
     ///   `~/go/bin`) alerts although it is theirs, its own credentials read by its own
-    ///   binary. Both are the price of not alerting on every `aws` call.
+    ///   binary. Both are the price of not alerting on every `aws` call. On macOS the Apple
+    ///   daemons that read a keychain and the browsers installed in `/Applications` run from
+    ///   the system directories, so they should stay quiet (not observed on a Mac); a browser
+    ///   installed under `~/Applications` alerts on its own store.
     ///
     /// One alert per (pid, kind) per [`CREDENTIAL_READ_ALERT_WINDOW_NS`]. No file content and
     /// no command line goes into the message, only the path the process asked for.
@@ -1961,7 +2003,10 @@ impl RuleState {
         let why = match kind {
             CredFile::Shadow if credfiles::is_auth_stack(comm, image) => return None,
             CredFile::Shadow => "outside the authentication stack",
-            CredFile::PrivateKey | CredFile::HomeCredentials => {
+            CredFile::PrivateKey
+            | CredFile::HomeCredentials
+            | CredFile::Keychain
+            | CredFile::BrowserStore => {
                 if self.reader_under_service(&event.meta) {
                     "a web or database service or its child"
                 } else if credfiles::image_outside_system_dirs(image) {

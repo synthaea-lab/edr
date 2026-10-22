@@ -33,7 +33,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1136.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1543.002 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/persistence.yml` |
-| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml` |
+| T1543.003 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/remote_service_shell_command.yml`, `sigma:rules/sigma/windows/service_created_with_shell_binpath.yml` |
 | T1546.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1547.015 | 3 | `rules:crates/rules/src/stateless.rs` |
 
@@ -76,6 +76,8 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
 | T1552.004 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
+| T1555.003 | 3 | `rules:crates/rules/src/credfiles.rs` |
 
 ## Discovery
 
@@ -143,4 +145,5 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1560 | 3 | `rules:crates/rules/src/state.rs` |
 | T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |
 | T1562 | 3 | `rules:crates/rules/src/state.rs` |
+| T1564.004 | 3 | `rules:crates/rules/src/stateless.rs` |
 
