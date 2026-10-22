@@ -19,9 +19,17 @@ it, `--allow-test-key` only in a `test-key` build and now also required by
 0600 file, a `Signer` trait, a signature that does not verify under the signer's own public key
 refused), tested against a software token only: no real token or HSM has been exercised.
 `--key-file` is documented as for the lab but **is not restricted to the test key** (the
-decision below says it should be). Not implemented: the `recovery` verification and the rotation
-release (a separate PR with golden fixtures), a cloud-KMS backend, the holder and approver
-decisions below, the runbook and the lab drills. Windows and macOS got the same
+decision below says it should be). The key-rotation release is implemented (#753, this change,
+tested with the public test `recovery` key and a software token only): `updater::rotation`
+(`KeyRotationManifest`, verified against the embedded `recovery` key and nothing else, bound to the
+key state it starts from, with a `release_version` and a validity window), `release-tool rotation`
+to build it and `sign --kind rotation` to sign it, and a golden fixture
+(`crates/updater/tests/fixtures/key-rotation-golden.json`). Not implemented: **the agent applying a
+rotation** (fetching it, keeping the rotated keys across restarts, feeding them to the release and
+content verifiers, and the highest applied `release_version` it checks against), the control plane
+offering one, a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
+drills. The embedded keys are still compile-time statics, so until that wiring exists a verified
+rotation changes nothing on an endpoint. Windows and macOS got the same
 `--no-default-features` treatment in #855: the MSI build command in `packaging/windows/README.md`,
 a scan of `agent.exe` and `watchdog.exe` in `packaging/windows/build.ps1` (not run by any CI job,
 it needs WiX), a `tools/assert-no-test-key.sh` step in the two static-agent workflows, and
@@ -94,10 +102,9 @@ owner's decisions and are marked as such.
 
 ## Consequences
 
-- The key-rotation release is a new shape of signed manifest: `ReleaseManifest` gains a
-  rotation payload (or a sibling type) and the schema version moves. That is a change to a
-  signed envelope, so it gets its own PR and golden fixtures; this ADR does not specify the
-  bytes.
+- The key-rotation release is a new shape of signed manifest, a sibling type of
+  `ReleaseManifest` with its own schema version. That is a change to a signed envelope, so it got
+  its own PR and golden fixtures; the format is below ("The key-rotation release").
 - `release-tool` has to sign without a key file: the custody choice in 2 decides whether it
   grows a token or KMS backend. #944 added the PKCS#11 one; `--key-file` is meant for the test key
   only and is not yet restricted to it.
@@ -108,6 +115,66 @@ owner's decisions and are marked as such.
   the cost of the blast-radius split.
 - `docs/operations/` gains a release-signing runbook (ceremony, approvals, rotation, what to
   do on suspected exposure), written with the first real key and not before.
+
+## The key-rotation release
+
+Written with the rotation payload, as owner's decision 5 requires. The type is
+`updater::rotation::KeyRotationManifest`; it is verification only, like the content and snapshot
+manifests.
+
+**Shape.** One signed JSON document, canonical form as for the other manifests (2-space indent,
+alphabetical fields, `signature` forced to `""`, unknown fields refused), signed by `recovery`:
+`schema_version`, `release_version`, `issued_at`, `expires_at`, `reason` (audit text, at most 256
+bytes), and for each role it changes a pair `new_<role>_key` / `retired_<role>_key` (64 lowercase hex
+characters; `null` when the role is not rotated). `<role>` is `release` or `content`: **`recovery`
+is never rotated** and a rotation that makes `release` or `content` equal to it is refused.
+
+**Rules, in the order an agent applies them** (`KeyRotationManifest::verify`):
+
+1. A known `schema_version`, and a manifest that is well formed: at least one role rotated, both
+   halves of each pair, keys in canonical form and not all zeros, no key replaced by itself, not
+   the same new key for both roles (the split of Decision 1 is not undone by a rotation), a
+   non-empty reason, and a window of at most 30 days (`MAX_VALIDITY_SECS`, provisional).
+2. The Ed25519 signature verifies under the embedded `recovery` key. A `release` or `content`
+   signature does not, so **a manifest signed by `release` or `content` cannot change the trust
+   set** (Decision 1); a build with no `recovery` key refuses with `SigningKeyUnprovisioned`.
+3. The window: not past `expires_at`, and not issued further ahead than 15 minutes of clock skew.
+4. `release_version` is strictly greater than the highest release or rotation the agent applied
+   (ADR-0015 decision 2, owner's decision 5). A rotation takes a number from the same counter as a
+   binary release, so the next release has to go above it.
+5. Each retired key **is the key the agent trusts now** for that role. This is what makes a
+   rotation apply once and to one state: a replay finds its retired key gone, and a manifest
+   written for hosts on an older key does not apply to a host that has moved on. `recovery` signs
+   one manifest per key state it needs to move.
+
+**Why `recovery` signs and the new key does not.** The new key is a public half only, so a mistyped
+key would leave nobody able to sign releases. That is repairable by the same means as any rotation
+(a second one, from `recovery`, retiring the mistyped key), which is why `recovery` is the one key a
+rotation cannot touch, and `release-tool rotation` prints what it is about to install.
+
+### Comparison with TUF's threshold and expiry rules
+
+TUF (the specification's root metadata) rotates keys with a signed `root` role: each role lists
+`keyids` and a `threshold`; a new root must be signed by a threshold of the keys in the **current**
+root and also by a threshold of the keys in the **new** root; its `version` must be exactly one
+above the current one, so a client walks every root in sequence; every metadata file has an
+`expires` date and a client refuses expired metadata. What this ADR does with each:
+
+| | TUF | This rotation | Consequence |
+|---|---|---|---|
+| Threshold | `m` of `n` keys, enforced by the client, each signature attributable | The agent checks **one** Ed25519 signature under one `recovery` key. "2 of 3" (decision 3) is how the key is *held*, split between holders and rebuilt for the ceremony | Compromising two holders or the ceremony machine compromises `recovery`, and the fleet cannot tell one signer from three. TUF would let a holder be removed by a root rotation without touching the other two; here a changed holder means a new `recovery` key and so a reinstall (decision 3's accepted risk). Kept because the trust set has one key per role and `recovery.pub` is one file |
+| Signature by the new key | The new root must also be signed by the new keys (proof of possession) | Not required | A mistyped new key is possible; repaired by a second rotation (above) |
+| Version rule | Exactly `current + 1` for `root`: no root can be skipped | Strictly greater than the highest applied, gaps allowed | A rotation shares the release counter, which moves on binary releases between rotations, so "exactly one above" cannot hold. The retired-key rule (5) gives the "no skipping a state" property TUF's chain gives: a rotation only applies to the state it was written for |
+| Expiry | Every file expires; a client refuses an expired one. Forces the signers to re-sign periodically | Each rotation has `expires_at`, at most 30 days after `issued_at`; the root of trust itself does not expire | Without an expiry, an old rotation `K1 → K2` could be served years later to a host still on `K1` (offline, or held back by an attacker) after `K2` was compromised and rotated away: the host would move to the compromised `K2`. The window closes that for rotations. It does **not** make `recovery` sign routinely, which TUF's root expiry does and which would defeat keeping it offline |
+| Roles and delegation | `root`, `targets`, `snapshot`, `timestamp`, delegations | Roles by key: `release`, `content`, with `snapshot` and `posture` outside the rotation | Smaller than TUF by design |
+
+What remains open and is accepted: within its window a rotation held back by an attacker can still
+be applied late; an offline fleet that outlives a window needs a new manifest from `recovery` for its
+key state, or a reinstall; the lab drill (decision 6) must calibrate 30 days.
+
+**When to revisit TUF** (owner's decision 5): the rotation format grows beyond one signed payload;
+or the holders want signatures the fleet can attribute and count (a trust set with several
+`recovery` keys and a threshold the agent enforces); or `recovery` itself has to rotate.
 
 ## Alternatives considered
 
@@ -173,7 +240,9 @@ golden fixtures), and the `release-tool` PKCS#11 backend against a software toke
 2. (Done, #761 and #855.) Embedded trust set, the `test-key` feature, derived
    `SYNTHAEA_UPDATER_TEST_KEY`, the CI check that a packaged build has no test key, and removal of
    the guard for production builds.
-3. The key-rotation release: manifest shape, verification rules (which key may change which),
+3. (Done in #753, this change: the format, the verification, the golden fixture, `release-tool`
+   building and signing it. Not done: the agent applying it, see Implementation status.) The
+   key-rotation release: manifest shape, verification rules (which key may change which),
    golden fixtures, anti-rollback interaction (a rotation has a `release_version` like any
    release).
 4. `release-tool` signing backends: the PKCS#11 backend first, a cloud-KMS one only if an account
