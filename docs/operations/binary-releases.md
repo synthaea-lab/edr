@@ -39,8 +39,31 @@ store URL is fetched over the network, as for content manifests).
    (`--kind content`) are signed the same way; they are written by hand or by a
    script, `release-tool` only signs them.
 
-   Key generation, custody and rotation are not decided here (ADR-0015, Deferred): the
-   tool takes whatever key file it is given.
+   **Signing from a PKCS#11 token (ADR-0027 decision 2).** A production key lives on a PIV
+   token or an HSM and never leaves it: the tool sends the canonical manifest bytes to the
+   token and takes the Ed25519 signature back.
+
+   ```
+   RELEASE_TOOL_PKCS11_PIN=... release-tool sign --kind release \
+       --pkcs11 /usr/lib64/pkcs11/opensc-pkcs11.so --pkcs11-token release --pkcs11-key release \
+       manifest.json --out signed.json
+   release-tool public-key --pkcs11 <module> --pkcs11-token release --pkcs11-key release
+   ```
+
+   `--pkcs11` is the vendor's module, `--pkcs11-token` the token's label (not its slot
+   number) and `--pkcs11-key` the label shared by the key's private and public objects; the
+   key must be an Ed25519 key (`CKM_EDDSA`). The PIN is read from `RELEASE_TOOL_PKCS11_PIN`
+   or from `--pkcs11-pin-file` (mode 0600), never from an argument. The tool refuses to
+   guess: no token, two tokens, or no or several keys with the label is an error, and a
+   signature that does not verify under the token's own public key is never written.
+   `public-key` prints the value to commit under `crates/updater/keys/`. `--key-file` and
+   `--test-key` are for lab and dev releases: a key readable from a file is not a production
+   key. The tool is tested against SoftHSM with a throwaway token (`tools/test-pkcs11.sh`,
+   run by CI); it has not been run against a real PIV token or HSM. Who holds the token and
+   who approves a release are the owner's decisions (ADR-0027), not the tool's.
+
+   Key generation, custody and rotation are decided in ADR-0027; until the real keys exist
+   the tool signs with whatever key file or test key it is given.
 
    **Which key a build trusts (ADR-0027).** An agent embeds a trust set of `release`,
    `content` and `recovery` public keys from `crates/updater/keys/*.pub`. Those files say
