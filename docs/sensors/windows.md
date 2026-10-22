@@ -38,14 +38,24 @@ operation: the re-issued create on the resolved path is the one that is reported
 Protocol version 3 adds `dropped_capture_failed`, a cumulative counter for successful
 operations whose source or destination name could not be captured. The driver defers both
 capture-failure and queue-full accounting until the post-op confirms that the operation
-succeeded, so failed file operations do not inflate loss counts; nothing is counted while the
-instance is draining or the driver is unloading, and an operation that completes after the
-agent went away counts as `not_connected`. A set-information request that is not a delete or a
-rename never moves a counter. A heartbeat the sender cannot send is not a loss: it moves no
+succeeded, so failed file operations do not inflate those two loss counts. `not_connected`
+is different: while already disconnected, the pre-op counts a qualifying delete or rename
+*attempt* before its result is known. Failed or reparsed attempts can therefore increase it;
+each invocation of a re-issued create's pre-op may be counted. It is an upper bound on lost
+events, not an exact number of successful operations. Nothing is counted while the instance is
+draining or the driver is unloading; an operation that completes after the agent went away also
+counts as `not_connected`. A set-information request that is not a delete or a rename never moves a
+counter. A heartbeat the sender cannot send is not a loss: it moves no
 counter and its sequence number is taken back, so the agent sees no gap. The packed event
 header is 72 bytes: v2 bytes 0-63 are unchanged, `dropped_capture_failed` is a little-endian
 `u64` at offset 64, and UTF-16 path payloads start at offset 72. The v3 decoder in the agent
 (#853) must preserve this counter.
+
+Queued records survive a client disconnect, subject to the 8,192-record and 16 MiB queue
+limits. A reconnect can therefore receive older records: their timestamps were captured with
+the file operation, while their sequence numbers are assigned only when sent on the new
+connection. Consumers that use time windows must use the event timestamp, not the receive
+time.
 
 The driver and the agent client share the protocol version, and this change moves the client's
 connection constant to 3 together with the driver, so it must land **before** the receive loop
