@@ -19,6 +19,8 @@ export async function middleware(req: NextRequest) {
     // the session check.
     req.nextUrl.pathname === "/api/release/manifest" ||
     req.nextUrl.pathname === "/api/release/artifact" ||
+    // The key rotation an agent applies (ADR-0027): same model, same exact-path rule.
+    req.nextUrl.pathname === "/api/release/key-rotation" ||
     // Agent content download (issue #30): same model as the release routes.
     // The admin routes under /api/content (halt, release, rollback) are not
     // listed and stay behind the session check.

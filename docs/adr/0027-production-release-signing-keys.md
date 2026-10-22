@@ -30,9 +30,11 @@ to build it and `sign --kind rotation` to sign it, and a golden fixture
 it and records it under `storage.state_dir` (`key-rotations.json`); `apply-release`,
 `apply-content-manifest`, `check-content-manifest` and the self-integrity check verify against the
 keys in force; releases share the rotation's `release_version` counter. How the record relates to
-the embedded keys is in "How an install holds the rotated keys". Not implemented: the control
-plane offering a rotation (`GET /api/release/key-rotation` is the agent's contract, nothing serves
-it yet), a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
+the embedded keys is in "How an install holds the rotated keys". The control plane serves it (this
+change, stacked on #963): `GET /api/release/key-rotation` returns, byte for byte, the file an
+operator placed at `storage/key-rotations/<ring>.json` (404 when none), with the agent
+authentication and ring of `/api/release/manifest`; the server never signs and never verifies, and
+has no publish endpoint yet. Not implemented: a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
 drills. Windows and macOS got the same
 `--no-default-features` treatment in #855: the MSI build command in `packaging/windows/README.md`,
 a scan of `agent.exe` and `watchdog.exe` in `packaging/windows/build.ps1` (not run by any CI job,
