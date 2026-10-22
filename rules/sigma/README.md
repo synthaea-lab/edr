@@ -3,6 +3,9 @@
 Sigma rules evaluated on-device by the `sigma` engine crate. Layout: one directory per
 platform, descriptive file names (the directory carries the platform, so no `lnx_`/
 `win_` infix): `linux/base64_pipe_shell.yml`, `windows/powershell_encoded.yml`.
+A host loads **only its own platform's directory** (`SigmaEngine::load_dir_for`, #980): a rule in
+`macos/` never runs on a Linux host, and a rule outside `linux/`, `windows/` and `macos/` runs nowhere.
+The content tests load the whole tree.
 
 Every rule must stay inside the engine's supported subset (`crates/sigma` docs) — the
 engine rejects out-of-subset rules loudly at load time, and CI enforces it: the

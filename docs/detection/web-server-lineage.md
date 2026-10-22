@@ -37,11 +37,11 @@ listed child, those lookalikes, and an exec with no lineage.
   `python`), Node and Ruby servers. Not listed: their process name is the language runtime.
 - **A different interpreter**: a server that starts `python`, `perl` or `curl` directly
   (a webshell that runs those without a shell) is not in these rules.
-- **Every platform's content loads on every host** (`agent` loads `rules/sigma` whole, the
-  platform directory is metadata). The macOS rule therefore also matches the same lineage on a
-  Linux host (`/usr/sbin/nginx` starting `/bin/sh`), beside the Linux rule: two findings for one
-  exec, one tagged T1059 and one T1190. The Windows rules need backslash paths and stay quiet
-  on Unix.
+- **Each host loads only its own platform's rules** (`SigmaEngine::load_dir_for`, #980: the agent
+  walks `rules/sigma/<platform>/` for the platform it is built for). The macOS rule therefore runs
+  on macOS hosts only, and a Linux host raises one finding for a web server starting a shell (the
+  T1059 rule of the rule engine), not two. Until #980 the agent loaded the whole tree and the
+  macOS rule also fired on Linux beside the T1059 rule.
 - **The Linux rule keeps T1059.** Re-tagging it would change the technique of existing alerts
   and the tests that pin it; the Sigma siblings carry T1190, and the generated coverage matrix
   lists both.

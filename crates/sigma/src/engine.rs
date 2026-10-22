@@ -12,6 +12,43 @@ use crate::{
     validate::validate,
 };
 
+/// The platform a rule is written for: the directory of `rules/sigma/` it sits in (issue #73).
+/// The engine does not evaluate rules by platform on its own; [`SigmaEngine::load_dir_for`] is
+/// what keeps a host from loading the rules of the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Linux,
+    Windows,
+    MacOs,
+}
+
+impl Platform {
+    /// The platform this binary is built for, or `None` on an OS the content has no
+    /// directory for.
+    #[must_use]
+    pub const fn host() -> Option<Self> {
+        if cfg!(target_os = "linux") {
+            Some(Self::Linux)
+        } else if cfg!(target_os = "windows") {
+            Some(Self::Windows)
+        } else if cfg!(target_os = "macos") {
+            Some(Self::MacOs)
+        } else {
+            None
+        }
+    }
+
+    /// The name of the platform's directory under `rules/sigma/`.
+    #[must_use]
+    pub const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+            Self::MacOs => "macos",
+        }
+    }
+}
+
 /// Sigma engine: set of loaded, validated rules, ready to evaluate.
 pub struct SigmaEngine {
     rules: Vec<SigmaRule>,
@@ -19,9 +56,10 @@ pub struct SigmaEngine {
 
 impl SigmaEngine {
     /// Loads all `.yml` / `.yaml` rules from a directory tree (recursive — content
-    /// convention is `rules/sigma/<platform>/...`). Rules that fail to parse or use
-    /// unsupported constructs are skipped with a warning naming the reason; the
-    /// engine loads the rest.
+    /// convention is `rules/sigma/<platform>/...`), **every platform's** included: the content
+    /// tests and tools want the whole tree, a host wants [`Self::load_dir_for`]. Rules that
+    /// fail to parse or use unsupported constructs are skipped with a warning naming the
+    /// reason; the engine loads the rest.
     ///
     /// # Errors
     ///
@@ -48,6 +86,34 @@ impl SigmaEngine {
             }
         }
         Ok(Self { rules })
+    }
+
+    /// Loads the rules of one platform: the tree `<dir>/<platform>/`, nothing else. Rules of
+    /// the other platforms, and any file outside a platform directory, are never read. The
+    /// agent calls this with [`Platform::host`], so a macOS rule does not run on a Linux host
+    /// (#980). Skipping bad rules, and the error cases, are as [`Self::load_dir`].
+    ///
+    /// The platform comes from where the directory sits **under `dir`**, by construction: only
+    /// that subdirectory is walked. It is never read from the full path of a rule, so a content
+    /// root such as `/home/linux/content/rules/sigma` does not turn `windows/x.yml` into a Linux
+    /// rule. A platform directory that does not exist yields an engine with no rules (a content
+    /// tree may ship without a platform's rules); a `dir` that cannot be read is an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SigmaError::Io`] when `dir`, or the platform directory that exists, cannot
+    /// be read.
+    pub fn load_dir_for(dir: &Path, platform: Platform) -> Result<Self, SigmaError> {
+        // Fails on an unreadable root even when the platform directory is absent.
+        std::fs::read_dir(dir).map_err(|source| SigmaError::Io {
+            path: dir.display().to_string(),
+            source,
+        })?;
+        let platform_dir = dir.join(platform.dir_name());
+        if !platform_dir.is_dir() {
+            return Ok(Self { rules: Vec::new() });
+        }
+        Self::load_dir(&platform_dir)
     }
 
     /// Loads and validates one rule from a YAML file.

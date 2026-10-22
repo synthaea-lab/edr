@@ -1754,15 +1754,25 @@ fn resolve_content_root(content_dir: &Path) -> PathBuf {
     content_dir.to_path_buf()
 }
 
-/// Loads the Sigma content directory if present, under `content_root`.
+/// Loads the Sigma content of the platform this agent is built for, if the content directory
+/// is present under `content_root`: only `rules/sigma/<platform>/`, so a rule written for
+/// another platform never runs on this host (#980).
 fn load_sigma_rules(content_root: &Path) -> Load<sigma::SigmaEngine> {
     let rules_dir = content_root.join("rules/sigma");
     if !rules_dir.is_dir() {
         return Load::Absent;
     }
-    match sigma::SigmaEngine::load_dir(&rules_dir) {
+    let Some(platform) = sigma::Platform::host() else {
+        tracing::warn!("sigma: no rules directory for this operating system, none loaded");
+        return Load::Absent;
+    };
+    match sigma::SigmaEngine::load_dir_for(&rules_dir, platform) {
         Ok(engine) => {
-            tracing::info!(rules = engine.rule_count(), "sigma: rules loaded");
+            tracing::info!(
+                rules = engine.rule_count(),
+                platform = platform.dir_name(),
+                "sigma: rules loaded"
+            );
             Load::Loaded(engine)
         }
         Err(e) => {
@@ -2321,8 +2331,69 @@ mod tests {
     use schema::{ConnectEvent, Event, EventMeta, ExecEvent, User, sensor::EventSink as _};
 
     use super::{
-        CANARY_EXEC_HOLD_NS, DetectionSink, MAX_HELD_CANARY_TOUCHES, correlator_case_id, entity_key,
+        CANARY_EXEC_HOLD_NS, DetectionSink, Load, MAX_HELD_CANARY_TOUCHES, correlator_case_id,
+        entity_key, load_sigma_rules,
     };
+
+    /// A content root with one Sigma rule per platform directory, each titled after it.
+    fn sigma_content_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for platform in ["linux", "windows", "macos"] {
+            let dir = root.path().join("rules/sigma").join(platform);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("rule.yml"),
+                format!(
+                    "title: {platform}-rule\ndescription: d\ntags:\n  - attack.t1059\nlevel: low\n\
+                     falsepositives:\n  - none\ndetection:\n  selection:\n    Image|endswith: '/x'\n  \
+                     condition: selection\n"
+                ),
+            )
+            .unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn the_agent_loads_only_the_sigma_rules_of_its_own_platform() {
+        let root = sigma_content_root();
+        let Load::Loaded(engine) = load_sigma_rules(root.path()) else {
+            panic!("the content directory is present and readable");
+        };
+        let expected = if cfg!(target_os = "linux") {
+            "linux-rule"
+        } else if cfg!(target_os = "windows") {
+            "windows-rule"
+        } else {
+            "macos-rule"
+        };
+        assert_eq!(engine.rule_titles(), [expected]);
+    }
+
+    #[test]
+    fn a_content_root_named_after_another_platform_does_not_change_which_rules_load() {
+        // `<tmp>/windows/linux/...`: read from the full path, every rule would look like
+        // every platform's.
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("windows").join("linux");
+        std::fs::create_dir_all(&root).unwrap();
+        let inner = sigma_content_root();
+        let from = inner.path().join("rules");
+        let to = root.join("rules");
+        std::fs::create_dir_all(to.join("sigma")).unwrap();
+        for platform in ["linux", "windows", "macos"] {
+            std::fs::create_dir_all(to.join("sigma").join(platform)).unwrap();
+            std::fs::copy(
+                from.join("sigma").join(platform).join("rule.yml"),
+                to.join("sigma").join(platform).join("rule.yml"),
+            )
+            .unwrap();
+        }
+        let Load::Loaded(engine) = load_sigma_rules(&root) else {
+            panic!("the content directory is present and readable");
+        };
+        assert_eq!(engine.rule_count(), 1, "{:?}", engine.rule_titles());
+    }
 
     #[test]
     fn the_verdict_entity_carries_the_parents_incarnation_when_stamped() {
