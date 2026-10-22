@@ -12,7 +12,7 @@ use crate::{
     validate::validate,
 };
 
-/// The platform a rule is written for: the directory of `rules/sigma/` it sits in (issue #73).
+/// The platform of a host, and so which directories of `rules/sigma/` it runs (issue #73, #980).
 /// The engine does not evaluate rules by platform on its own; [`SigmaEngine::load_dir_for`] is
 /// what keeps a host from loading the rules of the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,13 +38,27 @@ impl Platform {
         }
     }
 
-    /// The name of the platform's directory under `rules/sigma/`.
+    /// The name of the platform's own directory under `rules/sigma/`.
     #[must_use]
     pub const fn dir_name(self) -> &'static str {
         match self {
             Self::Linux => "linux",
             Self::Windows => "windows",
             Self::MacOs => "macos",
+        }
+    }
+
+    /// The directories under `rules/sigma/` a host of this platform loads, in load order.
+    /// **macOS loads `macos/` and `linux/`**: the Unix-family command-line rules of `linux/`
+    /// (shells, `curl`, `base64`) apply to macOS too, and every macOS host has run them since
+    /// the agent loaded the whole tree. That is a choice, not a rule of nature (#980): a shared
+    /// `unix/` directory is the alternative. Linux and Windows load only their own.
+    #[must_use]
+    pub const fn rule_dirs(self) -> &'static [&'static str] {
+        match self {
+            Self::Linux => &["linux"],
+            Self::Windows => &["windows"],
+            Self::MacOs => &["macos", "linux"],
         }
     }
 }
@@ -88,32 +102,36 @@ impl SigmaEngine {
         Ok(Self { rules })
     }
 
-    /// Loads the rules of one platform: the tree `<dir>/<platform>/`, nothing else. Rules of
-    /// the other platforms, and any file outside a platform directory, are never read. The
-    /// agent calls this with [`Platform::host`], so a macOS rule does not run on a Linux host
-    /// (#980). Skipping bad rules, and the error cases, are as [`Self::load_dir`].
+    /// Loads the rules a host of `platform` runs: the trees `<dir>/<d>/` for each `d` in
+    /// [`Platform::rule_dirs`] (the platform's own directory; macOS also `linux/`), nothing
+    /// else. Rules of the other platforms, and any file outside those directories, are never
+    /// read. The agent calls this with [`Platform::host`], so a macOS rule does not run on a
+    /// Linux host (#980). Skipping bad rules, and the error cases, are as [`Self::load_dir`].
     ///
-    /// The platform comes from where the directory sits **under `dir`**, by construction: only
-    /// that subdirectory is walked. It is never read from the full path of a rule, so a content
-    /// root such as `/home/linux/content/rules/sigma` does not turn `windows/x.yml` into a Linux
-    /// rule. A platform directory that does not exist yields an engine with no rules (a content
-    /// tree may ship without a platform's rules); a `dir` that cannot be read is an error.
+    /// The platform comes from where a directory sits **under `dir`**, by construction: only
+    /// those subdirectories are walked. It is never read from the full path of a rule, so a
+    /// content root such as `/home/linux/content/rules/sigma` does not turn `windows/x.yml`
+    /// into a Linux rule. A directory that does not exist contributes no rules (a content tree
+    /// may ship without a platform's rules); a `dir` that cannot be read is an error.
     ///
     /// # Errors
     ///
-    /// Returns [`SigmaError::Io`] when `dir`, or the platform directory that exists, cannot
-    /// be read.
+    /// Returns [`SigmaError::Io`] when `dir`, or one of the directories that exists, cannot be
+    /// read.
     pub fn load_dir_for(dir: &Path, platform: Platform) -> Result<Self, SigmaError> {
-        // Fails on an unreadable root even when the platform directory is absent.
+        // Fails on an unreadable root even when no platform directory exists.
         std::fs::read_dir(dir).map_err(|source| SigmaError::Io {
             path: dir.display().to_string(),
             source,
         })?;
-        let platform_dir = dir.join(platform.dir_name());
-        if !platform_dir.is_dir() {
-            return Ok(Self { rules: Vec::new() });
+        let mut rules = Vec::new();
+        for name in platform.rule_dirs() {
+            let platform_dir = dir.join(name);
+            if platform_dir.is_dir() {
+                rules.extend(Self::load_dir(&platform_dir)?.rules);
+            }
         }
-        Self::load_dir(&platform_dir)
+        Ok(Self { rules })
     }
 
     /// Loads and validates one rule from a YAML file.

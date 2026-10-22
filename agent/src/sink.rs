@@ -2360,14 +2360,17 @@ mod tests {
         let Load::Loaded(engine) = load_sigma_rules(root.path()) else {
             panic!("the content directory is present and readable");
         };
-        let expected = if cfg!(target_os = "linux") {
-            "linux-rule"
+        // macOS also runs the Unix-family rules of `linux/` (#980); the others only their own.
+        let mut titles = engine.rule_titles();
+        titles.sort_unstable();
+        let expected: &[&str] = if cfg!(target_os = "linux") {
+            &["linux-rule"]
         } else if cfg!(target_os = "windows") {
-            "windows-rule"
+            &["windows-rule"]
         } else {
-            "macos-rule"
+            &["linux-rule", "macos-rule"]
         };
-        assert_eq!(engine.rule_titles(), [expected]);
+        assert_eq!(titles, expected);
     }
 
     #[test]
@@ -2392,7 +2395,8 @@ mod tests {
         let Load::Loaded(engine) = load_sigma_rules(&root) else {
             panic!("the content directory is present and readable");
         };
-        assert_eq!(engine.rule_count(), 1, "{:?}", engine.rule_titles());
+        let expected = if cfg!(target_os = "macos") { 2 } else { 1 };
+        assert_eq!(engine.rule_count(), expected, "{:?}", engine.rule_titles());
     }
 
     #[test]
