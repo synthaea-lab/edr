@@ -26,12 +26,11 @@ software token only): `updater::rotation`
 key state it starts from, with a `release_version` and a validity window), `release-tool rotation`
 to build it and `sign --kind rotation` to sign it, and a golden fixture
 (`crates/updater/tests/fixtures/key-rotation-golden.json`). **The agent applies a rotation**
-(this change, stacked on #961): `agent apply-key-rotation` fetches it (or reads `--file`), verifies
+(#963): `agent apply-key-rotation` fetches it (or reads `--file`), verifies
 it and records it under `storage.state_dir` (`key-rotations.json`); `apply-release`,
 `apply-content-manifest`, `check-content-manifest` and the self-integrity check verify against the
 keys in force; releases share the rotation's `release_version` counter. How the record relates to
-the embedded keys is in "How an install holds the rotated keys". The control plane serves it (this
-change, stacked on #963): `GET /api/release/key-rotation` returns, byte for byte, the file an
+the embedded keys is in "How an install holds the rotated keys". The control plane serves it (#964): `GET /api/release/key-rotation` returns, byte for byte, the file an
 operator placed at `storage/key-rotations/<ring>.json` (404 when none), with the agent
 authentication and ring of `/api/release/manifest`; the server never signs and never verifies, and
 has no publish endpoint yet. Not implemented: a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
