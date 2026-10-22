@@ -28,5 +28,5 @@ mod condition_tests;
 #[cfg(test)]
 mod tests;
 
-pub use engine::{SigmaEngine, SigmaError};
+pub use engine::{Platform, SigmaEngine, SigmaError};
 pub use rule::SigmaAlert;
