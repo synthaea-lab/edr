@@ -999,6 +999,54 @@ fn an_audit_mode_flood_does_not_use_up_the_budget_of_real_blocks_or_selinux() {
 }
 
 #[test]
+fn a_wdac_alert_names_the_loader_and_the_signing_scenario_not_pid_0() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let kernel_mode = PolicyDenialEvent {
+        object_class: Some("kernel-mode".to_string()),
+        ..wdac_denial(rundll, r"\Device\HarddiskVolume3\Users\Public\x.sys", true)
+    };
+    let alerts = RuleState::new().on_policy_denial(&kernel_mode);
+    let message = &alerts[0].message;
+    assert!(message.contains(&format!("loader={rundll}")), "{message}");
+    assert!(message.contains("scenario=kernel-mode"), "{message}");
+    assert!(!message.contains("pid="), "{message}");
+}
+
+#[test]
+fn an_applocker_alert_names_the_launcher_pid_and_the_rule_collection() {
+    let event = PolicyDenialEvent {
+        meta: schema::EventMeta {
+            pid: 4242,
+            ..meta()
+        },
+        ..applocker_denial("SCRIPT", r"C:\Users\x\run.ps1", true)
+    };
+    let alerts = RuleState::new().on_policy_denial(&event);
+    let message = &alerts[0].message;
+    assert!(message.contains("pid=4242"), "{message}");
+    assert!(message.contains("collection=SCRIPT"), "{message}");
+}
+
+#[test]
+fn a_long_path_prefix_does_not_make_the_same_file_a_new_shape() {
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\evil.exe", true));
+    let win32 = state.on_policy_denial(&applocker_denial("EXE", r"\\?\C:\Users\x\evil.exe", true));
+    let nt = state.on_policy_denial(&applocker_denial("EXE", r"\??\C:\USERS\X\EVIL.EXE", true));
+    let share = state.on_policy_denial(&applocker_denial("EXE", r"\\srv\share\evil.exe", true));
+    let unc = state.on_policy_denial(&applocker_denial(
+        "EXE",
+        r"\\?\UNC\srv\share\evil.exe",
+        true,
+    ));
+    assert_eq!(bare.len(), 1);
+    assert!(win32.is_empty(), "{win32:?}");
+    assert!(nt.is_empty(), "{nt:?}");
+    assert_eq!(share.len(), 1);
+    assert!(unc.is_empty(), "{unc:?}");
+}
+
+#[test]
 fn a_windows_denial_alert_names_the_user_sid() {
     let event = PolicyDenialEvent {
         meta: schema::EventMeta {

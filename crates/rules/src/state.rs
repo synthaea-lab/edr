@@ -2512,19 +2512,16 @@ fn is_all_digits(s: &str) -> bool {
 ///   tells two denials apart: the event has no subject or object context.
 /// - WDAC: (loading process, file, signing scenario, enforced).
 ///
-/// Windows paths are lowercased: they are case-insensitive, and `AppLocker`
-/// reports the same file as `C:\Users\x\EVIL.EXE` from `FullFilePath` and
-/// `C:\USERS\X\EVIL.EXE` from an expanded `FilePath` (#796). An absent path and an
-/// empty one are the same value: both sensors always report the file, so such an event
-/// is degenerate, and it shares one shape per (process, class) rather than alerting on
-/// every repeat.
+/// Windows paths go through [`windows_path_key`]. An absent path and an empty one are
+/// the same value: both sensors always report the file, so such an event is degenerate,
+/// and it shares one shape per (process, class) rather than alerting on every repeat.
 fn policy_denial_key(event: &PolicyDenialEvent) -> Option<PolicyDenialKey> {
     let file = || {
         event
             .object_path
             .as_deref()
             .filter(|path| !path.is_empty())
-            .map(str::to_lowercase)
+            .map(windows_path_key)
     };
     match event.mechanism.as_str() {
         POLICY_MECHANISM_SELINUX => Some((
@@ -2555,6 +2552,30 @@ fn policy_denial_key(event: &PolicyDenialEvent) -> Option<PolicyDenialKey> {
     }
 }
 
+/// One file's spelling in an AppLocker/WDAC key: lowercased, because Windows paths are
+/// case-insensitive and `AppLocker` reports the same file as `C:\Users\x\EVIL.EXE` from
+/// `FullFilePath` and `C:\USERS\X\EVIL.EXE` from an expanded `FilePath` (#796), and
+/// without the `\\?\` / `\??\` prefixes, which name the same file as the bare path.
+///
+/// Not unified, deliberately: `\Device\HarddiskVolumeN\` against `C:\` (WDAC reports only
+/// the device form and `AppLocker` only the drive form, and the mechanism is in the key,
+/// so the two never meet), and 8.3 short names, which only the filesystem can expand. A
+/// spelling left apart costs one extra alert for the same file, never a missed one.
+fn windows_path_key(path: &str) -> String {
+    let Some(rest) = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\??\"))
+    else {
+        return path.to_lowercase();
+    };
+    match rest.get(..4) {
+        Some(unc) if unc.eq_ignore_ascii_case(r"UNC\") => {
+            format!(r"\\{}", &rest[4..]).to_lowercase()
+        }
+        _ => rest.to_lowercase(),
+    }
+}
+
 /// The alert for a new denial shape: `SELinux` at Medium, AppLocker/WDAC at Medium when
 /// the policy blocked the action and Low in audit mode (#796).
 fn policy_denial_alert(event: &PolicyDenialEvent) -> Alert {
@@ -2579,6 +2600,18 @@ fn policy_denial_alert(event: &PolicyDenialEvent) -> Alert {
         User::Windows { sid, .. } => sid.as_str(),
         User::Unix { .. } | User::Unknown => "-",
     };
+    // The actor differs per mechanism: AppLocker logs the launcher's pid and no name, WDAC
+    // 3076/3077 log the policy engine's pid (always 0 here) and name the loader by its image
+    // path only. `object_class` is the rule collection for one, the signing scenario for the
+    // other.
+    let (actor, class_label) = if event.mechanism == POLICY_MECHANISM_WDAC {
+        (
+            format!("loader={}", event.subject_context.as_deref().unwrap_or("-")),
+            "scenario",
+        )
+    } else {
+        (format!("pid={}", event.meta.pid), "collection")
+    };
     Alert {
         technique: "T1562",
         severity: if event.enforced {
@@ -2587,14 +2620,12 @@ fn policy_denial_alert(event: &PolicyDenialEvent) -> Alert {
             Severity::Low
         },
         message: format!(
-            "comm={} sid={} mechanism={} action={} path={} class={} process={} — {}, first time this run",
-            event.meta.comm,
+            "{actor} sid={} mechanism={} action={} path={} {class_label}={} — {}, first time this run",
             sid,
             event.mechanism,
             event.action.as_deref().unwrap_or("-"),
             event.object_path.as_deref().unwrap_or("-"),
             event.object_class.as_deref().unwrap_or("-"),
-            event.subject_context.as_deref().unwrap_or("-"),
             if event.enforced {
                 "blocked by policy"
             } else {
