@@ -412,6 +412,7 @@ mod rdp;
 mod recon;
 mod scan_vertical;
 mod session;
+mod staging;
 mod sudo;
 mod tamper;
 mod windows;

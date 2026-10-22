@@ -23,6 +23,7 @@ mod recon;
 mod session;
 mod signature_gate;
 mod sliding;
+mod staging;
 mod state;
 mod stateless;
 mod sudo;

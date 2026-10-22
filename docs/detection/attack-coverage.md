@@ -95,6 +95,12 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1021.002 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `sigma:rules/sigma/windows/psexec_remote_inline_credentials.yml` |
 | T1563.002 | 3 | `rules:crates/rules/src/session.rs` |
 
+## Collection
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1074.001 | 3 | `rules:crates/rules/src/state.rs` |
+
 ## Command and Control
 
 | Technique | Layer(s) | Source(s) |
