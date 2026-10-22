@@ -241,6 +241,10 @@ with the entities it joined on (`FleetCaseEntity`, unique per tenant) and the de
 its detections and never goes down; a later sighting of one of its entities grows it, and a
 detection that bridges two cases merges them into the older one. The join is idempotent.
 
+They are read in the console at `/console/fleet-cases` (the list, newest activity first, and one case with its
+entities, hosts and detections) and through `GET /api/fleet-cases` and `GET /api/fleet-cases/[id]`, scoped to the
+tenant (`lib/fleet-case-load.ts`); the console only reads them, there is no status change yet.
+
 The join is narrow on purpose, because ADR-0035 makes a fleet case the trigger of a posture
 overlay and an attacker who can make a detection fire can try to link hosts: a bare path or a
 technique never joins; the accounts every host has (`root`, `SYSTEM`, ...) are not an identity; an
