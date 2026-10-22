@@ -153,11 +153,13 @@ mod tests {
         successes_cap: 2,
     };
 
+    /// The detail doubles as the technique, so the alert shows which success it is for (and no
+    /// technique-shaped literal sits in this file: `tools/attack-coverage.py` lists those).
     fn alert(success: &Success<&'static str>, count: usize) -> Alert {
         Alert {
-            technique: "T0000",
+            technique: success.detail,
             severity: Severity::Low,
-            message: format!("{} after {count}", success.detail),
+            message: format!("after {count}"),
         }
     }
 
@@ -173,10 +175,8 @@ mod tests {
         history.record_failure(2 * SECOND, &PARAMS);
         let alerts = history.join(&PARAMS, alert);
         assert_eq!(alerts.len(), 1);
-        assert_eq!(
-            alerts[0].message, "alice after 2",
-            "the detail and the count reach the alert"
-        );
+        assert_eq!(alerts[0].technique, "alice", "the detail reaches the alert");
+        assert_eq!(alerts[0].message, "after 2", "and so does the count");
 
         // A failure 11 s before the success is outside a 10 s window, 10 s before is inside.
         let mut history = History::<&'static str>::default();
@@ -189,7 +189,11 @@ mod tests {
             "the 4 s failure is 11 s before the success: outside the window"
         );
         history.record_failure(5 * SECOND + 1, &PARAMS);
-        assert_eq!(history.join(&PARAMS, alert)[0].message, "bob after 2");
+        let alerts = history.join(&PARAMS, alert);
+        assert_eq!(
+            (alerts[0].technique, alerts[0].message.as_str()),
+            ("bob", "after 2")
+        );
     }
 
     #[test]
@@ -253,6 +257,6 @@ mod tests {
         history.record_success(5 * SECOND, "second", &PARAMS);
         let alerts = history.join(&PARAMS, alert);
         assert_eq!(alerts.len(), 1);
-        assert_eq!(alerts[0].message, "first after 2");
+        assert_eq!(alerts[0].technique, "first");
     }
 }
