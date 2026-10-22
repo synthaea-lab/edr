@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe create LocalCommand binPath= \"cmd.exe /c C:\\ProgramData\\local-remediation.cmd\" start= auto"
+  },
+  "non_matching": {
+    "image": "C:\\Windows\\System32\\sc.exe",
+    "cmdline": "sc.exe create AcmeService binPath= \"C:\\Program Files\\Acme\\service.exe\" start= auto",
+    "note": "A service whose binary path is a real service executable, not a shell command."
+  }
+}
