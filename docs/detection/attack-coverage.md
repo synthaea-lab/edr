@@ -97,6 +97,12 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1021.004 | 3 | `rules:crates/rules/src/state.rs` |
 | T1563.002 | 3 | `rules:crates/rules/src/session.rs` |
 
+## Collection
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1074.001 | 3 | `rules:crates/rules/src/state.rs` |
+
 ## Command and Control
 
 | Technique | Layer(s) | Source(s) |
