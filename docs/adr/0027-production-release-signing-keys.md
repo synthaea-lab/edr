@@ -18,18 +18,22 @@ it, `--allow-test-key` only in a `test-key` build and now also required by
 `--pkcs11 <module> --pkcs11-token --pkcs11-key`, the PIN from an environment variable or a
 0600 file, a `Signer` trait, a signature that does not verify under the signer's own public key
 refused), tested against a software token only: no real token or HSM has been exercised.
-`--key-file` is documented as for the lab but **is not restricted to the test key** (the
-decision below says it should be). The key-rotation release is implemented (#753, this change,
-tested with the public test `recovery` key and a software token only): `updater::rotation`
+`--key-file` accepts only the public test keys (a key file holding any other seed is refused, and
+a build without the `test-key` feature takes no key file at all), as the decision below says. The
+key-rotation release is implemented (#753, #961, tested with the public test `recovery` key and a
+software token only): `updater::rotation`
 (`KeyRotationManifest`, verified against the embedded `recovery` key and nothing else, bound to the
 key state it starts from, with a `release_version` and a validity window), `release-tool rotation`
 to build it and `sign --kind rotation` to sign it, and a golden fixture
-(`crates/updater/tests/fixtures/key-rotation-golden.json`). Not implemented: **the agent applying a
-rotation** (fetching it, keeping the rotated keys across restarts, feeding them to the release and
-content verifiers, and the highest applied `release_version` it checks against), the control plane
-offering one, a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
-drills. The embedded keys are still compile-time statics, so until that wiring exists a verified
-rotation changes nothing on an endpoint. Windows and macOS got the same
+(`crates/updater/tests/fixtures/key-rotation-golden.json`). **The agent applies a rotation**
+(this change, stacked on #961): `agent apply-key-rotation` fetches it (or reads `--file`), verifies
+it and records it under `storage.state_dir` (`key-rotations.json`); `apply-release`,
+`apply-content-manifest`, `check-content-manifest` and the self-integrity check verify against the
+keys in force; releases share the rotation's `release_version` counter. How the record relates to
+the embedded keys is in "How an install holds the rotated keys". Not implemented: the control
+plane offering a rotation (`GET /api/release/key-rotation` is the agent's contract, nothing serves
+it yet), a cloud-KMS backend, the holder and approver decisions below, the runbook and the lab
+drills. Windows and macOS got the same
 `--no-default-features` treatment in #855: the MSI build command in `packaging/windows/README.md`,
 a scan of `agent.exe` and `watchdog.exe` in `packaging/windows/build.ps1` (not run by any CI job,
 it needs WiX), a `tools/assert-no-test-key.sh` step in the two static-agent workflows, and
@@ -106,8 +110,8 @@ owner's decisions and are marked as such.
   `ReleaseManifest` with its own schema version. That is a change to a signed envelope, so it got
   its own PR and golden fixtures; the format is below ("The key-rotation release").
 - `release-tool` has to sign without a key file: the custody choice in 2 decides whether it
-  grows a token or KMS backend. #944 added the PKCS#11 one; `--key-file` is meant for the test key
-  only and is not yet restricted to it.
+  grows a token or KMS backend. #944 added the PKCS#11 one; `--key-file` is restricted to the
+  public test keys.
 - The residual risk is named: losing or compromising **`recovery`** is not recoverable by an
   update and needs a package reinstall of every endpoint. It is the one key whose compromise
   the update channel cannot repair, which is why it is offline and split.
@@ -151,6 +155,47 @@ is never rotated** and a rotation that makes `release` or `content` equal to it 
 key would leave nobody able to sign releases. That is repairable by the same means as any rotation
 (a second one, from `recovery`, retiring the mistyped key), which is why `recovery` is the one key a
 rotation cannot touch, and `release-tool rotation` prints what it is about to install.
+
+### How an install holds the rotated keys
+
+The embedded keys are compile-time statics, so a rotation cannot change them. An install records
+**the signed rotation manifests themselves** in `<state_dir>/key-rotations.json` (written
+atomically, at most 64 entries). Every load replays that record from the embedded keys and
+re-verifies each manifest under the embedded `recovery` key, so the record cannot introduce a key
+`recovery` did not sign. The keys in force are "embedded, then each recorded rotation, in order";
+for each role a rotation changes:
+
+- the key in force is the one the rotation retires: apply it;
+- the key in force is already the one it installs, or one a later rotation installs (a newer
+  build embeds keys the record is behind): skip it, the embedded key is ahead;
+- anything else: the record does not lead from these keys, and the load fails.
+
+| The record is | What happens |
+|---|---|
+| **absent** | A fresh install: the embedded keys. |
+| **older than the embedded keys** (a package upgrade embedded a key the record is behind) | The embedded key stays in force, the record's highest `release_version` still counts. A role never moves backward: the key in force is always the embedded one or one `recovery` signed after it. |
+| **newer than the embedded keys** (an older build over a rotated install) | The record moves the roles forward to the keys it recorded. |
+| **corrupt** (does not parse, a manifest fails verification, versions not increasing, built for other embedded keys, roles collapsed) | **Refused, never a fallback**: `apply-release`, `apply-content-manifest` and `check-content-manifest` stop before the network, and the integrity check raises a tamper event. A file that exists proves a rotation happened, and the embedded keys may be ones that were rotated away from. The operator removes the file on purpose, knowing what that re-trusts. |
+
+**Residual risk, named.** Deleting the file on an install that rotated puts the embedded (possibly
+retired) keys back in force. That needs write access to the state directory, which is root's, the
+same boundary as the ban list and the content state (an attacker with it can already replace the
+agent). A package that re-embeds the rotated keys closes it for that fleet.
+
+Other rules the wiring settles:
+
+- **One counter.** The highest recorded rotation's `release_version` is a floor for releases:
+  `apply-release` treats a release numbered at or below it as not newer.
+- **The window is checked when a rotation is applied, not when the record is replayed**: a
+  rotation applied while valid stays applied after it expires.
+- **Self-integrity accepts every `release` key the install has trusted** when it re-checks the
+  manifest of an already promoted release, because that manifest was signed by the key in force
+  when it was promoted. It is a re-check of a file on disk, never an approval of anything new;
+  a manifest signed by a key the install never trusted is still a tamper event.
+- **A test-key build that rotated a role away from the public test key** no longer needs
+  `--allow-test-key` for that role. `apply-key-rotation` itself needs it while `recovery` is the
+  public test key, like the other commands.
+- **Content keeps its own counter** (per ring); only binary releases share the rotation's.
 
 ### Comparison with TUF's threshold and expiry rules
 

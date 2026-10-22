@@ -63,6 +63,9 @@ and refuses one that does not verify or lists nothing):
         --release-version 5 --released-at 2026-10-12T09:30:00Z --out release-5.json
     release-tool sign --kind content --key-file release.key release-5.json --out release-5-signed.json
 
+(`--key-file` accepts only the public test keys, ADR-0027; a production key signs with
+`--pkcs11`.)
+
 `--current` (the manifest being withdrawn) is optional but worth giving: it lists what agents will
 remove, and the paths whose bytes differ between the two releases, for the operator's own
 information. **The artifact store is keyed by content hash** (`storage/artifacts/<sha256>`,
