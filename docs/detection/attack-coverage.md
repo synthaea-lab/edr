@@ -117,6 +117,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
+| T1489 | 3 | `rules:crates/rules/src/state.rs` |
 | T1490 | 3 | `rules:crates/rules/src/stateless.rs` |
 
 ## Unmapped — add to TECHNIQUE_TACTIC
