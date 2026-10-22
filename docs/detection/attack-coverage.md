@@ -87,13 +87,21 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1057 | 3 | `rules:crates/rules/src/recon.rs` |
 | T1082 | 3 | `rules:crates/rules/src/recon.rs` |
 | T1087 | 3 | `rules:crates/rules/src/recon.rs` |
+| T1518.001 | 3 | `rules:crates/rules/src/state.rs` |
 
 ## Lateral Movement
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1021.002 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `sigma:rules/sigma/windows/psexec_remote_inline_credentials.yml` |
+| T1021.004 | 3 | `rules:crates/rules/src/state.rs` |
 | T1563.002 | 3 | `rules:crates/rules/src/session.rs` |
+
+## Collection
+
+| Technique | Layer(s) | Source(s) |
+| --- | --- | --- |
+| T1074.001 | 3 | `rules:crates/rules/src/state.rs` |
 
 ## Command and Control
 
@@ -110,11 +118,14 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | --- | --- | --- |
 | T1041 | 3 | `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/windows/bitsadmin_upload_job.yml` |
 | T1048.003 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1567.002 | 3 | `rules:crates/rules/src/egressdomain.rs`, `sigma:rules/sigma/linux/curl_upload_to_cloud_storage.yml`, `sigma:rules/sigma/windows/curl_upload_to_cloud_storage.yml` |
+| T1567.003 | 3 | `rules:crates/rules/src/egressdomain.rs`, `sigma:rules/sigma/linux/curl_upload_to_paste_service.yml` |
 
 ## Impact
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
+| T1489 | 3 | `rules:crates/rules/src/state.rs` |
 | T1490 | 3 | `rules:crates/rules/src/stateless.rs` |
 
 ## Unmapped — add to TECHNIQUE_TACTIC
@@ -144,5 +155,4 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1560.001 | 3 | `sigma:rules/sigma/linux/passworded_home_archive.yml`, `sigma:rules/sigma/windows/passworded_user_data_archive.yml` |
 | T1562 | 3 | `rules:crates/rules/src/state.rs` |
 | T1564.004 | 3 | `rules:crates/rules/src/stateless.rs` |
-| T1567.002 | 3 | `sigma:rules/sigma/linux/curl_upload_to_cloud_storage.yml`, `sigma:rules/sigma/windows/curl_upload_to_cloud_storage.yml` |
 
