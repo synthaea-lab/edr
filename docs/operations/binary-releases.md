@@ -84,8 +84,18 @@ store URL is fetched over the network, as for content manifests).
    (it must be above the installed release and any earlier rotation, and the next release above
    it) and is applicable for at most 30 days after it is issued. A record that exists and does
    not verify makes those commands refuse, on purpose: see ADR-0027, "How an install holds the
-   rotated keys", for what absent, older and corrupt records do. The control plane does not serve
-   rotations yet.
+   rotated keys", for what absent, older and corrupt records do.
+
+   **Publishing a rotation.** The control plane never signs one and never checks the signature
+   (agents do, against the `recovery` key they embed). It serves the file an operator places at
+   `storage/key-rotations/<ring>.json` (`canary_0`, `canary_1`, `canary_2`, `prod`), byte for
+   byte: one pending rotation per ring, so a rotation can reach a canary ring before `prod`, and
+   removing the file withdraws it (404). A file that is not valid JSON or not shaped like a
+   rotation (unknown field, a key that is not 64 lowercase hex characters, half a pair, a window
+   beyond 30 days) is answered with 502 and an entry in the server log, never handed to an agent.
+   A rotation names the key it retires, so it applies to hosts on that key state only: with one
+   file per ring the server serves one state at a time, and an agent on another state refuses it
+   without effect. There is no publish endpoint yet: the file is placed on the server by hand.
 
    **Which key a build trusts (ADR-0027).** An agent embeds a trust set of `release`,
    `content` and `recovery` public keys from `crates/updater/keys/*.pub`. Those files say
@@ -110,7 +120,7 @@ store URL is fetched over the network, as for content manifests).
 
 ## What agents can reach
 
-Both routes authenticate like `/api/ingest/*` (nginx proxy secret + verified client
+All three routes authenticate like `/api/ingest/*` (nginx proxy secret + verified client
 certificate, enrolled agent) and are public to the session middleware for that reason.
 
 - `GET /api/release/manifest`: the latest **active** release of the agent's own ring.
@@ -118,6 +128,8 @@ certificate, enrolled agent) and are public to the session middleware for that r
 - `GET /api/release/artifact?release_version=N&path=P[&sha256=H]`: a file of an active
   release of the agent's ring, only if the manifest lists `P`, and only if the stored
   file still hashes to the signed value (502 otherwise).
+- `GET /api/release/key-rotation`: the key rotation pending for the agent's own ring
+  (ADR-0027), which `agent apply-key-rotation` fetches. 404 when nothing is pending.
 
 Setting `status` to `halted` on a row stops it being offered (there is no endpoint for
 that yet; ring-health auto-halt is a later slice).
