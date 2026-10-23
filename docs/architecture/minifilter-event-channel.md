@@ -70,6 +70,9 @@ and post-op callbacks can run at `DISPATCH_LEVEL`. So:
 Paths are UTF-16 and capped at **4,096 code units** each in the record; a
 longer path is truncated and flagged. The user-mode receiver counts and logs
 such records instead of forwarding a partial path as a complete rule event.
+This avoids matching an incomplete name, but means a delete or rename with an
+overlong path is not visible to detection rules; the loss is observable only
+through the receiver's truncation counter and logs.
 
 ### Guardrail 6: the kernel never waits on user mode
 
@@ -182,7 +185,9 @@ other sensor (#71), instead of looking like a quiet machine.
   `channel::run` owns the connection from then on:
   - A host where the driver is **not loaded** (`NotLoaded` at start) runs no thread and
     registers no heartbeat: that is the normal case today and not a silence alert. A
-    driver loaded later is picked up at the next agent start.
+    driver loaded later is picked up at the next agent start. There is no runtime
+    discovery or heartbeat for that late-loaded driver, so file telemetry remains
+    unavailable until the agent is restarted.
   - Any **other** connect failure at start (the single slot still held by the previous agent
     process, access denied, a protocol mismatch) does not disable the channel: the thread
     starts, retries with capped backoff (1 s doubling to 30 s), and the
