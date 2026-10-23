@@ -14,6 +14,27 @@ A field and modifier specification duplicated with different casing
 (such as `Image|endswith` and `image|EndsWith`) is rejected because evaluation
 ANDs fields and would otherwise make the rule's meaning unclear.
 
+## Fields
+
+Supported today, on an `ExecEvent`: `Image`, `CommandLine`, `ParentImage`,
+`OriginalFileName` (#983). Everything else — `logsource` category/field mapping
+onto native events in general (#719), `ParentCommandLine`, `Hashes`,
+`IntegrityLevel`, `User`, `CurrentDirectory`, `Company`/`Description`/`Product`
+(the other PE version-resource strings #983 read but does not yet map) — is
+refused at load, naming the field.
+
+`OriginalFileName` is PE version-resource metadata (`enrich::pe_info`,
+read once per enrichment cache miss alongside the hash and signature): a
+Windows/PE concept with no Mach-O or ELF equivalent. A rule using it is
+refused at load unless its path is under a `windows/` directory — using it
+from `linux/` or `macos/` would otherwise load fine and never match on the
+platforms that actually run it (the exact silent-death failure mode this
+validator exists to kill). A *particular* Windows event can still lack the
+value (no version resource, a parse failure, an image over the enrichment
+size budget) without the rule being refused — same posture as `ParentImage`
+when the sensor has no lineage: the field is absent for that one event, not
+unsupported for the platform.
+
 ## Conditions (#978)
 
 A rule's `condition` is a boolean expression over the named blocks of its `detection`. There is
@@ -54,10 +75,10 @@ and 64 distinct referenced blocks per condition; the parser's recursion is cappe
 bound. Evaluation short-circuits and evaluates each block at most once per event (a fixed array
 on the stack), and lowercases each event field at most once however many blocks read it.
 
-Not in this change: `OriginalFileName` and other fields the event does not carry, field mapping
-and `logsource` (#719), the `windash` / `re` / `base64offset` / `fieldref` modifiers, and a
-selection written as a list of maps (an OR of field maps), which the loader still refuses with a
-YAML error.
+Not in this change: fields the event does not carry (see "Fields" above for what's supported as
+of #983), field mapping and `logsource` beyond that (#719), the `windash` / `re` / `base64offset`
+/ `fieldref` modifiers, and a selection written as a list of maps (an OR of field maps), which the
+loader still refuses with a YAML error.
 
 ## Which rules a host loads
 
