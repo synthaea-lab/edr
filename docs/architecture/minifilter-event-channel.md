@@ -67,8 +67,9 @@ and post-op callbacks can run at `DISPATCH_LEVEL`. So:
   queue record: link it into the queue as is. Otherwise free it. No name
   query, no copy and no allocation in the post-op.
 
-Paths are UTF-16 and capped at **4,096 characters** each in the record; a
-longer path is truncated and flagged, never dropped silently.
+Paths are UTF-16 and capped at **4,096 code units** each in the record; a
+longer path is truncated and flagged. The user-mode receiver counts and logs
+such records instead of forwarding a partial path as a complete rule event.
 
 ### Guardrail 6: the kernel never waits on user mode
 
@@ -89,10 +90,10 @@ drains it and sends.
   `STATUS_TIMEOUT` or any error the record is dropped and counted. The
   timeout bounds how long one stuck agent read can hold the *sender*; I/O is
   never involved.
-- **No client connected:** the post-op checks a connected flag first and
-  doesn't queue at all; those operations are counted in a separate
-  "not connected" counter so the agent can tell "dropped under load" from
-  "nobody was listening".
+- **No client connected:** qualifying pre-op attempts are not queued and
+  increment a separate "not connected" counter. Because the final operation
+  result is not yet known, this counter is an upper bound on lost events; it
+  distinguishes a disconnected receiver from queue saturation.
 
 A hung, suspended or crashed agent therefore costs the queue filling up and
 the counters climbing, never a stalled `DeleteFile` on the machine.
@@ -141,9 +142,12 @@ version is refused at connect, never fed a format it can't read. The header is *
 Carrying the counters in **every** message means the agent always has the
 current loss figures without a second request path (there is still no
 `MessageNotify`: user mode never sends to the driver). A gap in `seq` plus a
-counter increase tells the agent exactly how many events it lost and why. A record is
-numbered when the sender takes it off the queue, so a failed send shows both as a gap and in
-`dropped_send_failed`; the agent counts it once (`ChannelStats::total_lost`). A heartbeat the
+counter increase exposes aggregate losses; `not_connected` is an upper bound because it can
+count a qualifying pre-operation attempt before its final result is known. A record is
+numbered when the sender takes it off the queue, so a failed send normally shows both as a gap
+and in `dropped_send_failed`. The agent reconciles them per received snapshot; after a reconnect
+resets the sequence, the counter can still expose a failed send without a visible gap
+(`ChannelStats::total_lost`). A heartbeat the
 sender cannot send is not a lost record: the sender takes its number back, so a quiet period
 with no read pending leaves no gap and moves no counter. `dropped_capture_failed` counts an
 operation that succeeded but whose names could not be obtained; it is only counted once the
@@ -188,8 +192,12 @@ other sensor (#71), instead of looking like a quiet machine.
     that accepts the connection and then fails every read is retried at the capped rate.
   - The heartbeat is pulsed by every message including idle ones.
   - **Loss is reported in the log**, not (yet) in the health beacon: at most once a minute,
-    and only when the figures rose, one warning carries the driver's four counters, the
-    sequence gaps and the decode errors. Exporting them in the `HealthBeacon` next to
+    and only when the figures rose, one warning carries the driver's four raw counters, the
+    sequence gaps, decode errors and cut-path count. The first received driver snapshot is
+    logged separately as a baseline; it may contain losses from before this agent run. The
+    per-run total counts later counter increases, including a reset observed after driver reload,
+    plus sequence gaps and cut paths. Loss before the first snapshot cannot be assigned to the
+    current run. Exporting these figures in the `HealthBeacon` next to
     `spool_dropped` and `enrich_dropped` needs an additive schema field set (the `serde`
     default keeps old beacons readable), the server's beacon parser and database columns, and
     the fleet page: the same set of files as #863, and not part of this change.
