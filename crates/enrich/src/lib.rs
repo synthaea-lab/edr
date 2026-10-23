@@ -29,11 +29,10 @@ use std::{
     path::Path,
 };
 
+pub use pe_info::PeInfo;
 use schema::Signature;
 use sha2::{Digest, Sha256};
 use store::BoundedMap;
-
-pub use pe_info::PeInfo;
 
 /// Files larger than this are not hashed on the event path (64 MiB).
 pub const MAX_HASH_BYTES: u64 = 64 * 1024 * 1024;
