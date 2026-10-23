@@ -768,3 +768,392 @@ fn a_linux_leaf_match_stays_case_sensitive() {
     ));
     assert!(alerts.iter().all(|a| a.technique != "T1105"), "{alerts:?}");
 }
+
+// ── POLICY-DENIAL-DRIFT via AppLocker / WDAC (#796, PolicyDenialEvent) ──
+
+fn applocker_denial(class: &str, path: &str, enforced: bool) -> PolicyDenialEvent {
+    PolicyDenialEvent {
+        action: Some("execute".to_string()),
+        object_path: Some(path.to_string()),
+        ..policy_denial_event_full("applocker", None, None, Some(class), enforced)
+    }
+}
+
+fn wdac_denial(process: &str, file: &str, enforced: bool) -> PolicyDenialEvent {
+    PolicyDenialEvent {
+        action: Some("load".to_string()),
+        object_path: Some(file.to_string()),
+        ..policy_denial_event_full("wdac", Some(process), None, Some("user-mode"), enforced)
+    }
+}
+
+#[test]
+fn applocker_alerts_once_per_blocked_file_not_once_per_rule_collection() {
+    // The #781 key collapsed every AppLocker denial to its rule collection: the
+    // second blocked .exe of the run never alerted.
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let second = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\b.exe", true));
+    let repeat = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert!(repeat.is_empty(), "{repeat:?}");
+    assert!(
+        first[0].message.contains(r"C:\Users\x\a.exe"),
+        "{}",
+        first[0].message
+    );
+}
+
+#[test]
+fn applocker_paths_match_case_insensitively() {
+    // FullFilePath keeps the original case; an expanded FilePath is upper-case.
+    let mut state = RuleState::new();
+    let full = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\Evil.exe", true));
+    let expanded = state.on_policy_denial(&applocker_denial("EXE", r"C:\USERS\X\EVIL.EXE", true));
+    assert_eq!(full.len(), 1);
+    assert!(expanded.is_empty(), "{expanded:?}");
+}
+
+#[test]
+fn applocker_same_file_in_another_rule_collection_is_a_new_shape() {
+    let mut state = RuleState::new();
+    let exe = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\run.ps1", true));
+    let script = state.on_policy_denial(&applocker_denial("SCRIPT", r"C:\Users\x\run.ps1", true));
+    assert_eq!(exe.len(), 1);
+    assert_eq!(script.len(), 1);
+}
+
+#[test]
+fn an_enforced_windows_denial_is_medium_and_an_audit_one_low() {
+    let mut state = RuleState::new();
+    let blocked = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let audited = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\b.exe", false));
+    assert_eq!(blocked[0].severity, schema::detection::Severity::Medium);
+    assert_eq!(audited[0].severity, schema::detection::Severity::Low);
+    assert!(
+        audited[0].message.contains("audit mode"),
+        "{}",
+        audited[0].message
+    );
+    assert!(
+        blocked
+            .iter()
+            .chain(&audited)
+            .all(|a| a.technique == "T1562")
+    );
+}
+
+#[test]
+fn wdac_is_keyed_by_the_loading_process_and_the_file() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let regsvr = r"\Device\HarddiskVolume3\Windows\System32\regsvr32.exe";
+    let dll = r"\Device\HarddiskVolume3\Users\Public\x.dll";
+    let mut state = RuleState::new();
+    let first = state.on_policy_denial(&wdac_denial(rundll, dll, true));
+    let other_process = state.on_policy_denial(&wdac_denial(regsvr, dll, true));
+    let repeat = state.on_policy_denial(&wdac_denial(
+        &rundll.to_uppercase(),
+        &dll.to_uppercase(),
+        true,
+    ));
+    assert_eq!(first.len(), 1);
+    assert_eq!(other_process.len(), 1);
+    assert!(repeat.is_empty(), "{repeat:?}");
+    assert!(
+        first[0].message.contains("rundll32.exe"),
+        "{}",
+        first[0].message
+    );
+}
+
+#[test]
+fn a_file_first_seen_in_audit_mode_alerts_again_when_the_policy_blocks_it() {
+    // `enforced` is part of the key for AppLocker/WDAC: an audit-mode rollout followed by
+    // enforcement must not leave the blocks silent because the Low alert came first.
+    let mut state = RuleState::new();
+    let audited = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", false));
+    let audited_again =
+        state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", false));
+    let blocked = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    let blocked_again = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\a.exe", true));
+    assert_eq!(audited[0].severity, schema::detection::Severity::Low);
+    assert!(audited_again.is_empty(), "{audited_again:?}");
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].severity, schema::detection::Severity::Medium);
+    assert!(blocked_again.is_empty(), "{blocked_again:?}");
+}
+
+#[test]
+fn a_wdac_audit_denial_is_low() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let dll = r"\Device\HarddiskVolume3\Users\Public\x.dll";
+    let mut state = RuleState::new();
+    let audited = state.on_policy_denial(&wdac_denial(rundll, dll, false));
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].severity, schema::detection::Severity::Low);
+    assert!(
+        audited[0].message.contains("audit mode"),
+        "{}",
+        audited[0].message
+    );
+}
+
+#[test]
+fn the_wdac_signing_scenario_is_part_of_the_key() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let dll = r"\Device\HarddiskVolume3\Users\Public\x.dll";
+    let user_mode = wdac_denial(rundll, dll, true);
+    let kernel_mode = PolicyDenialEvent {
+        object_class: Some("kernel-mode".to_string()),
+        ..user_mode.clone()
+    };
+    let mut state = RuleState::new();
+    assert_eq!(state.on_policy_denial(&user_mode).len(), 1);
+    assert_eq!(
+        state.on_policy_denial(&kernel_mode).len(),
+        1,
+        "the same process and file under another signing scenario is a new shape"
+    );
+    assert!(state.on_policy_denial(&user_mode).is_empty());
+}
+
+#[test]
+fn a_wdac_denial_without_a_loading_process_is_still_keyed_by_the_file() {
+    let anonymous = |file: &str| PolicyDenialEvent {
+        subject_context: None,
+        ..wdac_denial("unused", file, true)
+    };
+    let mut state = RuleState::new();
+    assert_eq!(
+        state
+            .on_policy_denial(&anonymous(r"\Device\HarddiskVolume3\a.dll"))
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .on_policy_denial(&anonymous(r"\Device\HarddiskVolume3\b.dll"))
+            .len(),
+        1
+    );
+    assert!(
+        state
+            .on_policy_denial(&anonymous(r"\Device\HarddiskVolume3\a.dll"))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_windows_denial_without_a_file_alerts_every_time_instead_of_silencing_the_next() {
+    // #796 review: a path-less denial used to be one shape per (class, enforced), so after the
+    // first one every later path-less denial, a malicious one included, was silent for the run.
+    let mut state = RuleState::new();
+    let no_path = PolicyDenialEvent {
+        object_path: None,
+        ..applocker_denial("EXE", "", true)
+    };
+    let empty_path = applocker_denial("EXE", "", true);
+    assert_eq!(state.on_policy_denial(&no_path).len(), 1);
+    assert_eq!(state.on_policy_denial(&empty_path).len(), 1);
+    assert_eq!(state.on_policy_denial(&no_path).len(), 1);
+}
+
+#[test]
+fn the_wdac_loader_is_normalised_like_the_file() {
+    // #796 review: the loader was only lowercased, so its `\??\` spelling was a second shape.
+    let dll = r"C:\Users\Public\x.dll";
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&wdac_denial(r"C:\Windows\System32\rundll32.exe", dll, true));
+    let nt = state.on_policy_denial(&wdac_denial(
+        r"\??\C:\WINDOWS\System32\rundll32.exe",
+        dll,
+        true,
+    ));
+    assert_eq!(bare.len(), 1);
+    assert!(nt.is_empty(), "{nt:?}");
+
+    let no_loader = PolicyDenialEvent {
+        subject_context: None,
+        ..wdac_denial("unused", dll, true)
+    };
+    let empty_loader = wdac_denial("", dll, true);
+    assert_eq!(state.on_policy_denial(&no_loader).len(), 1);
+    assert!(
+        state.on_policy_denial(&empty_loader).is_empty(),
+        "an empty loader is an absent one"
+    );
+}
+
+#[test]
+fn forward_slashes_and_the_device_prefix_do_not_make_the_same_file_a_new_shape() {
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\evil.exe", true));
+    let slashes = state.on_policy_denial(&applocker_denial("EXE", "C:/Users/x/evil.exe", true));
+    let device = state.on_policy_denial(&applocker_denial("EXE", r"\\.\C:\Users\x\evil.exe", true));
+    assert_eq!(bare.len(), 1);
+    assert!(slashes.is_empty(), "{slashes:?}");
+    assert!(device.is_empty(), "{device:?}");
+}
+
+#[test]
+fn case_folding_never_merges_names_ntfs_keeps_apart() {
+    // NTFS compares names through its upcase table; Unicode lower-casing maps the Kelvin sign
+    // to `k` and would merge two different files into one shape, a missed alert.
+    let mut state = RuleState::new();
+    let ascii = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\K.exe", true));
+    let kelvin = state.on_policy_denial(&applocker_denial("EXE", "C:\\x\\\u{212A}.exe", true));
+    let sharp_s = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\straße.exe", true));
+    let double_s = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\strasse.exe", true));
+    assert_eq!(ascii.len(), 1);
+    assert_eq!(kelvin.len(), 1, "the Kelvin sign is not K");
+    assert_eq!(sharp_s.len(), 1);
+    assert_eq!(double_s.len(), 1, "ß is not ss");
+}
+
+#[test]
+fn each_windows_budget_refills_on_its_own_window() {
+    // #796 review: the three budgets shared one window, so the first new shape of any kind
+    // after it expired refilled every budget, a spent audit flood included.
+    let t0 = meta().timestamp_ns;
+    let at = |event: PolicyDenialEvent, timestamp_ns: u64| PolicyDenialEvent {
+        meta: schema::EventMeta {
+            timestamp_ns,
+            ..event.meta.clone()
+        },
+        ..event
+    };
+    let window = crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS;
+    let half = t0 + window / 2;
+    let enforced_expired = t0 + window;
+    let mut state = RuleState::new();
+    // The enforced budget's window opens at t0, the audit one half a window later.
+    let first_block = applocker_denial("EXE", r"C:\Users\x\evil.exe", true);
+    assert_eq!(state.on_policy_denial(&at(first_block, t0)).len(), 1);
+    for i in 0..POLICY_DENIAL_ALERT_CAP {
+        state.on_policy_denial(&at(
+            applocker_denial("EXE", &format!(r"C:\Users\x\tool{i}.exe"), false),
+            half,
+        ));
+    }
+    // The enforced window expires and refills on the next block...
+    let next_block = applocker_denial("EXE", r"C:\Users\x\evil2.exe", true);
+    assert_eq!(
+        state
+            .on_policy_denial(&at(next_block, enforced_expired))
+            .len(),
+        1
+    );
+    // ...but the audit window, half a window old, is still spent.
+    let audited = state.on_policy_denial(&at(
+        applocker_denial("EXE", r"C:\Users\x\late.exe", false),
+        enforced_expired + 1,
+    ));
+    assert!(
+        audited.is_empty(),
+        "the audit budget is still spent: {audited:?}"
+    );
+}
+
+#[test]
+fn an_audit_mode_flood_does_not_use_up_the_budget_of_real_blocks_or_selinux() {
+    // A fresh AppLocker audit rollout logs every unlisted binary once. Past the cap those are
+    // shed, but the enforced Windows budget and the SELinux budget are separate.
+    let mut state = RuleState::new();
+    let mut audited = 0usize;
+    for i in 0..=POLICY_DENIAL_ALERT_CAP {
+        audited += state
+            .on_policy_denial(&applocker_denial(
+                "EXE",
+                &format!(r"C:\Users\x\tool{i}.exe"),
+                false,
+            ))
+            .len();
+    }
+    assert_eq!(
+        audited, POLICY_DENIAL_ALERT_CAP as usize,
+        "the (cap + 1)th audit-mode shape is shed"
+    );
+
+    let blocked = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\evil.exe", true));
+    assert_eq!(blocked.len(), 1, "a real block still alerts");
+    assert_eq!(blocked[0].severity, schema::detection::Severity::Medium);
+
+    let selinux = state.on_policy_denial(&policy_denial_event_full(
+        "selinux",
+        Some("system_u:system_r:httpd_t:s0"),
+        Some("system_u:object_r:user_home_t:s0"),
+        Some("file"),
+        true,
+    ));
+    assert_eq!(selinux.len(), 1, "SELinux has its own budget");
+}
+
+#[test]
+fn a_wdac_alert_names_the_loader_and_the_signing_scenario_not_pid_0() {
+    let rundll = r"\Device\HarddiskVolume3\Windows\System32\rundll32.exe";
+    let kernel_mode = PolicyDenialEvent {
+        object_class: Some("kernel-mode".to_string()),
+        ..wdac_denial(rundll, r"\Device\HarddiskVolume3\Users\Public\x.sys", true)
+    };
+    let alerts = RuleState::new().on_policy_denial(&kernel_mode);
+    let message = &alerts[0].message;
+    assert!(message.contains(&format!("loader={rundll}")), "{message}");
+    assert!(message.contains("scenario=kernel-mode"), "{message}");
+    assert!(!message.contains("pid="), "{message}");
+}
+
+#[test]
+fn an_applocker_alert_names_the_launcher_pid_and_the_rule_collection() {
+    let event = PolicyDenialEvent {
+        meta: schema::EventMeta {
+            pid: 4242,
+            ..meta()
+        },
+        ..applocker_denial("SCRIPT", r"C:\Users\x\run.ps1", true)
+    };
+    let alerts = RuleState::new().on_policy_denial(&event);
+    let message = &alerts[0].message;
+    assert!(message.contains("pid=4242"), "{message}");
+    assert!(message.contains("collection=SCRIPT"), "{message}");
+}
+
+#[test]
+fn a_long_path_prefix_does_not_make_the_same_file_a_new_shape() {
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\evil.exe", true));
+    let win32 = state.on_policy_denial(&applocker_denial("EXE", r"\\?\C:\Users\x\evil.exe", true));
+    let nt = state.on_policy_denial(&applocker_denial("EXE", r"\??\C:\USERS\X\EVIL.EXE", true));
+    let share = state.on_policy_denial(&applocker_denial("EXE", r"\\srv\share\evil.exe", true));
+    let unc = state.on_policy_denial(&applocker_denial(
+        "EXE",
+        r"\\?\UNC\srv\share\evil.exe",
+        true,
+    ));
+    assert_eq!(bare.len(), 1);
+    assert!(win32.is_empty(), "{win32:?}");
+    assert!(nt.is_empty(), "{nt:?}");
+    assert_eq!(share.len(), 1);
+    assert!(unc.is_empty(), "{unc:?}");
+}
+
+#[test]
+fn a_windows_denial_alert_names_the_user_sid() {
+    let event = PolicyDenialEvent {
+        meta: schema::EventMeta {
+            user: schema::User::Windows {
+                sid: "S-1-5-21-1000".to_string(),
+                integrity_level: None,
+            },
+            ..meta()
+        },
+        ..applocker_denial("EXE", r"C:\Users\x\a.exe", true)
+    };
+    let alerts = RuleState::new().on_policy_denial(&event);
+    assert_eq!(alerts.len(), 1);
+    assert!(
+        alerts[0].message.contains("sid=S-1-5-21-1000"),
+        "{}",
+        alerts[0].message
+    );
+}

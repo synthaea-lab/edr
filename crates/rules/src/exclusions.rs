@@ -491,8 +491,8 @@ pub(crate) const BROWSERS: &[&str] = &[
     "vivaldi.exe",
 ];
 
-/// New-shape alerts POLICY-DENIAL-DRIFT raises **per subject type** per
-/// [`POLICY_DENIAL_ALERT_WINDOW_NS`] (#812, per subject since #840):
+/// New-shape alerts POLICY-DENIAL-DRIFT raises **per budget** per
+/// [`POLICY_DENIAL_ALERT_WINDOW_NS`] (#812, per subject since #840, Windows budgets since #796):
 /// `known_policy_denials` bounds the rule's memory of what it has seen, not its alert
 /// volume, so a flood of distinct shapes (one domain probing thousands of object types)
 /// could otherwise emit one alert per shape, unbounded. The key is (mechanism, subject
@@ -500,15 +500,21 @@ pub(crate) const BROWSERS: &[&str] = &[
 /// permission set to it, one (type, type, class) triple produces one shape per permission set
 /// the kernel denies for it, not one shape overall.
 ///
-/// The budget belongs to the subject's type (`user:role:type`, see
+/// A budget is an `SELinux` subject type (`user:role:type`, see
 /// [`POLICY_DENIAL_SUBJECT_CAP`]): one noisy domain (`httpd_t` probing 512 types) spends its own
 /// budget and nobody else's, so the first new shape of an untouched domain still alerts
-/// (#840; it used to be one counter for the whole host).
+/// (#840; it used to be one counter for the whole host). `AppLocker` and WDAC key on the file
+/// (#796), so their shape count is the number of distinct blocked files, and they have one
+/// budget per mechanism and enforcement mode: a fresh audit-mode rollout, or a build directory
+/// full of unsigned DLLs, produces hundreds of shapes at once and must not spend the budget a
+/// real block needs.
 ///
 /// 2048 is a reasoned bound, **not a measured one**: a few hundred distinct triples times a
 /// handful of permission sets each was the estimate when it was chosen, and nobody has
 /// compared it with the denial volume of a real `SELinux`-enforcing fleet. It was a host-wide
-/// figure and is now a per-subject one, unchanged for lack of data. Shapes past it are
+/// figure and is now a per-budget one, unchanged for lack of data. For `AppLocker`/WDAC it
+/// is 2048 distinct files an hour per mode, which an audit rollout can reach; that is the
+/// point of the cap (past it the rollout is counted, not alerted). Shapes past it are
 /// counted (`policy_denial_alerts_shed`) and, not being remembered, can alert in a later
 /// window. Revisit with real denial data.
 pub(crate) const POLICY_DENIAL_ALERT_CAP: u64 = 2048;

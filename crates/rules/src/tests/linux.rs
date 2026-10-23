@@ -1248,20 +1248,19 @@ fn permissive_mode_still_alerts_on_a_new_shape() {
 }
 
 #[test]
-fn only_selinux_denials_alert_for_now() {
-    // AppLocker/WDAC PolicyDenialEvents carry no subject/object context
-    // (always None), so this rule's shape would collapse to object_class
-    // alone — far too coarse (see known_policy_denials' doc) — gated off
-    // until a richer per-mechanism key exists.
+fn a_mechanism_without_a_shape_key_never_alerts() {
+    // `policy_denial_key` defines a shape for SELinux, AppLocker and WDAC
+    // (#796); a mechanism it does not know has no key, so it cannot tell a new
+    // denial from a repeat and stays silent rather than alert on every one.
     let mut state = RuleState::new();
-    let applocker = state.on_policy_denial(&policy_denial_event_full(
-        "applocker",
-        None,
-        None,
-        Some("EXE"),
+    let unknown = state.on_policy_denial(&policy_denial_event_full(
+        "smack",
+        Some("subject"),
+        Some("object"),
+        Some("file"),
         true,
     ));
-    assert!(applocker.is_empty());
+    assert!(unknown.is_empty());
 }
 
 #[test]
@@ -1507,7 +1506,7 @@ fn a_subject_forgotten_by_the_bounded_budget_map_starts_a_fresh_budget_and_it_is
         );
     });
     assert!(
-        logs.contains("subject alert budgets forgotten"),
+        logs.contains("alert budgets forgotten"),
         "the loss must be logged: {logs}"
     );
 }
