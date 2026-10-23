@@ -882,6 +882,7 @@ fn listen_port_golden() {
             },
             local_addr: "0.0.0.0".parse::<IpAddr>().unwrap(),
             local_port: 31337,
+            protocol: 6, // IPPROTO_TCP
         }),
         "listen_port",
     );
@@ -2375,6 +2376,7 @@ fn meta_accessor_covers_all_variants() {
             meta: meta.clone(),
             local_addr: "0.0.0.0".parse::<IpAddr>().unwrap(),
             local_port: 0,
+            protocol: 6,
         }),
         Event::NetworkFlow(NetworkFlowEvent {
             meta: meta.clone(),

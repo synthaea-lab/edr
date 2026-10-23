@@ -292,7 +292,7 @@ pub mod time;
 /// then 45, then 46, while #519, #654, #632, #263, #87, #364, #799 and #458
 /// merged first with 35, 40, 41, 42, 43, 44, 45 and 47; same coordination
 /// note as above.
-pub const SCHEMA_VERSION: u32 = 48;
+pub const SCHEMA_VERSION: u32 = 49;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -1470,10 +1470,10 @@ pub struct UdpRecvEvent {
     pub size: u32,
 }
 
-/// A TCP socket found listening, from a periodic socket-table snapshot rather than a
-/// discrete `bind`/`listen()` syscall trace (Linux: `NETLINK_SOCK_DIAG`, issue #92 —
-/// a probe-free source that runs where eBPF/ETW cannot, or as a redundant cross-check
-/// alongside them).
+/// A TCP or UDP socket found bound/listening, from a periodic socket-table snapshot
+/// rather than a discrete `bind`/`listen()` syscall trace (Linux: `NETLINK_SOCK_DIAG`,
+/// issue #92 — a probe-free source that runs where eBPF/ETW cannot, or as a redundant
+/// cross-check alongside them).
 ///
 /// `meta.timestamp_ns` is when the snapshot was taken, not when the socket actually
 /// started listening — a snapshot can only observe "listening as of now", so a
@@ -1481,11 +1481,19 @@ pub struct UdpRecvEvent {
 /// cadence is a caller decision, not a schema concern). Detection value is in the
 /// series across snapshots (listen-port drift: a new port appearing that wasn't there
 /// last poll), not any single event in isolation.
+///
+/// `protocol` is the IP protocol number, same convention as [`NetworkFlowEvent::protocol`]
+/// (`IPPROTO_TCP` = 6, `IPPROTO_UDP` = 17, issue #676). It is part of
+/// [`crate::fixtures`]'s neutral fixture and every consumer's dedup/baseline key: a UDP
+/// listener and a TCP listener on the same port are different shapes, not a collision —
+/// `udp/53` and `tcp/53` are two different services with no reason to share a baseline
+/// entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenPortEvent {
     pub meta: EventMeta,
     pub local_addr: core::net::IpAddr,
     pub local_port: u16,
+    pub protocol: u8,
 }
 
 /// Direction of TLS data flow.
