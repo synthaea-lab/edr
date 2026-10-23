@@ -9,19 +9,24 @@
 //!   `|all` requires every listed value to match), keyword lists
 //! - `contains`/`startswith`/`endswith` modifiers, optionally followed by `|all`, and `*`
 //!   wildcards at start/end; case-only duplicate field specs are refused
-//! - `condition: selection` only
+//! - conditions over any number of named blocks: `and`, `or`, `not` (that precedence),
+//!   parentheses, `1 of` / `all of` a block, a `prefix*` pattern or `them` — see [`condition`]
+//!   for the grammar and its bounds
 //!
 //! Anything outside the subset is rejected **loudly at load time** — a rule with an
 //! unsupported condition, field, or modifier fails to load with a precise error
 //! instead of silently never matching (the old engine's behavior, fixed per issue #11).
 
+mod condition;
 pub mod engine;
 mod eval;
 pub mod rule;
 mod validate;
 
 #[cfg(test)]
+mod condition_tests;
+#[cfg(test)]
 mod tests;
 
-pub use engine::{SigmaEngine, SigmaError};
+pub use engine::{Platform, SigmaEngine, SigmaError};
 pub use rule::SigmaAlert;

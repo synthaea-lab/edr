@@ -1,0 +1,36 @@
+title: Web server or application server spawned a command interpreter
+description: >
+  Detects Apache (`httpd.exe`), nginx, Tomcat's service wrapper or PHP's CGI binary
+  directly starting a command interpreter: a process-lineage signal for a possible exploit
+  of a public-facing application (T1190), the sibling of the IIS worker rule for the other
+  web servers a Windows host runs. It does not claim that the process pair alone proves
+  exploitation, and a server run as a `java.exe` child (a Tomcat started from a console
+  script) is not covered: `java.exe` is too common a parent to list.
+tags:
+  - attack.initial_access
+  - attack.t1190
+  - attack.execution
+  - attack.t1059
+  - synthaea.coverage.initial_access_user_execution
+level: medium
+falsepositives:
+  - A CGI script or a deployment hook that deliberately calls `cmd.exe` (a classic XAMPP or
+    WAMP setup runs CGI through it), most likely on development and staging hosts.
+  - A server administrator running a service wrapper's own start script.
+detection:
+  selection:
+    ParentImage|endswith:
+      - '\httpd.exe'
+      - '\nginx.exe'
+      - '\php-cgi.exe'
+      - '\tomcat8.exe'
+      - '\tomcat9.exe'
+      - '\tomcat10.exe'
+      - '\tomcat11.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection

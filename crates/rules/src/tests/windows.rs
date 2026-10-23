@@ -945,23 +945,114 @@ fn a_wdac_denial_without_a_loading_process_is_still_keyed_by_the_file() {
 }
 
 #[test]
-fn a_missing_path_and_an_empty_one_are_the_same_shape() {
-    // Both sensors always report the file, so this is a degenerate event: it shares one
-    // shape per (class, enforced) instead of alerting on every repeat, and `None` and
-    // `Some("")` are not two different shapes.
+fn a_windows_denial_without_a_file_alerts_every_time_instead_of_silencing_the_next() {
+    // #796 review: a path-less denial used to be one shape per (class, enforced), so after the
+    // first one every later path-less denial, a malicious one included, was silent for the run.
     let mut state = RuleState::new();
     let no_path = PolicyDenialEvent {
         object_path: None,
         ..applocker_denial("EXE", "", true)
     };
     let empty_path = applocker_denial("EXE", "", true);
-    let other_class = PolicyDenialEvent {
-        object_path: None,
-        ..applocker_denial("DLL", "", true)
-    };
     assert_eq!(state.on_policy_denial(&no_path).len(), 1);
-    assert!(state.on_policy_denial(&empty_path).is_empty());
-    assert_eq!(state.on_policy_denial(&other_class).len(), 1);
+    assert_eq!(state.on_policy_denial(&empty_path).len(), 1);
+    assert_eq!(state.on_policy_denial(&no_path).len(), 1);
+}
+
+#[test]
+fn the_wdac_loader_is_normalised_like_the_file() {
+    // #796 review: the loader was only lowercased, so its `\??\` spelling was a second shape.
+    let dll = r"C:\Users\Public\x.dll";
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&wdac_denial(r"C:\Windows\System32\rundll32.exe", dll, true));
+    let nt = state.on_policy_denial(&wdac_denial(
+        r"\??\C:\WINDOWS\System32\rundll32.exe",
+        dll,
+        true,
+    ));
+    assert_eq!(bare.len(), 1);
+    assert!(nt.is_empty(), "{nt:?}");
+
+    let no_loader = PolicyDenialEvent {
+        subject_context: None,
+        ..wdac_denial("unused", dll, true)
+    };
+    let empty_loader = wdac_denial("", dll, true);
+    assert_eq!(state.on_policy_denial(&no_loader).len(), 1);
+    assert!(
+        state.on_policy_denial(&empty_loader).is_empty(),
+        "an empty loader is an absent one"
+    );
+}
+
+#[test]
+fn forward_slashes_and_the_device_prefix_do_not_make_the_same_file_a_new_shape() {
+    let mut state = RuleState::new();
+    let bare = state.on_policy_denial(&applocker_denial("EXE", r"C:\Users\x\evil.exe", true));
+    let slashes = state.on_policy_denial(&applocker_denial("EXE", "C:/Users/x/evil.exe", true));
+    let device = state.on_policy_denial(&applocker_denial("EXE", r"\\.\C:\Users\x\evil.exe", true));
+    assert_eq!(bare.len(), 1);
+    assert!(slashes.is_empty(), "{slashes:?}");
+    assert!(device.is_empty(), "{device:?}");
+}
+
+#[test]
+fn case_folding_never_merges_names_ntfs_keeps_apart() {
+    // NTFS compares names through its upcase table; Unicode lower-casing maps the Kelvin sign
+    // to `k` and would merge two different files into one shape, a missed alert.
+    let mut state = RuleState::new();
+    let ascii = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\K.exe", true));
+    let kelvin = state.on_policy_denial(&applocker_denial("EXE", "C:\\x\\\u{212A}.exe", true));
+    let sharp_s = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\straße.exe", true));
+    let double_s = state.on_policy_denial(&applocker_denial("EXE", r"C:\x\strasse.exe", true));
+    assert_eq!(ascii.len(), 1);
+    assert_eq!(kelvin.len(), 1, "the Kelvin sign is not K");
+    assert_eq!(sharp_s.len(), 1);
+    assert_eq!(double_s.len(), 1, "ß is not ss");
+}
+
+#[test]
+fn each_windows_budget_refills_on_its_own_window() {
+    // #796 review: the three budgets shared one window, so the first new shape of any kind
+    // after it expired refilled every budget, a spent audit flood included.
+    let t0 = meta().timestamp_ns;
+    let at = |event: PolicyDenialEvent, timestamp_ns: u64| PolicyDenialEvent {
+        meta: schema::EventMeta {
+            timestamp_ns,
+            ..event.meta.clone()
+        },
+        ..event
+    };
+    let window = crate::exclusions::POLICY_DENIAL_ALERT_WINDOW_NS;
+    let half = t0 + window / 2;
+    let enforced_expired = t0 + window;
+    let mut state = RuleState::new();
+    // The enforced budget's window opens at t0, the audit one half a window later.
+    let first_block = applocker_denial("EXE", r"C:\Users\x\evil.exe", true);
+    assert_eq!(state.on_policy_denial(&at(first_block, t0)).len(), 1);
+    for i in 0..POLICY_DENIAL_ALERT_CAP {
+        state.on_policy_denial(&at(
+            applocker_denial("EXE", &format!(r"C:\Users\x\tool{i}.exe"), false),
+            half,
+        ));
+    }
+    // The enforced window expires and refills on the next block...
+    let next_block = applocker_denial("EXE", r"C:\Users\x\evil2.exe", true);
+    assert_eq!(
+        state
+            .on_policy_denial(&at(next_block, enforced_expired))
+            .len(),
+        1
+    );
+    // ...but the audit window, half a window old, is still spent.
+    let audited = state.on_policy_denial(&at(
+        applocker_denial("EXE", r"C:\Users\x\late.exe", false),
+        enforced_expired + 1,
+    ));
+    assert!(
+        audited.is_empty(),
+        "the audit budget is still spent: {audited:?}"
+    );
 }
 
 #[test]

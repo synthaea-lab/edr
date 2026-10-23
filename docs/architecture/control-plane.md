@@ -241,6 +241,10 @@ with the entities it joined on (`FleetCaseEntity`, unique per tenant) and the de
 its detections and never goes down; a later sighting of one of its entities grows it, and a
 detection that bridges two cases merges them into the older one. The join is idempotent.
 
+They are read in the console at `/console/fleet-cases` (the list, newest activity first, and one case with its
+entities, hosts and detections) and through `GET /api/fleet-cases` and `GET /api/fleet-cases/[id]`, scoped to the
+tenant (`lib/fleet-case-load.ts`); the console only reads them, there is no status change yet.
+
 The join is narrow on purpose, because ADR-0035 makes a fleet case the trigger of a posture
 overlay and an attacker who can make a detection fire can try to link hosts: a bare path or a
 technique never joins; the accounts every host has (`root`, `SYSTEM`, ...) are not an identity; an
@@ -259,15 +263,17 @@ let them link hosts on demand. The generic accounts are compared by their bare n
 which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
 are signed in to as `vagrant`, and a lab run could not otherwise show the join.
 
-**The successful-logon half is preparatory work and does nothing on a host yet.** The join reads
-`detection.event`, and a detection stores the event that fired a rule. On `main`, no rule fires on
-a successful logon: `RuleState::on_auth` returns nothing for `AuthKind::Logon` (it alerts on
-failure bursts, and on `sudo` and `su`, which are the two kinds excluded above), it returns early
-for a Windows logon, and no Sigma rule matches `auth` events. So a detection whose event is a
-successful logon does not exist today, and a lab run on two hosts still joins no identity from it.
-It becomes live when a rule produces one; the candidate is T1078 (a valid account seen for the
-first time, or at odd hours), a line of #377 that is not built. The Windows `session` events of
-the RDP rule (T1563.002) are the one identity source that already reaches a detection.
+**The successful-logon half has one source: FIRST-SEEN-LOGON (T1078, #376).** The join reads
+`detection.event`, and a detection stores the event that fired a rule. Before that rule no rule
+on `main` fired on a successful logon (`RuleState::on_auth` returned nothing for `AuthKind::Logon`,
+it returned early for a Windows logon, and no Sigma rule matches `auth` events), so a detection
+whose event is a successful logon did not exist and a lab run on two hosts joined no identity
+from it. `docs/detection/first-seen-logon.md` describes the rule: the first successful logon of an
+account after a 24-hour learning window, Low, generic accounts excluded with the list kept in step
+with this one (`vagrant` still not generic). It alerts at most once per account, so the join sees
+an identity only the first time that account logs on to a host after the window. The Windows
+`session` events of the RDP rule (T1563.002) are the other identity source that already reaches a
+detection. **Not proven in a lab run**; the rule is covered by unit tests only.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.

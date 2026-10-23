@@ -49,6 +49,7 @@ describe("middleware identity headers", () => {
       "/api/health",
       "/api/release/manifest",
       "/api/release/artifact",
+      "/api/release/key-rotation",
       "/api/content/manifest/canary_0",
       "/api/content/artifact",
       "/api/snapshot/manifest",
@@ -72,7 +73,7 @@ describe("middleware identity headers", () => {
     // Only the two agent download paths are public (issue #30); `/api/release`
     // itself publishes releases and needs a session.
     getSession.mockResolvedValue(null);
-    for (const path of ["/api/release", "/api/release/manifest/extra"]) {
+    for (const path of ["/api/release", "/api/release/manifest/extra", "/api/release/key-rotation/extra"]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }
