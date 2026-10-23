@@ -292,7 +292,14 @@ pub mod time;
 /// then 45, then 46, while #519, #654, #632, #263, #87, #364, #799 and #458
 /// merged first with 35, 40, 41, 42, 43, 44, 45 and 47; same coordination
 /// note as above.
-pub const SCHEMA_VERSION: u32 = 48;
+///
+/// Bumped 48 → 49 for [`Event::KerberosDelegationFailure`] (#364): the Kerberos
+/// client's own unconstrained-delegation and TGT-session-key-export denials,
+/// from the (off by default) `Microsoft-Windows-Kerberos/Operational` channel.
+/// Windows-only. #983 (`ExecEvent`'s PE version-resource fields) is open at the
+/// same time and also claims 49; whichever merges second renumbers, same
+/// coordination note as above.
+pub const SCHEMA_VERSION: u32 = 49;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A
@@ -1189,6 +1196,64 @@ pub struct LogClearedEvent {
     /// clearer asked for a backup (`wevtutil cl <channel> /bu:<file>`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_path: Option<String>,
+}
+
+/// Which Kerberos client operation was denied, in a [`KerberosDelegationFailureEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KerberosDelegationFailureKind {
+    /// EID 201: a server tried to use this client's ticket for unconstrained
+    /// delegation (impersonating the client to a third service), and the
+    /// client's own Kerberos stack refused — the client is not configured to
+    /// allow it for that server.
+    UnconstrainedDelegationDenied,
+    /// EID 202: an attempt to export this client's TGT session key was
+    /// refused — on a Credential Guard host, a TGT's key can never leave the
+    /// isolated LSA, by design (ADR: this is the client-side half of the same
+    /// protection PKINIT key-export denials, EID 203/204, also report).
+    TgtSessionKeyExportDenied,
+}
+
+/// A Kerberos client-side operation an attacker would want was denied, from the
+/// (off by default; see `docs/sensors/windows.md`) `Microsoft-Windows-Kerberos/Operational`
+/// channel's EID 201/202 (#364). Both name the server the ticket was for, the account whose
+/// ticket it was, and the process that made the request — the two cases where this agent's
+/// own host is the one being used as a stepping stone (someone else's service asked *this*
+/// client for its ticket, or asked to export its session key) rather than the one requesting
+/// against a KDC.
+///
+/// Framed as what it is: a **refusal**. Each event means an attempt was made and this host's
+/// own Kerberos stack said no — not that delegation succeeded, and not evidence the request
+/// was malicious (a misconfigured but legitimate service asking for delegation it was never
+/// granted looks identical). High: unconstrained delegation and TGT export are both a small,
+/// deliberate allowlist on a well-run host, so a request outside it is rare and worth a look;
+/// not Critical, since the client's own refusal is already the control working.
+///
+/// `meta.pid`/`meta.comm` are this host's process that received the request (`CallerPID`/
+/// `ProcessName`, both 201 and 202 carry them, the same nine-field template). `meta.user` is
+/// [`User::Unknown`]: the template gives this host's own process owner only as a name and a
+/// domain (`ClientUserName`/`ClientDomainName`), never a SID, so it cannot become a
+/// [`User::Windows`] — [`caller_user`](Self::caller_user) carries it as text instead, the same
+/// choice [`LogClearedEvent::subject_user`] makes when a SID isn't the shape the data comes in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KerberosDelegationFailureEvent {
+    pub meta: EventMeta,
+    pub kind: KerberosDelegationFailureKind,
+    /// The server the ticket was for (`TargetName`/`Server`).
+    pub target_server: String,
+    /// The account whose ticket/key was requested (`UserName`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_user: String,
+    /// That account's domain (`DomainName`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_domain: String,
+    /// This host's own process-owner account (`ClientUserName`), as text — see the struct doc
+    /// for why it is not `meta.user`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caller_user: String,
+    /// That account's domain (`ClientDomainName`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caller_domain: String,
 }
 
 /// An LDAP search a process sent, from EID 30 of the
@@ -2364,6 +2429,7 @@ pub enum Event {
     LdapSearch(LdapSearchEvent),
     NtlmAuth(NtlmAuthEvent),
     LogCleared(LogClearedEvent),
+    KerberosDelegationFailure(KerberosDelegationFailureEvent),
     WmiActivity(WmiActivityEvent),
     AssemblyLoad(AssemblyLoadEvent),
     SmbConnect(SmbConnectEvent),
@@ -2430,6 +2496,7 @@ impl Event {
             Event::LdapSearch(e) => &e.meta,
             Event::NtlmAuth(e) => &e.meta,
             Event::LogCleared(e) => &e.meta,
+            Event::KerberosDelegationFailure(e) => &e.meta,
             Event::WmiActivity(e) => &e.meta,
             Event::AssemblyLoad(e) => &e.meta,
             Event::SmbConnect(e) => &e.meta,
