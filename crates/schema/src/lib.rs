@@ -1483,11 +1483,10 @@ pub struct UdpRecvEvent {
 /// last poll), not any single event in isolation.
 ///
 /// `protocol` is the IP protocol number, same convention as [`NetworkFlowEvent::protocol`]
-/// (`IPPROTO_TCP` = 6, `IPPROTO_UDP` = 17, issue #676). It is part of
-/// [`crate::fixtures`]'s neutral fixture and every consumer's dedup/baseline key: a UDP
-/// listener and a TCP listener on the same port are different shapes, not a collision —
-/// `udp/53` and `tcp/53` are two different services with no reason to share a baseline
-/// entry.
+/// (`IPPROTO_TCP` = 6, `IPPROTO_UDP` = 17, issue #676), and is part of every consumer's
+/// dedup/baseline key: a UDP listener and a TCP listener on the same port are different
+/// shapes, not a collision — `udp/53` and `tcp/53` are two different services with no
+/// reason to share a baseline entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenPortEvent {
     pub meta: EventMeta,
