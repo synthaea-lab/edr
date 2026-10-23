@@ -86,8 +86,8 @@ turn `windows/x.yml` into a Linux rule. A directory that does not exist contribu
 rule outside a platform directory is loaded for no platform. `SigmaEngine::load_dir` is unchanged and
 loads every platform: the content tests and tooling use it.
 
-`load_rule` and `load_dir` still decide that a rule is under a known platform directory by looking
-for `/linux/`, `/windows/` or `/macos/` in the **full path**, so a rule in an unknown directory
-beneath a content root that has such a word in its path is accepted by them. The agent's loader does
-not depend on that check. To fix after the condition-grammar work (#979) that also edits `validate.rs`:
-pass the rules root to `validate` and check the relative path.
+`load_dir` and `load_dir_for` check that a rule is under a known platform directory on its path
+**relative to the rules directory** they were given (the first directory must be `linux`, `windows`
+or `macos`), so a word in the content root's own path decides nothing. `load_rule` alone has no
+root to measure from and still looks for `/linux/`, `/windows/` or `/macos/` in the whole path it is
+given.
