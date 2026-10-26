@@ -114,11 +114,14 @@ dependency the module does not carry: the caller passes `isPublicSuffix`, and **
 domain is refused** (`public_suffix_unchecked`) rather than published unchecked. Hashes and
 addresses are unaffected.
 
+`server/lib/public-suffix.ts` is the `isPublicSuffix` to pass: `tldts` (pinned at 7.4.18, MIT, one
+transitive package), private suffixes such as `github.io` and `blogspot.com` counted, so a listed
+`github.io` is refused and `attacker.github.io` is not.
+
 `server/tests/fixtures/ioc-feed-golden.txt` is checked on both sides: the server test asserts the
 builder produces it from `ioc-feed-input.txt`, and `crates/intel/tests/feed_golden.rs` asserts the
 engine takes every line of it unchanged.
 
 Not built: the sources (STIX/TAXII, MISP, CSV), expiry, per-tenant enablement, publishing the
 file through the content manifest (`ContentType` has no `ioc` yet, and delivery waits on #753), and
-the public-suffix dependency itself (`tldts` with private domains counted would do; it is the
-server's first parsing dependency beyond zod, so it is left to a decision).
+wiring `isPublicSuffix` into a publishing path (nothing calls `buildFeed` yet).
