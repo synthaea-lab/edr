@@ -1547,6 +1547,18 @@ impl DetectionSink {
         self.record_rule_alerts(wrapped, self.rule_state.lock().unwrap().on_connect(event));
     }
 
+    /// `DnsQuery` events: the egress-domain join (it never alerts) and, on a listed domain or
+    /// one of its subdomains, an IOC finding (#60).
+    fn detect_dns_query(&self, wrapped: &Event, event: &schema::DnsQueryEvent) {
+        if let Some(hit) = self
+            .ioc
+            .check_dns_query(&event.query, event.meta.timestamp_ns)
+        {
+            self.record_ioc(wrapped, hit);
+        }
+        self.rule_state.lock().unwrap().on_dns_query(event);
+    }
+
     /// `NetworkFlow` events (conntrack polling, issue #92): same beacon detection as
     /// `detect_connect`, deduped per-flow so a poll-based source doesn't
     /// false-positive on one ordinary long-lived connection.
@@ -2272,7 +2284,7 @@ impl EventSink for DetectionSink {
             Event::FileOpen(e) => self.detect_file_open(&event, e),
             Event::Connect(e) => self.detect_connect(&event, e),
             Event::NetworkFlow(e) => self.detect_network_flow(&event, e),
-            Event::DnsQuery(e) => self.rule_state.lock().unwrap().on_dns_query(e),
+            Event::DnsQuery(e) => self.detect_dns_query(&event, e),
             Event::ListenPort(e) => self.detect_listen_port(&event, e),
             Event::Auth(e) => self.detect_auth(&event, e),
             Event::Session(e) => self.detect_session(&event, e),
@@ -5726,6 +5738,72 @@ rule reload_content_test_marker {
         let before = alerts_in(&dir).matches("203.0.113.9").count();
         sink.on_event(connect_to("203.0.113.9", 2 * 60 * 60 * 1_000_000_000));
         assert_eq!(alerts_in(&dir).matches("203.0.113.9").count(), before);
+        drop(sink);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn dns_query_of(name: &str, timestamp_ns: u64) -> Event {
+        Event::DnsQuery(schema::DnsQueryEvent {
+            meta: EventMeta {
+                timestamp_ns,
+                ..schema::fixtures::meta()
+            },
+            query: name.into(),
+            ..schema::fixtures::dns_query()
+        })
+    }
+
+    #[test]
+    fn a_dns_query_under_a_listed_domain_names_the_listed_domain_not_the_subdomain() {
+        let dir = tmp("ioc-dns");
+        write_ioc_feed(&dir, "domain:evil.example\n");
+        let spool = Arc::new(Mutex::new(
+            store::EventSpool::open(&dir.join("detection-spool"), u64::MAX).unwrap(),
+        ));
+        let sink = DetectionSink::new(
+            rules::RuleState::new(),
+            &dir.join("alerts.ndjson"),
+            Some(&dir.join("events.jsonl")),
+            None,
+            Some(Arc::clone(&spool)),
+            &dir.join("content"),
+            &dir.join("ml-registry"),
+        )
+        .unwrap();
+
+        sink.on_event(dns_query_of("good.example", 1_000));
+        sink.on_event(dns_query_of("notevil.example", 2_000));
+        sink.on_event(dns_query_of("Cdn.Evil.Example.", 3_000));
+        assert!(sink.enrich_queue().flush(std::time::Duration::from_secs(2)));
+
+        let drained: Vec<transport::QueuedDetection> =
+            spool.lock().unwrap().drain_oldest().unwrap();
+        let records: Vec<_> = drained
+            .into_iter()
+            .filter(|r| {
+                matches!(
+                    r.detection.source,
+                    schema::detection::DetectionSource::Ioc { .. }
+                )
+            })
+            .collect();
+        let [record] = records.as_slice() else {
+            panic!("exactly one IOC detection expected, got {}", records.len());
+        };
+        assert_eq!(
+            record.detection.severity,
+            schema::detection::Severity::Medium
+        );
+        assert_eq!(
+            record.detection.source,
+            schema::detection::DetectionSource::Ioc {
+                kind: schema::detection::IocKind::Domain,
+                indicator: "evil.example".into(),
+                feed: "test-feed".into(),
+                feed_version: "2026-10-26.1".into(),
+                reference: None,
+            }
+        );
         drop(sink);
         std::fs::remove_dir_all(&dir).ok();
     }

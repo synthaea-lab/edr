@@ -81,6 +81,7 @@ impl IocHit {
         let what = match self.kind {
             IocKind::Sha256 => "executed image hash",
             IocKind::Ip => "connection to address",
+            IocKind::Domain => "DNS query under domain",
             _ => "indicator",
         };
         format!(
@@ -155,6 +156,15 @@ impl IocMatcher {
         self.hit(&loaded, found, IocKind::Sha256, sha256, now_ns)
     }
 
+    /// A queried name against the domain indicators. A listed domain covers its subdomains, so
+    /// the finding names the listed domain that matched, not the name the host asked for.
+    pub(crate) fn check_dns_query(&self, name: &str, now_ns: u64) -> Option<IocHit> {
+        let loaded = self.current.lock().unwrap().clone()?;
+        let found = loaded.set.lookup_domain(name)?;
+        let indicator = listed_domain(&loaded.set, &intel::normalize_domain(name).ok()?);
+        self.hit(&loaded, found, IocKind::Domain, indicator, now_ns)
+    }
+
     /// A connection's destination against the address indicators.
     pub(crate) fn check_connect(&self, address: IpAddr, now_ns: u64) -> Option<IocHit> {
         let loaded = self.current.lock().unwrap().clone()?;
@@ -173,7 +183,9 @@ impl IocMatcher {
     ) -> Option<IocHit> {
         debug_assert!(matches!(
             (found.kind, kind),
-            (IndicatorKind::Sha256, IocKind::Sha256) | (IndicatorKind::Ip, IocKind::Ip)
+            (IndicatorKind::Sha256, IocKind::Sha256)
+                | (IndicatorKind::Ip, IocKind::Ip)
+                | (IndicatorKind::Domain, IocKind::Domain)
         ));
         // One key space for every kind: `IocKind` is a schema enum without `Hash`.
         if self.in_cooldown(format!("{kind:?}:{indicator}"), now_ns) {
@@ -204,6 +216,19 @@ impl IocMatcher {
         last.insert(key, now_ns);
         false
     }
+}
+
+/// The shortest suffix of `name`, on a label boundary, that is itself matched: the listed domain,
+/// since nothing shorter is. Runs on a hit only, at most one lookup per label.
+fn listed_domain(set: &IndicatorSet, name: &str) -> String {
+    let suffixes: Vec<&str> =
+        std::iter::successors(Some(name), |s| s.split_once('.').map(|(_, rest)| rest)).collect();
+    suffixes
+        .iter()
+        .rev()
+        .find(|suffix| set.lookup_domain(suffix).is_some())
+        .map_or(name, |suffix| suffix)
+        .to_string()
 }
 
 /// `Ok(None)`: no directory. `Err(())`: unusable, already logged.

@@ -76,9 +76,11 @@ Where it matches:
 |---|---|---|---|
 | `Exec` | the enrichment worker, once the image hash is known | SHA-256 | High |
 | `Connect` | the capture thread (a Bloom probe and a binary search) | destination address | Medium |
+| `DnsQuery` | the capture thread (at most 7 probes) | the queried name, any status | Medium |
 
 A match becomes a `DetectionSource::Ioc` detection with the indicator in its normalised form
-(lowercase hex, canonical address), the feed name and the feed version. It carries the label
+(lowercase hex, canonical address, and for a domain the *listed* domain that matched, not the
+subdomain the host asked for), the feed name and the feed version. It carries the label
 `IOC` where other engines carry a technique, and no ATT&CK technique: an indicator says a thing
 is known bad, not which tactic it served. It enters the verdict and the alert log like any other
 finding and never kills or quarantines.
