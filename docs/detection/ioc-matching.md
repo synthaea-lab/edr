@@ -90,5 +90,9 @@ window is counted (`IocStats::cooled_down`) and dropped, so a hash run in a loop
 polled every second is one finding. The cooldown remembers 4,096 indicators, least recently seen
 forgotten first.
 
-Not wired: file writes, `NetworkFlow`, and the health-beacon counters (`IocStats` exists, nothing
-reports it yet).
+A `NetworkFlow` peer address is checked like a connect destination: conntrack reports every live
+flow on each poll, and the cooldown makes that one finding.
+
+Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
+hash, so there is nothing to match until a sensor reports one) and the health-beacon counters
+(`IocStats` exists, nothing reports it yet).
