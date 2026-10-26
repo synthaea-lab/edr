@@ -454,9 +454,15 @@ fn spawn_ebpf_log_drain(ebpf: &mut aya::Ebpf) -> Result<(), SensorError> {
             warn!(error = %e, "sensor-linux-uprobes: failed to initialize eBPF logger");
         }
         Ok(logger) => {
-            let mut logger =
-                tokio::io::unix::AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)
-                    .map_err(|e| err(format!("eBPF logger fd: {e}")))?;
+            // SAFETY: `logger` owns the eBPF logger's fd exclusively from here on;
+            // nothing duplicates, closes, or replaces it while `AsyncFd` holds it.
+            let mut logger = unsafe {
+                tokio::io::unix::AsyncFd::register_with_interest(
+                    logger,
+                    tokio::io::Interest::READABLE,
+                )
+            }
+            .map_err(|e| err(format!("eBPF logger fd: {e}")))?;
             tokio::task::spawn(async move {
                 loop {
                     // No unwrap: nothing holds this task's JoinHandle, so a
@@ -674,8 +680,12 @@ impl UprobesSensor {
                 .ok_or_else(|| err(format!("map {map} not found in eBPF object")))?;
             let rb = RingBuf::try_from(m)
                 .map_err(|e| err(format!("map {map} is not a ring buffer: {e}")))?;
-            tokio::io::unix::AsyncFd::with_interest(rb, tokio::io::Interest::READABLE)
-                .map_err(|e| err(format!("ring buffer fd for {map}: {e}")))
+            // SAFETY: `rb` owns the ring buffer's fd exclusively from here on;
+            // nothing duplicates, closes, or replaces it while `AsyncFd` holds it.
+            unsafe {
+                tokio::io::unix::AsyncFd::register_with_interest(rb, tokio::io::Interest::READABLE)
+            }
+            .map_err(|e| err(format!("ring buffer fd for {map}: {e}")))
         };
 
         let mut tls_ring_buf = if self.config.tls.enabled {

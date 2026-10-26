@@ -28,9 +28,12 @@ impl AuditSensor {
     async fn run_async(&mut self, sink: Box<dyn EventSink>) -> Result<(), SensorError> {
         let socket = AuditSocket::open().map_err(|e| format!("audit socket open: {e}"))?;
 
-        let mut async_socket =
-            tokio::io::unix::AsyncFd::with_interest(socket, tokio::io::Interest::READABLE)
-                .map_err(|e| format!("AsyncFd: {e}"))?;
+        // SAFETY: `socket` was just opened above and owns its fd exclusively; nothing
+        // duplicates, closes, or replaces it while `AsyncFd` holds it.
+        let mut async_socket = unsafe {
+            tokio::io::unix::AsyncFd::register_with_interest(socket, tokio::io::Interest::READABLE)
+        }
+        .map_err(|e| format!("AsyncFd: {e}"))?;
 
         tracing::info!("sensor-linux-audit: listening for exec/connect");
 

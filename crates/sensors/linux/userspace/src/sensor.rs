@@ -190,9 +190,15 @@ impl LinuxSensor {
                 warn!(error = %e, "failed to initialize eBPF logger");
             }
             Ok(logger) => {
-                let mut logger =
-                    tokio::io::unix::AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)
-                        .map_err(|e| err(format!("eBPF logger fd: {e}")))?;
+                // SAFETY: `logger` owns the eBPF logger's fd exclusively from here on;
+                // nothing duplicates, closes, or replaces it while `AsyncFd` holds it.
+                let mut logger = unsafe {
+                    tokio::io::unix::AsyncFd::register_with_interest(
+                        logger,
+                        tokio::io::Interest::READABLE,
+                    )
+                }
+                .map_err(|e| err(format!("eBPF logger fd: {e}")))?;
                 tokio::task::spawn(async move {
                     loop {
                         // No unwrap: nothing holds this task's JoinHandle, so a
@@ -247,8 +253,12 @@ impl LinuxSensor {
                 .ok_or_else(|| err(format!("map {map} not found in eBPF object")))?;
             let rb = aya::maps::RingBuf::try_from(m)
                 .map_err(|e| err(format!("map {map} is not a ring buffer: {e}")))?;
-            tokio::io::unix::AsyncFd::with_interest(rb, tokio::io::Interest::READABLE)
-                .map_err(|e| err(format!("ring buffer fd for {map}: {e}")))
+            // SAFETY: `rb` owns the ring buffer's fd exclusively from here on;
+            // nothing duplicates, closes, or replaces it while `AsyncFd` holds it.
+            unsafe {
+                tokio::io::unix::AsyncFd::register_with_interest(rb, tokio::io::Interest::READABLE)
+            }
+            .map_err(|e| err(format!("ring buffer fd for {map}: {e}")))
         };
         let mut exec_ring_buf = ring("EXEC_EVENTS")?;
         let mut file_open_ring_buf = ring("FILE_OPEN_EVENTS")?;
