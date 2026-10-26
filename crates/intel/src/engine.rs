@@ -1,7 +1,9 @@
 //! The handle the agent holds: the current set, replaced whole.
 
-use std::net::IpAddr;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::{
+    net::IpAddr,
+    sync::{Arc, PoisonError, RwLock},
+};
 
 use crate::set::{IndicatorSet, Match};
 

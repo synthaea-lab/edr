@@ -1,8 +1,6 @@
 //! The engine through its public API: exactness, provenance, budget, reload.
 
-use std::net::IpAddr;
-use std::sync::Arc;
-use std::thread;
+use std::{net::IpAddr, sync::Arc, thread};
 
 use intel::{
     BuildError, DEFAULT_MEMORY_BUDGET_BYTES, FeedId, IndicatorKind, IndicatorSet, Intel,

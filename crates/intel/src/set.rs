@@ -1,8 +1,10 @@
 //! An immutable indicator set: an exact tier (sorted arrays, binary search) behind a Bloom
 //! pre-filter, built within a memory budget.
 
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    net::IpAddr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use thiserror::Error;
 
