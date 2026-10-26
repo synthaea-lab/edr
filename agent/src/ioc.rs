@@ -13,12 +13,15 @@
 //! name. A reload that cannot read or fit a feed keeps the previous set; an absent directory
 //! unloads.
 
-use std::io::Read as _;
-use std::net::IpAddr;
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    io::Read as _,
+    net::IpAddr,
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use intel::{DEFAULT_MEMORY_BUDGET_BYTES, FeedId, IndicatorKind, IndicatorSet, SetBuilder};
 use schema::detection::{IocKind, Severity};
@@ -347,8 +350,10 @@ mod tests {
 
     /// A throw-away directory removed on drop (the agent has no `tempfile` dependency).
     mod tempfile_dir {
-        use std::path::{Path, PathBuf};
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::{
+            path::{Path, PathBuf},
+            sync::atomic::{AtomicU64, Ordering},
+        };
 
         static NEXT: AtomicU64 = AtomicU64::new(0);
 
