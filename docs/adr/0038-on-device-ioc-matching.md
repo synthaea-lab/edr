@@ -128,8 +128,9 @@ sensors that produce them.
 - **The schema variant `DetectionSource::Ioc`** (indicator and feed provenance, with fixtures; PR #1002).
 - **Wiring into the agent**: where hash matching sits on the exec and write path, and the shed
   behaviour when it falls behind.
-- **Signed delivery** of sets (ADR-0016; blocked in production on #753) and the **server-side feed
-  pipeline** (STIX/TAXII, MISP, CSV, dedup, expiry, per-tenant enablement).
+- **Signed delivery** of sets (ADR-0016; blocked in production on #753) and most of the **server-side feed
+  pipeline**: only the builder (normalise, dedup, device rules, public-suffix gate) exists, see
+  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, CSV, expiry and per-tenant enablement do not.
 - A lab run with a seeded indicator, which #60's "done when" asks for.
 
 ## Consequences

@@ -96,3 +96,29 @@ flow on each poll, and the cooldown makes that one finding.
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
 hash, so there is nothing to match until a sensor reports one) and the health-beacon counters
 (`IocStats` exists, nothing reports it yet).
+
+## Server side: building a feed (`server/lib/ioc-feed.ts`)
+
+`buildFeed({ feed, text, isPublicSuffix, defaultKind })` turns the text of one source into the
+`ioc/<feed>.txt` an agent loads: `kind:value` lines, normalised as the device normalises them,
+de-duplicated and sorted, so the same input always gives the same bytes and the same hash. It
+applies the device's own load rules (hash length, loopback and unspecified addresses, IPv4-mapped
+IPv6 canonicalised, domain syntax and 2 to 8 labels, ASCII only) and returns a reason per rejected
+line (`rejected`, bounded to 100 by default, with `rejectedTotal` always exact). One bad line never
+discards a feed. `versionFile` writes the one-line `ioc/VERSION`, `isValidFeedName` guards the file
+stem.
+
+The check the device cannot make is here: a listed domain must not be a public suffix (`co.uk`
+would flag a whole country, since a listed domain covers its subdomains). The suffix list is a
+dependency the module does not carry: the caller passes `isPublicSuffix`, and **without one every
+domain is refused** (`public_suffix_unchecked`) rather than published unchecked. Hashes and
+addresses are unaffected.
+
+`server/tests/fixtures/ioc-feed-golden.txt` is checked on both sides: the server test asserts the
+builder produces it from `ioc-feed-input.txt`, and `crates/intel/tests/feed_golden.rs` asserts the
+engine takes every line of it unchanged.
+
+Not built: the sources (STIX/TAXII, MISP, CSV), expiry, per-tenant enablement, publishing the
+file through the content manifest (`ContentType` has no `ioc` yet, and delivery waits on #753), and
+the public-suffix dependency itself (`tldts` with private domains counted would do; it is the
+server's first parsing dependency beyond zod, so it is left to a decision).
