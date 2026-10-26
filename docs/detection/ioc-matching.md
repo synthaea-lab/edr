@@ -55,3 +55,38 @@ positive when one did and none was confirmed.
 The default budget (64 MiB) and the filter sizing (10 bits per indicator, 7 positions, about 1%)
 are provisional: set from arithmetic and a synthetic test (100,000 absent hashes against 20,000
 listed, under 3% false positives), not from a fleet.
+
+## In the agent (`agent/src/ioc.rs`, `DetectionSink`)
+
+Feeds are files in `<content_root>/ioc/`: each `*.txt` is one feed, named by its file stem and
+written in the line format above; an optional `VERSION` file (first line) names the release they
+came from, `unversioned` without one. Feed ids follow the sorted file names, so two agents with
+the same files agree on which feed wins an overlap. Names and versions are trimmed, stripped of
+control characters and cut at 64 characters, because they travel in every detection.
+**Nothing delivers these files yet:** signed delivery through the content manifest waits on the
+production signing keys (#753), so today a feed is a file somebody put there.
+
+Loaded at startup and on `reload_content` (IPC `ReloadContent`): a present directory replaces the
+set, an absent one unloads it, an unreadable or over-budget one keeps the previous set (logged).
+The set and its feed names are swapped together.
+
+Where it matches:
+
+| Event | Where | Indicator | Severity |
+|---|---|---|---|
+| `Exec` | the enrichment worker, once the image hash is known | SHA-256 | High |
+| `Connect` | the capture thread (a Bloom probe and a binary search) | destination address | Medium |
+
+A match becomes a `DetectionSource::Ioc` detection with the indicator in its normalised form
+(lowercase hex, canonical address), the feed name and the feed version. It carries the label
+`IOC` where other engines carry a technique, and no ATT&CK technique: an indicator says a thing
+is known bad, not which tactic it served. It enters the verdict and the alert log like any other
+finding and never kills or quarantines.
+
+The same indicator raises one finding per 10 minutes (**provisional**); a repeat inside that
+window is counted (`IocStats::cooled_down`) and dropped, so a hash run in a loop or an address
+polled every second is one finding. The cooldown remembers 4,096 indicators, least recently seen
+forgotten first.
+
+Not wired: file writes, `NetworkFlow`, and the health-beacon counters (`IocStats` exists, nothing
+reports it yet).
