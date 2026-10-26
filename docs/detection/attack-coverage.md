@@ -49,6 +49,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
+| T1006 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1027 | 3 | `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/windows/powershell_encoded.yml` |
 | T1036 | 3 | `sigma:rules/sigma/linux/susp_tmp_exec.yml`, `sigma:rules/sigma/windows/susp_appdata_exec.yml` |
 | T1036.005 | 3 | `rules:crates/rules/src/stateless.rs` |
