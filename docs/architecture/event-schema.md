@@ -12,6 +12,23 @@ sensor's internal one. Its public API is semi-frozen — additive changes (new o
 fields, new `Event` variants) are preferred over reshaping what already exists, because
 every workspace crate depends on it.
 
+## Detection sources
+
+`schema::detection::DetectionSource` names the engine behind a detection and carries
+enough identity to reproduce the verdict. It is serialized as an internally tagged
+object (`"engine": "rule" | "sigma" | "ml" | "correlator" | "yara" | "ioc"`), so a
+consumer switches on `source.engine`; the control plane's zod union
+(`server/lib/detection-payload.ts`) mirrors it and must grow with it.
+
+`Ioc` (#60, v52) is an on-device indicator match: `kind` (`sha256`, `sha1`, `md5`, `ip`,
+`domain`), the matched `indicator` in the feed's canonical form (lowercase hex, textual
+address, lowercase name without a trailing dot), the `feed` that supplied it, the
+`feed_version` of the signed indicator set loaded when the match fired, and an optional
+upstream `reference`. The schema only carries these strings and the `IocKind` enum; the
+matcher and the indicator-set format live in `crates/intel` and do not leak into the
+event model. Feed provenance is part of the detection so a retracted or expired feed can be
+traced to every detection it produced.
+
 ## Versioning contract (issue #114)
 
 `schema::SCHEMA_VERSION` bumps on **every** serialization-visible change to the model — no
