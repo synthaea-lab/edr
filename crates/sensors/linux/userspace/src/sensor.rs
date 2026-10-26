@@ -208,9 +208,10 @@ impl LinuxSensor {
                 warn!(error = %e, "failed to initialize eBPF logger");
             }
             Ok(logger) => {
-                // SAFETY: `logger` was just created above, owns its fd exclusively,
-                // and is moved into `AsyncFd` by value — nothing else can touch or
-                // close it for the registration's lifetime.
+                // SAFETY: `logger` (`aya_log::EbpfLogger`) was just created
+                // above and is moved into `AsyncFd` by value. Its inner
+                // `OwnedFd` is never exposed for closing or replacing, so its
+                // raw fd stays fixed and open for the registration's lifetime.
                 let mut logger = unsafe {
                     tokio::io::unix::AsyncFd::register_with_interest(
                         logger,
@@ -276,9 +277,11 @@ impl LinuxSensor {
                 .ok_or_else(|| err(format!("map {map} not found in eBPF object")))?;
             let rb = aya::maps::RingBuf::try_from(m)
                 .map_err(|e| err(format!("map {map} is not a ring buffer: {e}")))?;
-            // SAFETY: `rb` was just created above, owns its fd exclusively, and
-            // is moved into `AsyncFd` by value — nothing else can touch or close
-            // it for the registration's lifetime.
+            // SAFETY: `rb` (`aya::maps::RingBuf<MapData>`, taken out of `ebpf`
+            // by `take_map` above) was just created and is moved into `AsyncFd`
+            // by value. Its inner `MapData`'s `OwnedFd` is never exposed for
+            // closing or replacing, so its raw fd stays fixed and open for the
+            // registration's lifetime.
             unsafe {
                 tokio::io::unix::AsyncFd::register_with_interest(rb, tokio::io::Interest::READABLE)
             }
