@@ -11,7 +11,8 @@
 //! what the operator last asked for, not to whatever half-state the crash left.
 
 use std::{
-    io,
+    fs::{File, OpenOptions},
+    io::{self, Write as _},
     net::{IpAddr, SocketAddr},
     path::Path,
 };
@@ -49,10 +50,35 @@ pub enum PlanError {
 /// the agent itself may still reach, pinned when the isolation is applied (ADR-0037 §3).
 ///
 /// Sorted and deduplicated, so two plans for the same endpoints compare equal whatever
-/// order the resolver returned them in.
+/// order the resolver returned them in. Deserializing goes through [`IsolationPlan::new`]
+/// too, so a hand-edited `isolation.json` can neither widen the allowlist nor break that
+/// invariant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PlanOnDisk", into = "PlanOnDisk")]
 pub struct IsolationPlan {
     control_plane: Vec<SocketAddr>,
+}
+
+/// The serialized shape of an [`IsolationPlan`], unvalidated.
+#[derive(Serialize, Deserialize)]
+struct PlanOnDisk {
+    control_plane: Vec<SocketAddr>,
+}
+
+impl TryFrom<PlanOnDisk> for IsolationPlan {
+    type Error = PlanError;
+
+    fn try_from(raw: PlanOnDisk) -> Result<Self, PlanError> {
+        Self::new(raw.control_plane)
+    }
+}
+
+impl From<IsolationPlan> for PlanOnDisk {
+    fn from(plan: IsolationPlan) -> Self {
+        Self {
+            control_plane: plan.control_plane,
+        }
+    }
 }
 
 impl IsolationPlan {
@@ -64,8 +90,9 @@ impl IsolationPlan {
     /// # Errors
     ///
     /// [`PlanError::NotAnEndpoint`] for port 0, an unspecified, multicast or broadcast
-    /// address (each would open more than one server); [`PlanError::TooMany`] past
-    /// [`MAX_CONTROL_PLANE_ENDPOINTS`].
+    /// address (each would open more than one server) or an IPv6 link-local address (its
+    /// scope is not kept, so it would match on every interface); [`PlanError::TooMany`]
+    /// past [`MAX_CONTROL_PLANE_ENDPOINTS`].
     pub fn new(endpoints: impl IntoIterator<Item = SocketAddr>) -> Result<Self, PlanError> {
         let mut control_plane = Vec::new();
         for endpoint in endpoints {
@@ -103,6 +130,8 @@ fn not_an_endpoint(endpoint: SocketAddr) -> Option<&'static str> {
         Some("a multicast address names a group, not a server")
     } else if matches!(ip, IpAddr::V4(v4) if v4.is_broadcast()) {
         Some("the broadcast address names every host on the link")
+    } else if matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local()) {
+        Some("an IPv6 link-local address needs its scope, which a plan does not keep")
     } else {
         None
     }
@@ -174,14 +203,49 @@ pub fn read_intent(path: &Path) -> Result<Option<IsolationIntent>, IntentError> 
     }
 }
 
-/// Writes through a sibling temporary file and a rename, so a crash leaves either the old
-/// intent or the new one, never a torn file that [`reconcile`] could not read.
+/// Takes the exclusive lock every reader-writer of the intent holds until the returned
+/// file drops: `cli`, the agent's IPC handler and `agent isolation lift` are separate
+/// processes, so the lock is a sibling `.lock` file, not a mutex.
+///
+/// It is also why [`write_intent`]'s temporary file keeps one fixed name: only the lock
+/// holder writes it, and a crash leaves one stale file that the next write replaces.
+fn lock_intent(path: &Path) -> io::Result<File> {
+    let mut lock_path = path.as_os_str().to_owned();
+    lock_path.push(".lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+/// Writes through a synced sibling temporary file and a rename, so a crash or a power loss
+/// leaves either the old intent or the new one, never a torn file that [`reconcile`] could
+/// not read. The caller holds [`lock_intent`].
 fn write_intent(path: &Path, intent: &IsolationIntent) -> io::Result<()> {
     let bytes = serde_json::to_vec(intent).map_err(io::Error::other)?;
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    let mut file = File::create(&tmp)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)?;
+    sync_parent(path);
+    Ok(())
+}
+
+/// Makes the rename itself durable. Best effort by design: Windows cannot open a directory
+/// as a `File`, and NTFS journals the rename, so a power loss there still leaves the old
+/// name or the new one.
+fn sync_parent(path: &Path) {
+    if let Some(dir) = path.parent()
+        && let Ok(dir) = File::open(dir)
+    {
+        let _ = dir.sync_all();
+    }
 }
 
 fn is_isolated(intent: Option<&IsolationIntent>) -> bool {
@@ -196,7 +260,9 @@ pub enum IsolateOutcome {
         /// The plan in force.
         plan: IsolationPlan,
     },
-    /// The host was already isolated with this same plan, and the block is in place.
+    /// The host was already isolated with this same plan and the block was in place. The
+    /// plan was applied again all the same, which puts back a permit removed beside an
+    /// intact block.
     AlreadyIsolated {
         /// The plan in force.
         plan: IsolationPlan,
@@ -215,7 +281,8 @@ pub enum IsolateOutcome {
 ///
 /// The new intent is persisted first, then the firewall applied. If the firewall
 /// refuses, the previous intent is put back, so a later [`reconcile`] does not retry a
-/// plan the operator was told failed.
+/// plan the operator was told failed. A request for the plan already intended only
+/// re-applies it: the intent, its trigger and its time stay those of the first request.
 ///
 /// # Errors
 ///
@@ -233,6 +300,14 @@ pub fn isolate_host(
     if !policy.isolate_enabled {
         return IsolateOutcome::ObserveOnly;
     }
+    let _lock = match lock_intent(intent_path) {
+        Ok(lock) => lock,
+        Err(e) => {
+            return IsolateOutcome::Failed {
+                error: format!("locking the isolation intent: {e}"),
+            };
+        }
+    };
     let previous = match read_intent(intent_path) {
         Ok(previous) => previous,
         Err(e) => {
@@ -244,8 +319,17 @@ pub fn isolate_host(
     let same_plan = previous
         .as_ref()
         .is_some_and(|p| p.plan.as_ref() == Some(&plan));
-    if same_plan && matches!(firewall.applied(), Ok(true)) {
-        return IsolateOutcome::AlreadyIsolated { plan };
+    if same_plan {
+        // `applied` only sees the block, not the permits, so the plan is re-applied even
+        // when the block is there; `apply` is atomic and replaces.
+        let was_applied = matches!(firewall.applied(), Ok(true));
+        return match firewall.apply(&plan) {
+            Ok(()) if was_applied => IsolateOutcome::AlreadyIsolated { plan },
+            Ok(()) => IsolateOutcome::Isolated { plan },
+            Err(e) => IsolateOutcome::Failed {
+                error: format!("applying the isolation: {e}"),
+            },
+        };
     }
     let intent = IsolationIntent {
         plan: Some(plan.clone()),
@@ -292,7 +376,8 @@ pub enum LiftOutcome {
 
 /// Lifts the isolation. **Never policy-gated** (ADR-0037 §4): lifting is the safe
 /// direction, and refusing it would turn a policy mistake into a host nobody can recover.
-/// An unreadable intent does not stop it either: it is overwritten.
+/// An unreadable intent does not stop it either: it is overwritten. Nor does a lock that
+/// cannot be taken: the lift then runs unserialized rather than not at all.
 ///
 /// # Errors
 ///
@@ -304,6 +389,7 @@ pub fn lift_isolation(
     trigger: &str,
     now_ns: u64,
 ) -> LiftOutcome {
+    let _lock = lock_intent(intent_path);
     let intended = read_intent(intent_path).map_or(true, |i| is_isolated(i.as_ref()));
     let applied = firewall.applied().unwrap_or(true);
     if !intended && !applied {
@@ -346,7 +432,8 @@ pub enum Reconciliation {
     },
     /// The host should not be isolated and the agent's block was still there; it is gone.
     RemovedLeftover,
-    /// The intent or the firewall could not be read or changed. Nothing was decided.
+    /// The intent or the firewall could not be read or changed, so the firewall was left
+    /// as it was found; the caller audits it like drift (ADR-0037 §7).
     Failed {
         /// The cause, rendered.
         error: String,
@@ -358,11 +445,23 @@ pub enum Reconciliation {
 /// An unreadable intent changes nothing: guessing either way could isolate a host nobody
 /// asked to isolate, or free one that should stay contained.
 ///
+/// Not policy-gated, on purpose: the gate is on the request ([`isolate_host`]), and an
+/// isolation already persisted stays enforced if the policy is turned off afterwards. The
+/// way out is a lift, which is never gated.
+///
 /// # Errors
 ///
 /// Never returns `Err`; see [`Reconciliation::Failed`].
 #[must_use]
 pub fn reconcile(firewall: &impl HostFirewall, intent_path: &Path) -> Reconciliation {
+    let _lock = match lock_intent(intent_path) {
+        Ok(lock) => lock,
+        Err(e) => {
+            return Reconciliation::Failed {
+                error: format!("locking the isolation intent: {e}"),
+            };
+        }
+    };
     let intent = match read_intent(intent_path) {
         Ok(intent) => intent,
         Err(e) => {
@@ -418,13 +517,16 @@ mod tests {
         dir.join("isolation.json")
     }
 
-    /// A firewall that records what is installed, and fails on demand.
+    /// A firewall that records what is installed, and fails on demand. With `lock_probe`
+    /// set to an intent path, each call also records whether that intent's lock was held.
     #[derive(Default)]
     struct FakeFirewall {
         installed: RefCell<Option<IsolationPlan>>,
         fail_apply: bool,
         fail_lift: bool,
         calls: RefCell<Vec<&'static str>>,
+        lock_probe: Option<PathBuf>,
+        lock_held: RefCell<Vec<bool>>,
     }
 
     impl FakeFirewall {
@@ -434,11 +536,23 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn probe_lock(&self) {
+            let Some(intent) = &self.lock_probe else {
+                return;
+            };
+            let mut lock_path = intent.as_os_str().to_owned();
+            lock_path.push(".lock");
+            let lock = File::open(lock_path).unwrap();
+            let held = matches!(lock.try_lock(), Err(std::fs::TryLockError::WouldBlock));
+            self.lock_held.borrow_mut().push(held);
+        }
     }
 
     impl HostFirewall for FakeFirewall {
         fn apply(&self, plan: &IsolationPlan) -> io::Result<()> {
             self.calls.borrow_mut().push("apply");
+            self.probe_lock();
             if self.fail_apply {
                 return Err(io::Error::other("BFE refused the transaction"));
             }
@@ -448,6 +562,7 @@ mod tests {
 
         fn lift(&self) -> io::Result<()> {
             self.calls.borrow_mut().push("lift");
+            self.probe_lock();
             if self.fail_lift {
                 return Err(io::Error::other("BFE refused the delete"));
             }
@@ -499,6 +614,8 @@ mod tests {
             "[ff02::1]:443",
             "255.255.255.255:443",
             "10.0.0.1:0",
+            "[fe80::1%5]:443",
+            "[fe80::1]:443",
         ] {
             let result = IsolationPlan::new([bad.parse::<SocketAddr>().unwrap()]);
             assert!(
@@ -521,6 +638,61 @@ mod tests {
             IsolationPlan::new(repeated).unwrap().control_plane().len(),
             1
         );
+    }
+
+    #[test]
+    fn a_plan_read_from_disk_is_validated_like_a_new_one() {
+        // A hand-edited intent must not widen the allowlist, or hand `apply` an unsorted
+        // list that `same_plan` would compare wrongly.
+        let path = intent_path("hand-edited");
+        std::fs::write(
+            &path,
+            br#"{"plan":{"control_plane":["0.0.0.0:0"]},"trigger":"x","changed_at_ns":1}"#,
+        )
+        .unwrap();
+        assert!(matches!(read_intent(&path), Err(IntentError::Corrupt(_))));
+        let firewall = FakeFirewall::default();
+        assert!(matches!(
+            reconcile(&firewall, &path),
+            Reconciliation::Failed { .. }
+        ));
+        assert!(firewall.calls.borrow().is_empty());
+
+        std::fs::write(
+            &path,
+            br#"{"plan":{"control_plane":["10.0.0.2:443","10.0.0.1:443","10.0.0.2:443"]},"trigger":"x","changed_at_ns":1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_intent(&path).unwrap().unwrap().plan,
+            Some(plan(&["10.0.0.1:443", "10.0.0.2:443"]))
+        );
+    }
+
+    #[test]
+    fn a_plan_keeps_its_serialized_shape() {
+        assert_eq!(
+            serde_json::to_string(&plan(&["10.0.0.1:443"])).unwrap(),
+            r#"{"control_plane":["10.0.0.1:443"]}"#
+        );
+    }
+
+    #[test]
+    fn every_firewall_change_runs_under_the_intent_lock() {
+        // `cli isolate`, `cli unisolate` and a start-up reconciliation run in different
+        // processes; unserialized, one can restore a "previous" intent over the other's.
+        let path = intent_path("locked");
+        let firewall = FakeFirewall {
+            lock_probe: Some(path.clone()),
+            ..FakeFirewall::default()
+        };
+        let _ = isolate(&firewall, &path, &plan(&["10.0.0.1:443"]), 1);
+        let _ = reconcile(&firewall, &path);
+        let _ = lift_isolation(&firewall, &path, "cli unisolate", 2);
+        assert_eq!(*firewall.calls.borrow(), ["apply", "apply", "lift"]);
+        assert_eq!(*firewall.lock_held.borrow(), [true, true, true]);
+        // Released afterwards: the next request does not wait forever.
+        let _ = isolate(&FakeFirewall::default(), &path, &plan(&["10.0.0.1:443"]), 3);
     }
 
     #[test]
@@ -566,8 +738,22 @@ mod tests {
             isolate(&firewall, &path, &p, 2),
             IsolateOutcome::AlreadyIsolated { plan: p }
         );
-        assert_eq!(*firewall.calls.borrow(), ["apply"]);
+        assert_eq!(*firewall.calls.borrow(), ["apply", "apply"]);
         assert_eq!(read_intent(&path).unwrap().unwrap().changed_at_ns, 1);
+    }
+
+    #[test]
+    fn isolating_again_puts_back_a_permit_removed_beside_an_intact_block() {
+        // `applied` only reports the block, so "already isolated" must not skip the apply.
+        let path = intent_path("permit-removed");
+        let p = plan(&["10.0.0.1:443", "10.0.0.2:443"]);
+        let _ = isolate(&FakeFirewall::default(), &path, &p, 1);
+        let tampered = FakeFirewall::holding(plan(&["10.0.0.1:443"]));
+        assert_eq!(
+            isolate(&tampered, &path, &p, 2),
+            IsolateOutcome::AlreadyIsolated { plan: p.clone() }
+        );
+        assert_eq!(*tampered.installed.borrow(), Some(p));
     }
 
     #[test]

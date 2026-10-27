@@ -63,7 +63,20 @@ Five forces shape the design:
      - intent "not isolated": leftover filters in its sublayer are removed.
 
      A crash in the middle of applying or lifting cannot leave the host half-isolated across
-     a restart.
+     a restart. The file is written through a synced temporary file and a rename, and every
+     command that reads or writes it (`cli`, the IPC handler, `agent isolation lift`, the
+     reconciliation) holds an exclusive lock on a sibling `isolation.json.lock` first, so two
+     of them cannot interleave.
+   - The reconciliation is not policy-gated. The gate is on the request; an isolation already
+     persisted stays enforced if the policy is turned off afterwards, and the way out is a
+     lift (decision 5).
+   - **Boot.** Persistent filters are enforced by the Base Filtering Engine as soon as it
+     starts, not when the agent does, so the agent's own start-up adds no window. What
+     remains is the window between the TCP/IP stack starting and BFE starting. Slice 2 closes
+     it by adding the same block and permits as boot-time filters
+     (`FWPM_FILTER_FLAG_BOOTTIME`, which the stack enforces until BFE takes over and which
+     cannot also be persistent, hence a second set); whether that holds is checked in the
+     lab before the operations doc promises it.
    - A WFP dynamic session was rejected: its filters vanish when the agent's process exits,
      which is exactly the escape described above.
 
@@ -119,7 +132,9 @@ Five forces shape the design:
 6. **The split between crates follows `kill`.**
    - **`response::isolation`** stays platform-neutral:
      - building and validating the plan: pinned endpoints, rejection of
-       unspecified/multicast/broadcast addresses, a cap on the number of entries;
+       unspecified/multicast/broadcast addresses and of IPv6 link-local ones (a plan keeps no
+       scope, so the permit would match on every interface), a cap on the number of entries.
+       A plan read back from `isolation.json` goes through the same validation;
      - the policy gate;
      - the persisted intent and the reconciliation decision;
      - the outcome type an audit consumer reads.
@@ -138,6 +153,10 @@ Five forces shape the design:
    - A reconciliation that finds WFP state different from the intent emits
      `HOST-ISOLATION-DRIFT`. Filters missing while the host should be isolated are a
      tampering signal.
+   - A reconciliation that fails (unreadable intent, unreadable WFP state, a refused re-apply
+     or removal) also emits `HOST-ISOLATION-DRIFT`, with the error. It leaves WFP as it found
+     it: persistent filters stay, so a host whose intent is unreadable and that was isolated
+     stays isolated until a local lift.
 
 ## Consequences
 
