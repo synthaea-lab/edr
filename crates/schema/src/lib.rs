@@ -293,12 +293,20 @@ pub mod time;
 /// merged first with 35, 40, 41, 42, 43, 44, 45 and 47; same coordination
 /// note as above.
 ///
-/// Bumped 48 → 49 for [`ExecEvent::original_file_name`], [`ExecEvent::company_name`],
+/// Bumped 48 → 52 for [`detection::DetectionSource::Ioc`] (#60): an on-device
+/// indicator match (hash, IP or domain) carrying the indicator, its
+/// [`detection::IocKind`] and the feed provenance. #993, #994 and #995 were open
+/// at the time and each claim 49; 50 and 51 are left for the two that renumber.
+/// Whichever of these merges later renumbers, same coordination note as above.
+///
+/// Bumped 52 → 53 for [`ExecEvent::original_file_name`], [`ExecEvent::company_name`],
 /// [`ExecEvent::file_description`] and [`ExecEvent::product_name`] (#983): PE
 /// version-resource metadata for the executed image, read by enrichment. Windows
-/// only (`None` elsewhere). No other open PR claimed 49 at the time this was
-/// written; same coordination note as above if that changes before this merges.
-pub const SCHEMA_VERSION: u32 = 49;
+/// only (`None` elsewhere). Originally claimed 49, renumbered on merge: #60 landed
+/// first and took 52, leaving 50/51 reserved for #994/#995 (also renumbering from
+/// their own 49 claims) — this PR took the next free number above all three
+/// instead of guessing which of 50/51 would still be open by the time it merged.
+pub const SCHEMA_VERSION: u32 = 53;
 
 /// Marker set on [`FileOpenEvent::flags`] by `sensor-windows-eventlog` when it
 /// reports a Windows **service install** as a persistence artifact (event 7045, "A

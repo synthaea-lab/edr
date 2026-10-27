@@ -47,7 +47,34 @@ const KNOWN_PLATFORMS: &[&str] = &["linux", "windows", "macos"];
 /// Rejects any construct outside the supported subset, naming it precisely, and any
 /// rule missing the required metadata (issue #73: severity, ATT&CK technique,
 /// false-positive notes, platform).
+///
+/// The platform directory is looked for in the whole of `path`: use [`validate_under`] when the
+/// rules root is known, so a word in the content root's own path cannot pass for a platform.
 pub(crate) fn validate(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
+    let normalized = path.replace('\\', "/");
+    let under_platform = KNOWN_PLATFORMS
+        .iter()
+        .any(|p| normalized.contains(&format!("/{p}/")));
+    validate_with(rule, path, under_platform)
+}
+
+/// [`validate`] for a rule found at `relative` (`/` or `\` separated) under the rules root: the
+/// platform is the first directory of that relative path, nothing in the root's own path (#980).
+pub(crate) fn validate_under(
+    rule: &SigmaRule,
+    path: &str,
+    relative: &str,
+) -> Result<(), SigmaError> {
+    let normalized = relative.replace('\\', "/");
+    let mut parts = normalized.split('/');
+    // The file name is not a directory: a rule directly under the root has no platform.
+    let under_platform = parts
+        .next()
+        .is_some_and(|first| parts.next().is_some() && KNOWN_PLATFORMS.contains(&first));
+    validate_with(rule, path, under_platform)
+}
+
+fn validate_with(rule: &SigmaRule, path: &str, under_platform: bool) -> Result<(), SigmaError> {
     let compiled = validate_condition(rule, path)?;
     // Every block the condition refers to is checked as strictly as `selection` always was. A
     // block it does not refer to is never evaluated and stays unchecked, as before.
@@ -58,6 +85,7 @@ pub(crate) fn validate(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
         };
         let checked = match block {
             Selection::FieldMap(fields) => validate_field_map(fields, path),
+            Selection::OrOfMaps(maps) => validate_or_of_maps(maps, path),
             Selection::Keywords(keywords) => validate_keywords(keywords, path),
         };
         // The message of the one block every rule used to have is unchanged; the others say
@@ -72,13 +100,13 @@ pub(crate) fn validate(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
             other => other,
         })?;
     }
-    validate_metadata(rule, path)
+    validate_metadata(rule, path, under_platform)
 }
 
 /// Checks the required rule metadata: severity (`level`, upstream Sigma's field
 /// name), at least one ATT&CK technique tag, non-empty false-positive notes, and
 /// a recognized platform directory.
-fn validate_metadata(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
+fn validate_metadata(rule: &SigmaRule, path: &str, under_platform: bool) -> Result<(), SigmaError> {
     if rule.severity.is_none() {
         return Err(missing_metadata(path, "missing `level`".to_string()));
     }
@@ -94,11 +122,7 @@ fn validate_metadata(rule: &SigmaRule, path: &str) -> Result<(), SigmaError> {
             "no ATT&CK technique tag in `tags` (expected e.g. `attack.t1059.004`)".to_string(),
         ));
     }
-    let normalized = path.replace('\\', "/");
-    if !KNOWN_PLATFORMS
-        .iter()
-        .any(|p| normalized.contains(&format!("/{p}/")))
-    {
+    if !under_platform {
         return Err(missing_metadata(
             path,
             format!(
@@ -278,6 +302,27 @@ fn validate_field_map(
                 validate_edge_only_wildcard(value, path, "")?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Validates a selection written as a list of maps (issue #982): OR between the maps, so an
+/// empty list matches nothing (the dual of the empty-map check in `validate_field_map`, which
+/// matches everything) — both are load errors, never a silent always/never-match. Each map gets
+/// exactly `validate_field_map`'s checks, so a list-of-maps selection is refused as loudly as a
+/// lone map for an unsupported field, modifier, or interior wildcard.
+fn validate_or_of_maps(
+    maps: &[std::collections::HashMap<String, ValueList>],
+    path: &str,
+) -> Result<(), SigmaError> {
+    if maps.is_empty() {
+        return Err(unsupported(
+            path,
+            "empty selection list (would match nothing)".into(),
+        ));
+    }
+    for fields in maps {
+        validate_field_map(fields, path)?;
     }
     Ok(())
 }
