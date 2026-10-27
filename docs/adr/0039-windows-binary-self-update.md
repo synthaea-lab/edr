@@ -181,24 +181,44 @@ without change. It does not revisit any Linux decision.
    the watchdog writes `.healthy` and prunes releases older than the rollback
    target, same as Linux (ADR-0015 Decision 8/amendment).
 
-6. **Failure recovery — a real gap this ADR does not close.** Linux's safety net
-   for "the thing `ExecStart` points at cannot even exec" is
+6. **Failure recovery: `sc failure`'s own `run` action, not a new mechanism.**
+   Linux's safety net for "the thing `ExecStart` points at cannot even exec" is
    `ExecStartPre=.../bootstrap/watchdog recover`, always run by systemd before
-   every service start attempt, including every automatic restart. Windows's SCM
-   has no equivalent hook: `sc failure`'s configured action restarts the *same*
-   `binPath`, so if a promoted `versions\vN\watchdog.exe` is missing or cannot
-   start, the service crash-loops on a `binPath` that will never succeed, with no
-   automatic path back to `Program Files\Synthaea`. This is not a case Decision 5
-   introduces by itself (normal promotion/rollback never points `binPath` at a
-   directory `prune` has removed — `prune` only ever removes a release strictly
-   older than the current rollback target), but it is a real, lower floor than
-   Linux's for anything else that corrupts the pointed-at release out of band.
-   **Deferred, not solved here**: a `watchdog.exe recover` one-shot subcommand
-   that resets `binPath` to `Program Files\Synthaea` exists in design only; wiring
-   it to actually run automatically (a Scheduled Task watching the service's
-   failure count, or accepting that this is an operator-invoked break-glass tool
-   like `cmd_uninstall` already is) is an open question for whoever implements
-   this slice, not answered by this ADR.
+   every service start attempt, including every automatic restart. The SCM has no
+   `ExecStartPre` equivalent, but `sc failure` already supports a fourth action
+   type beyond `restart`/`reboot`/`none`: `run`, which launches the program given
+   by that same call's `command=` parameter
+   ([Microsoft: "Set up recovery actions to take place when a service
+   fails"](https://technet.microsoft.com/en-us/library/cc738230(v=ws.10));
+   `sc failure dfs reset= 60 command= c:\path\restart_dfs.exe actions=
+   run/5000` is Microsoft's own example pairing). `cmd_install` (Context) already
+   calls `sc failure` once at install time with `reset= 0 actions=
+   restart/5000/restart/5000/restart/5000` — undocumented but consistent with how
+   the SCM exhausts an actions list: the last entry repeats on every subsequent
+   failure once the list is used up. Appending a fourth slot,
+   `restart/5000/restart/5000/restart/5000/run/5000` plus `command= "<watchdog.exe
+   resolved path> recover"`, means a `binPath` that keeps failing to start falls
+   through 3 restart attempts into `recover` running on every failure after
+   that — including the first time, and every time thereafter, since it is now
+   the list's last, repeating entry. `recover`'s job is exactly `Layout::rollback_target`'s
+   existing logic (Decision 5) with no manifest/health-check context available by
+   construction (this path exists because the health-check watchdog process
+   itself may never get far enough to run): reset `binPath` to the newest
+   `versions\vN\` with `.healthy` set and not banned, or `Program Files\Synthaea`
+   with none, then start the service.
+   **Still open**: this is the mechanism, not the finished design — whether
+   `recover` bans the version it is recovering away from (banning on a start
+   failure the same way Decision 5 bans on a health-check failure would stop the
+   crash-loop in 3 restarts instead of forever re-promoting the same broken
+   release after every reboot, but needs its own reasoning about false positives
+   from, say, a transient disk-full at exec time), and the exact `command=` string
+   quoting/escaping for a path containing spaces (`Program Files`) through `sc`'s
+   own `/`-delimited `actions=` parsing, are implementation questions for whoever
+   builds this slice, not answered by this ADR. The `run` action adding
+   `SERVICE_CHANGE_CONFIG`-scoped setup is a one-line addition to `cmd_install`'s
+   existing `sc failure` call (not a new reset-then-reharden bracket — it runs
+   inside the one that's already there), not part of `apply-release`'s per-
+   promotion steps.
 
 ## Consequences
 
@@ -229,8 +249,10 @@ without change. It does not revisit any Linux decision.
 
 ## Deferred
 
-- **The `watchdog.exe recover` fallback and what triggers it** (Decision 6) —
-  real design work, not a gap this slice closes.
+- **`watchdog.exe recover`'s own logic, its ban-on-start-failure question, and
+  the `command=` path-quoting detail** (Decision 6) — the trigger mechanism
+  itself (`sc failure`'s `run` action) is identified, not a gap this slice
+  leaves fully open; what `recover` does once invoked still needs writing.
 - **macOS binary self-update** — no packaging exists yet at all; ADR-0015's
   Deferred entry for it is unchanged.
 - **Moving `reset_service_acl_best_effort`/`harden_service_acl` to a location
