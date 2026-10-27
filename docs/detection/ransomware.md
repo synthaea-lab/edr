@@ -6,7 +6,12 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    a write/rename/delete touching one is the earliest, cheapest encryption signal.
 2. **Burst detection** (`rules`/`correlator`): mass rename/write patterns per pid
    within a short window + extension-churn and entropy-of-written-content features
-   (T1486). Windows fidelity depends on delete/rename file events (audit F-6, #21).
+   (T1486). Windows fidelity depends on delete/rename file events (audit F-6, #21): the
+   minifilter now sends them (#857, #853), and the rename rule counts them per pid. They
+   carry only the pid (no `comm`, parent or user), so the per-parent shell-loop counter
+   never sees them and a `comm`-gated exclusion fails closed. Pinned by
+   `crates/rules/src/tests/ransomware_windows.rs`; not yet measured on a host (benign
+   Windows producers of an appended-suffix rename are unknown).
 3. **Reflex response** (`response` + policy): on a corroborated signal (canary +
    burst), kill the process tree and quarantine the binary — the one scenario where
    seconds matter enough to justify the most aggressive default policy ships with.
@@ -32,6 +37,19 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    policy-gated kill (`RESPONSE-KILL ... on a corroborated ransomware signal`); the Bayes gate
    and severity are untouched. Observe-only unless `--enable-kill`. Not built: killing the
    tree, quarantining the binary, and the lab acceptance run below.
+
+   **Service-stop burst (built, #381).** `SERVICE-STOP-BURST` (T1489, Medium) alerts when one
+   lineage stops five distinct services inside 60 s: `systemctl stop` / `disable --now`,
+   `service X stop` and `/etc/init.d/X stop` (Linux), `net stop`, `sc stop`, `Stop-Service`
+   (Windows), `launchctl bootout` / `unload` / `remove` / `stop` (macOS); an exec that names
+   several services counts each, and a `Get-Service | Stop-Service` pipeline counts as one. It
+   is the pre-encryption tell (databases, backup, mail and security services stopped so their
+   files can be encrypted), and a maintenance window, a shutdown script or a package upgrade
+   looks the same, hence Medium; five in a minute is a calibration choice, not a measurement.
+   **It is deliberately not joined to anything above:** the damage manifest and the reflex
+   consume T1486 alerts only, so a T1489 alert neither attaches files nor corroborates a kill.
+   Joining them (a service-stop burst followed by mass renames from the same lineage) is a
+   decision of its own and is not made here.
 
 Acceptance is scenario-driven: a lab encryptor (benign, marker-based) must be killed
 before it processes more than N canary-adjacent files.

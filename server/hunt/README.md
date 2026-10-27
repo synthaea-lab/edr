@@ -10,6 +10,15 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   history. Code: `lib/hunt.ts` (validate, compile, run), `lib/hunt-input.ts` (request bodies).
 - **API** (session, tenant-scoped): `GET/POST /api/hunts`, `GET/PATCH/DELETE /api/hunts/[id]`,
   `POST /api/hunts/[id]/run`.
+- **Search** (read-only, session, tenant-scoped): `POST /api/hunts/search` (`{ source?, query,
+  cursor? }`: one page of detections for a `HuntQuery`, or of cases for a `CaseQuery` with
+  `kind: "cases"`) and `GET /api/hunts/[id]/matches?cursor=` (what a saved hunt's query matches
+  now; it records no run). `lib/hunt-search.ts`: 50 rows a page, newest first, keyset cursor
+  over (time, id), the count on the first page; the statement timeout of a run (a 504); at most
+  2 searches in flight per tenant across server instances (a 429), by advisory locks in
+  Postgres. A row has ids, times, technique, severity, the case title and the rule title, never
+  the rest of the stored event. The console has `/console/hunts/search` (a GET form, so a search
+  is a link) and `/console/hunts/[id]/matches`.
 - **Server-only part** (`lib/hunt-runner.ts`): `runHunt`, `runHuntWithinLimit`, `dueHunts`, `pruneHuntRuns`. They reach the notification outbox (`node:crypto`), so they live apart from `lib/hunt.ts`, which client components import (the form, `lib/hunt-view.ts`). `tests/unit/client-bundle-imports.test.ts` fails when a `"use client"` file reaches a Node built-in or Prisma (#926).
 - **Scheduler**: `GET /api/cron/run-hunts` (CRON_SECRET) runs the due scheduled hunts and
   prunes history.
@@ -33,7 +42,7 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 ## Not built yet
 
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
-- The raw event archive as a second source (needs `server/datalake`, #77).
+- The raw event archive as a further source (needs `server/datalake`, #77).
 - Graduation beyond the assisted Sigma draft: the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
 - Live endpoint queries (ask one host "what is running right now?") ride the
   `response::live` channel with its policy gates, not a separate mechanism.
