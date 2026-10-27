@@ -6,7 +6,12 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    a write/rename/delete touching one is the earliest, cheapest encryption signal.
 2. **Burst detection** (`rules`/`correlator`): mass rename/write patterns per pid
    within a short window + extension-churn and entropy-of-written-content features
-   (T1486). Windows fidelity depends on delete/rename file events (audit F-6, #21).
+   (T1486). Windows fidelity depends on delete/rename file events (audit F-6, #21): the
+   minifilter now sends them (#857, #853), and the rename rule counts them per pid. They
+   carry only the pid (no `comm`, parent or user), so the per-parent shell-loop counter
+   never sees them and a `comm`-gated exclusion fails closed. Pinned by
+   `crates/rules/src/tests/ransomware_windows.rs`; not yet measured on a host (benign
+   Windows producers of an appended-suffix rename are unknown).
 3. **Reflex response** (`response` + policy): on a corroborated signal (canary +
    burst), kill the process tree and quarantine the binary — the one scenario where
    seconds matter enough to justify the most aggressive default policy ships with.
