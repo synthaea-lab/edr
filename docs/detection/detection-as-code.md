@@ -33,9 +33,30 @@ Most of the pipeline already exists — this documents the contract and names th
   #30 lab run).
 - **Hunt graduation** (#618): the assisted draft is built (below): `POST /api/hunts/[id]/graduate`
   turns a saved hunt into a draft rule and its samples for a person to review and open as a
-  PR. Not built: a console button, opening the PR from the server, a draft from the raw
-  event archive (`server/datalake`, #77), a draft from a hunt that matches events other
-  than process starts, and a YARA or IOC-set draft.
+  PR; a hunt's page has the buttons. The IOC-set draft (#934, below) is built for hashes and
+  addresses. Not built: opening the PR from the server, a draft from the raw event archive
+  (`server/datalake`, #77), a Sigma draft from a hunt that matches events other than process
+  starts, a YARA draft, and domains in the IOC-set draft.
+
+### The IOC-set draft (#934)
+`POST /api/hunts/[id]/graduate` with `{ kind: "ioc" }` (no platform, no negative: a set has
+neither) answers one file, `rules/ioc/<slug>.txt`, in the line format `crates/intel` loads
+(`docs/detection/ioc-matching.md`), and a `todo` list, or `422` with `problems`
+(`lib/hunt-ioc-draft.ts`). It writes nothing. The lines are the indicators the matched
+detections carry: the `sha256` of an `exec` event (when the enrichment hashed the image) and
+the destination address of a `connect` or `network_flow` event, sorted and listed once. An
+IPv4-mapped address is listed as IPv4, and loopback, unspecified and zoned addresses are left
+out, as the engine refuses them; the `todo` counts them. A matched detection says something
+suspicious happened, not that each value it names is bad, so the `todo` asks a person to drop
+the benign ones. **Domains are not drafted:** a listed domain matches every name beneath it
+and the device carries no public-suffix list, so a domain must pass the feed builder's check
+first (ADR-0038 section 6); the `todo` counts the DNS queries it skipped. The path
+`rules/ioc/` is this draft's proposal, since the content repo has no IOC directory or CI check
+yet, and delivery to agents waits on #753. A fixture
+(`server/tests/fixtures/ioc-draft-golden.txt`) is compared to the exporter's output by
+`tests/unit/hunt-ioc-draft.test.ts` and loaded whole by `crates/intel/tests/draft_golden.rs`,
+so the draft is checked against the engine the way the Sigma draft is checked against the
+content suite.
 
 ### The assisted draft (#618)
 `POST /api/hunts/[id]/graduate` with `{ platform, negative? }` reads the detections of the
