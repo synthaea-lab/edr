@@ -163,8 +163,9 @@ impl IocMatcher {
     /// the finding names the listed domain that matched, not the name the host asked for.
     pub(crate) fn check_dns_query(&self, name: &str, now_ns: u64) -> Option<IocHit> {
         let loaded = self.current.lock().unwrap().clone()?;
-        let found = loaded.set.lookup_domain(name)?;
-        let indicator = listed_domain(&loaded.set, &intel::normalize_domain(name).ok()?);
+        // One lookup rejects almost every name; the suffix walk below runs on a hit only.
+        loaded.set.lookup_domain(name)?;
+        let (indicator, found) = listed_domain(&loaded.set, &intel::normalize_domain(name).ok()?)?;
         self.hit(&loaded, found, IocKind::Domain, indicator, now_ns)
     }
 
@@ -222,16 +223,35 @@ impl IocMatcher {
 }
 
 /// The shortest suffix of `name`, on a label boundary, that is itself matched: the listed domain,
-/// since nothing shorter is. Runs on a hit only, at most one lookup per label.
-fn listed_domain(set: &IndicatorSet, name: &str) -> String {
+/// since nothing shorter is, with the match of that suffix. Indicator and feed come from the same
+/// suffix: `lookup_domain` on the whole name reports the lowest feed id among every listed suffix,
+/// which can be another indicator's feed. Runs on a hit only, at most one lookup per label.
+fn listed_domain(set: &IndicatorSet, name: &str) -> Option<(String, intel::Match)> {
     let suffixes: Vec<&str> =
         std::iter::successors(Some(name), |s| s.split_once('.').map(|(_, rest)| rest)).collect();
-    suffixes
-        .iter()
-        .rev()
-        .find(|suffix| set.lookup_domain(suffix).is_some())
-        .map_or(name, |suffix| suffix)
-        .to_string()
+    suffixes.iter().rev().find_map(|suffix| {
+        set.lookup_domain(suffix)
+            .map(|found| (suffix.to_string(), found))
+    })
+}
+
+/// The `*.txt` paths among the directory entries. One entry that cannot be read fails the whole
+/// listing: a set built from the rest would silently drop a feed and replace a complete one.
+fn feed_files(
+    entries: impl Iterator<Item = std::io::Result<std::path::PathBuf>>,
+) -> Result<Vec<std::path::PathBuf>, ()> {
+    let mut files = Vec::new();
+    for entry in entries {
+        match entry {
+            Ok(path) if path.extension().is_some_and(|ext| ext == "txt") => files.push(path),
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "ioc: cannot list the feed directory");
+                return Err(());
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// `Ok(None)`: no directory. `Err(())`: unusable, already logged.
@@ -244,11 +264,7 @@ fn load(dir: &Path) -> Result<Option<Loaded>, ()> {
             return Err(());
         }
     };
-    let mut files: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "txt"))
-        .collect();
+    let mut files = feed_files(entries.map(|entry| entry.map(|entry| entry.path())))?;
     // Feed ids follow the sorted names, so two agents with the same files agree on which feed
     // wins an overlap (the lowest id).
     files.sort();
@@ -392,6 +408,67 @@ mod tests {
             matcher
                 .check_connect("203.0.113.9".parse().unwrap(), 0)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_domain_hit_reports_the_feed_of_the_indicator_it_names() {
+        // Two feeds list overlapping suffixes. Whatever `lookup_domain` reports for the whole
+        // name, the finding names one listed domain and that domain's own feed.
+        let dir = dir_with(&[
+            ("aa-narrow.txt", "domain:evil.example.com\n"),
+            ("bb-broad.txt", "domain:example.com\n"),
+        ]);
+        let matcher = IocMatcher::new(dir.path());
+        let overlap = matcher.check_dns_query("x.Evil.Example.com.", 0).unwrap();
+        assert_eq!(
+            (overlap.indicator.as_str(), overlap.feed.as_str()),
+            ("example.com", "bb-broad"),
+            "the shortest listed suffix is the indicator, and its own feed the source"
+        );
+        let only_broad = matcher
+            .check_dns_query("www.example.com", COOLDOWN_NS)
+            .unwrap();
+        assert_eq!(
+            (only_broad.indicator.as_str(), only_broad.feed.as_str()),
+            ("example.com", "bb-broad")
+        );
+    }
+
+    #[test]
+    fn a_narrow_listing_alone_names_its_own_feed() {
+        let dir = dir_with(&[
+            ("aa-other.txt", "domain:unrelated.test\n"),
+            ("bb-narrow.txt", "domain:evil.example.com\n"),
+        ]);
+        let matcher = IocMatcher::new(dir.path());
+        let hit = matcher.check_dns_query("x.evil.example.com", 0).unwrap();
+        assert_eq!(
+            (hit.indicator.as_str(), hit.feed.as_str()),
+            ("evil.example.com", "bb-narrow")
+        );
+    }
+
+    #[test]
+    fn a_listing_error_fails_the_whole_listing() {
+        let entries = vec![
+            Ok(std::path::PathBuf::from("a.txt")),
+            Err(std::io::Error::other("transient")),
+            Ok(std::path::PathBuf::from("b.txt")),
+        ];
+        assert!(feed_files(entries.into_iter()).is_err());
+    }
+
+    #[test]
+    fn only_txt_entries_are_feeds() {
+        let entries = vec![
+            Ok(std::path::PathBuf::from("a.txt")),
+            Ok(std::path::PathBuf::from("VERSION")),
+            Ok(std::path::PathBuf::from("b.txt.bak")),
+        ];
+        assert_eq!(
+            feed_files(entries.into_iter()),
+            Ok(vec![std::path::PathBuf::from("a.txt")])
         );
     }
 
