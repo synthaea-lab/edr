@@ -56,7 +56,7 @@ export type HuntQuery = {
   text?: string;
 };
 
-const TECHNIQUE_RE = /^T\d{4}(\.\d{3})?$/;
+export const TECHNIQUE_RE = /^T\d{4}(\.\d{3})?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class HuntValidationError extends Error {}
@@ -108,7 +108,7 @@ export function parseHuntQuery(input: unknown): HuntQuery {
   return query;
 }
 
-function stringList(value: unknown, field: string, max: number): string[] {
+export function stringList(value: unknown, field: string, max: number): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > max) {
     fail(`query.${field} must be a list of 1 to ${max} strings`);
   }
