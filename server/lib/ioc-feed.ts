@@ -102,10 +102,13 @@ export type DomainResult =
  * non-ASCII name is refused (convert to punycode first).
  */
 export function normalizeDomain(raw: string): DomainResult {
-  const name = (raw.endsWith(".") ? raw.slice(0, -1) : raw).toLowerCase();
-  if (name.length === 0 || name.length > MAX_DOMAIN_BYTES) return { ok: false, reason: "bad_domain" };
+  const stripped = raw.endsWith(".") ? raw.slice(0, -1) : raw;
+  // Judge the original text: `toLowerCase` maps U+212A (KELVIN SIGN) to ASCII `k`, which would turn
+  // a name the device refuses into a different indicator.
   // eslint-disable-next-line no-control-regex
-  if (/[^\x00-\x7f]/.test(name)) return { ok: false, reason: "non_ascii_domain" };
+  if (/[^\x00-\x7f]/.test(stripped)) return { ok: false, reason: "non_ascii_domain" };
+  const name = stripped.toLowerCase();
+  if (name.length === 0 || name.length > MAX_DOMAIN_BYTES) return { ok: false, reason: "bad_domain" };
   const labels = name.split(".");
   for (const label of labels) {
     if (label.length === 0 || label.length > MAX_LABEL_BYTES) return { ok: false, reason: "bad_domain" };
@@ -125,6 +128,9 @@ export function normalizeAddress(raw: string): { ok: true; address: string } | {
   const text = raw.trim();
   const version = isIP(text);
   if (version === 0) return { ok: false, reason: "bad_address" };
+  // `isIP` accepts a zone (`fe80::1%eth0`), which the device's parser has no place for: dropping it
+  // would widen a scoped indicator to every interface.
+  if (text.includes("%")) return { ok: false, reason: "bad_address" };
   if (version === 4) {
     const parts = text.split(".").map(Number);
     // `isIP` accepts only dotted-quad decimal, so the parts are 0..255.
@@ -147,7 +153,7 @@ export function normalizeAddress(raw: string): { ok: true; address: string } | {
 
 /** The 8 groups of a valid IPv6 text (`isIP` already said it is one), or `null`. */
 function expandV6(text: string): number[] | null {
-  let body = text.split("%")[0];
+  let body = text;
   const tail = body.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (tail) {
     const v = tail.slice(1).map(Number);

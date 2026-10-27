@@ -30,6 +30,9 @@ describe("normalizeDomain", () => {
     expect(reason("a.b.c.d.e.f.g.h.i")).toBe("domain_too_deep");
     expect(reason("a.b.c.d.e.f.g.h")).toBe("ok");
     expect(reason("bücher.example")).toBe("non_ascii_domain");
+    expect(reason("\u212A.com")).toBe("non_ascii_domain"); // KELVIN SIGN lowercases to ASCII "k"
+    expect(reason("evil.\u212A.com")).toBe("non_ascii_domain");
+    expect(reason("\u0130.example.com")).toBe("non_ascii_domain"); // dotted capital I
     expect(reason("-a.example.com")).toBe("bad_domain");
     expect(reason("a-.example.com")).toBe("bad_domain");
     expect(reason("a..example.com")).toBe("bad_domain");
@@ -55,6 +58,12 @@ describe("normalizeAddress", () => {
     expect(norm("2001:db8:0:1:0:0:0:1")).toBe("2001:db8:0:1::1");
     expect(norm("::ffff:203.0.113.9")).toBe("203.0.113.9");
     expect(norm("::ffff:cb00:7109")).toBe("203.0.113.9");
+  });
+  it("refuses a scoped IPv6 address rather than widening it", () => {
+    for (const a of ["fe80::1%eth0", "fe80::1%3", "2001:db8::1%eth0", "::ffff:203.0.113.9%eth0"]) {
+      expect(norm(a), a).toBe("bad_address");
+    }
+    expect(norm("fe80::1")).toBe("fe80::1");
   });
   it("refuses loopback, unspecified (also IPv4-mapped) and garbage", () => {
     for (const a of ["127.0.0.1", "127.9.9.9", "0.0.0.0", "::1", "::", "::ffff:127.0.0.1", "::ffff:0.0.0.0"]) {
