@@ -9,21 +9,21 @@
 use std::net::IpAddr;
 
 use schema::{
-    AmsiContentEvent, AssemblyLoadEvent, AuthEvent, AuthKind, AuthOutcome, BpfEvent, CapSetEvent,
-    ConnectEvent, DefenderEvent, DefenderEventKind, DnsQueryEvent, Event, EventMeta, ExecEvent,
-    FileChmodEvent, FileChownEvent, FileDeleteEvent, FileOpenEvent, FileQuarantineEvent,
-    FileRemovexattrEvent, FileRenameEvent, FileSetxattrEvent, FileWriteEvent,
-    GatekeeperVerdictEvent, HttpClientCount, HttpEvidence, HttpRequestEvent, HttpSignature,
-    HttpSummaryEvent, IdentityChangeEvent, IdentityChangeKind, ImageLoadEvent, KernelModuleAction,
-    KernelModuleEvent, LdapSearchEvent, ListenPortEvent, LogClearedEvent, MemfdCreateEvent,
-    MountEvent, NamespaceEvent, NamespaceSyscall, NetworkFlowEvent, NtlmAuthEvent, NtlmDirection,
-    POLICY_MECHANISM_SELINUX, PackageChangeEvent, PackageChangeKind, PolicyDenialEvent, PrctlEvent,
-    ProcessVmReadEvent, ProcessVmWriteEvent, PtraceEvent, ReadlineInputEvent, RegistrySetEvent,
-    ScriptBlockEvent, SessionEvent, SessionState, ShellType, SignalEvent, SmbConnectEvent,
-    SocketAcceptEvent, SocketBindEvent, SocketCreateEvent, SocketListenEvent, TccDecisionEvent,
-    TlsCaptureEvent, TlsDirection, TlsLibraryType, UdpRecvEvent, UdpSendEvent, User,
-    WmiActivityEvent, XpcConnectEvent,
-    detection::{Detection, DetectionSource, ScoreAttribution, Severity},
+    AmsiContentEvent, AssemblyLoadEvent, AuthEvent, AuthKind, AuthOutcome, BitsJobEvent,
+    BitsJobState, BpfEvent, CapSetEvent, ConnectEvent, DefenderEvent, DefenderEventKind,
+    DnsQueryEvent, Event, EventMeta, ExecEvent, FileChmodEvent, FileChownEvent, FileDeleteEvent,
+    FileOpenEvent, FileQuarantineEvent, FileRemovexattrEvent, FileRenameEvent, FileSetxattrEvent,
+    FileWriteEvent, GatekeeperVerdictEvent, HttpClientCount, HttpEvidence, HttpRequestEvent,
+    HttpSignature, HttpSummaryEvent, IdentityChangeEvent, IdentityChangeKind, ImageLoadEvent,
+    KernelModuleAction, KernelModuleEvent, LdapSearchEvent, ListenPortEvent, LogClearedEvent,
+    MemfdCreateEvent, MountEvent, NamespaceEvent, NamespaceSyscall, NetworkFlowEvent,
+    NtlmAuthEvent, NtlmDirection, POLICY_MECHANISM_SELINUX, PackageChangeEvent, PackageChangeKind,
+    PolicyDenialEvent, PrctlEvent, ProcessVmReadEvent, ProcessVmWriteEvent, PtraceEvent,
+    ReadlineInputEvent, RegistrySetEvent, ScriptBlockEvent, SessionEvent, SessionState, ShellType,
+    SignalEvent, SmbConnectEvent, SocketAcceptEvent, SocketBindEvent, SocketCreateEvent,
+    SocketListenEvent, TccDecisionEvent, TlsCaptureEvent, TlsDirection, TlsLibraryType,
+    UdpRecvEvent, UdpSendEvent, User, WmiActivityEvent, XpcConnectEvent,
+    detection::{Detection, DetectionSource, IocKind, ScoreAttribution, Severity},
 };
 
 fn fixture(name: &str) -> serde_json::Value {
@@ -339,6 +339,55 @@ fn detection_sigma_golden() {
 }
 
 #[test]
+fn detection_ioc_golden() {
+    // v52 (#60): a SHA-256 indicator from a signed feed matched on exec.
+    let detection = Detection {
+        timestamp_ns: 1_756_900_006_000_000_000,
+        severity: Severity::High,
+        title: "Known-bad file hash".into(),
+        source: DetectionSource::Ioc {
+            kind: IocKind::Sha256,
+            indicator: "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f".into(),
+            feed: "abuse.ch-malwarebazaar".into(),
+            feed_version: "2026.10.26-1".into(),
+            reference: Some("https://bazaar.abuse.ch/sample/275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f/".into()),
+        },
+        score: None,
+        techniques: vec!["T1204.002".into()],
+        attributions: Vec::new(),
+        events: vec![sample_exec_event()],
+    };
+    let serialized = serde_json::to_value(&detection).unwrap();
+    assert_eq!(serialized, fixture("detection_ioc"), "fixture mismatch");
+    let back: Detection = serde_json::from_value(serialized).unwrap();
+    assert_eq!(back, detection, "round trip mismatch");
+}
+
+#[test]
+fn detection_ioc_without_reference_omits_the_field() {
+    let detection = Detection {
+        timestamp_ns: 1_756_900_007_000_000_000,
+        severity: Severity::High,
+        title: "Known-bad address".into(),
+        source: DetectionSource::Ioc {
+            kind: IocKind::Ip,
+            indicator: "203.0.113.7".into(),
+            feed: "internal-blocklist".into(),
+            feed_version: "7".into(),
+            reference: None,
+        },
+        score: None,
+        techniques: vec!["T1071".into()],
+        attributions: Vec::new(),
+        events: vec![sample_exec_event()],
+    };
+    let serialized = serde_json::to_value(&detection).unwrap();
+    assert_eq!(serialized, fixture("detection_ioc_ip"), "fixture mismatch");
+    let back: Detection = serde_json::from_value(serialized).unwrap();
+    assert_eq!(back, detection, "round trip mismatch");
+}
+
+#[test]
 fn detection_yara_golden() {
     let detection = Detection {
         timestamp_ns: 1_756_900_005_000_000_000,
@@ -419,11 +468,24 @@ fn dns_query_golden() {
             },
             query: "beacon.example.test".into(),
             qtype: 1,
-            result: Some("type:1 172.67.143.127;".into()),
+            result: Some("172.67.143.127".into()),
+            results: vec!["172.67.143.127".into(), "2001:db8::1".into()],
+            results_truncated: true,
             status: 0,
         }),
         "dns_query",
     );
+}
+
+#[test]
+fn dns_query_v44_fixture_deserializes_with_empty_answer_set() {
+    let old_event: Event = serde_json::from_str(include_str!("fixtures/v44/dns_query.json"))
+        .expect("v44 DNS fixture remains readable");
+    let Event::DnsQuery(event) = old_event else {
+        panic!("fixture must deserialize as a DNS query")
+    };
+    assert!(event.results.is_empty());
+    assert!(!event.results_truncated);
 }
 
 #[test]
@@ -1926,6 +1988,68 @@ fn namespace_golden() {
 }
 
 #[test]
+fn bits_job_golden() {
+    // v48 (#284): `bitsadmin /transfer` adding a file to a BITS job. The
+    // service does the download; this record names the client that asked.
+    assert_golden(
+        &Event::BitsJob(BitsJobEvent {
+            meta: EventMeta {
+                pid: 6412,
+                ppid: 5120,
+                user: User::Windows {
+                    sid: "S-1-5-21-1004336348-1177238915-682003330-1001".into(),
+                    integrity_level: Some(0x2000),
+                },
+                timestamp_ns: 1_756_900_029_000_000_000,
+                comm: "bitsadmin.exe".into(),
+                container: None,
+                process_generation: None,
+                parent_process_generation: None,
+            },
+            job_id: "{c40080ab-6fe4-418a-8ba6-c271c5298f18}".into(),
+            job_title: "update".into(),
+            state: BitsJobState::FileAdded,
+            url: "https://example.test/payload.exe".into(),
+            local_path: r"C:\Users\u\AppData\Local\Temp\p.exe".into(),
+            bytes_transferred: None,
+            hresult: None,
+        }),
+        "bits_job",
+    );
+}
+
+#[test]
+fn bits_job_transfer_error_golden() {
+    // v48 (#284): the same job failing mid-transfer, reported by the BITS
+    // service and attributed to the client that added the file.
+    assert_golden(
+        &Event::BitsJob(BitsJobEvent {
+            meta: EventMeta {
+                pid: 6412,
+                ppid: 5120,
+                user: User::Windows {
+                    sid: "S-1-5-21-1004336348-1177238915-682003330-1001".into(),
+                    integrity_level: Some(0x2000),
+                },
+                timestamp_ns: 1_756_900_030_000_000_000,
+                comm: "bitsadmin.exe".into(),
+                container: None,
+                process_generation: None,
+                parent_process_generation: None,
+            },
+            job_id: "{c40080ab-6fe4-418a-8ba6-c271c5298f18}".into(),
+            job_title: "update".into(),
+            state: BitsJobState::TransferError,
+            url: "https://example.test/payload.exe".into(),
+            local_path: r"C:\Users\u\AppData\Local\Temp\p.exe".into(),
+            bytes_transferred: Some(1917),
+            hresult: Some(0x8019_0194), // BG_E_HTTP_ERROR_404
+        }),
+        "bits_job_transfer_error",
+    );
+}
+
+#[test]
 fn prctl_securebits_golden() {
     // v34 (#457): PR_SET_SECUREBITS locking SECBIT_NOROOT (bit 0) and its
     // LOCKED twin (bit 1) — the process tree can never regain root's implicit
@@ -2179,6 +2303,8 @@ fn meta_accessor_covers_all_variants() {
             query: String::new(),
             qtype: 1,
             result: None,
+            results: Vec::new(),
+            results_truncated: false,
             status: 0,
         }),
         Event::RegistrySet(RegistrySetEvent {

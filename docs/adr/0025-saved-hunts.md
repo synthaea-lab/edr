@@ -63,6 +63,25 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    console resources (cases, rings). A per-owner rule needs roles, which the console does not
    have yet; revisit then.
 
+9. **Ad-hoc search reads rows, with the same queries and limits.** `POST /api/hunts/search` and
+   `GET /api/hunts/[id]/matches` return one page (50 rows, newest first) of what a query matches,
+   so an analyst can look at a hunt's matches before saving it and at a saved hunt's matches now
+   (a run keeps counts and ids, not rows). Two sources, both Postgres: **detections** with a
+   `HuntQuery` exactly as a saved hunt has it, and **cases** with a `CaseQuery`
+   (`kind: "cases"`, `version: 1`: `lastHours` on the case's creation, `severities`, `statuses`,
+   `techniques` of at least one of its detections, `text` in the title or description). Same
+   rules as point 1: validated, unknown fields refused, compiled to parameterized SQL scoped to
+   the tenant, a value never interpolated. A case query is not a hunt: saved hunts, runs, new
+   matches and graduation stay on detections. A row carries ids, times, technique, severity,
+   the case title and a rule title when the detection's `meta` has one (never read from the stored event), never the event's other
+   contents (a command line is not shown). Paging is by a cursor over (time, id), validated like
+   any input, so rows that share a timestamp are neither skipped nor repeated; the count comes
+   with the first page only. A search runs under the statement timeout of point 4 (a 504), and a
+   tenant may have **2 searches in flight**, across every server instance (a 429 beyond that):
+   each takes one of two transaction-scoped advisory locks without waiting, which frees itself
+   when the transaction ends. A per-minute rate is not limited: the concurrency and the timeout
+   bound the load, as the cooldown on runs does for point 7.
+
 ## Consequences
 
 - #618 has something to build on: a saved hunt with a query, an owner, a schedule and a result
@@ -74,6 +93,7 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
 - `text` is a substring scan of the event JSON inside the tenant and window: indexed by
   `(tenant_id, timestamp)` only, so a wide window with a rare string is the expensive case.
   The statement timeout is the bound, not an optimisation.
-- Not built in this slice: the console UI, notifications, graduation itself (#618), live
-  "ask this host now" queries (they ride the `response::live` channel and its gates), and the
-  event archive.
+- Not built in this slice: notifications, live "ask this host now" queries (they ride the
+  `response::live` channel and its gates), and the event archive (`server/datalake`, #77: a
+  third source and a new query version when it exists). The console pages, graduation (#618) and
+  ad-hoc search (point 9) have since been added; their decisions are in the points above.
