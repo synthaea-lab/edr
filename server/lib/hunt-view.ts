@@ -151,6 +151,9 @@ export function graduationBody(
   return { ok: true, body: { platform: form.platform, negative: { image, cmdline, ...(note && { note }) } } };
 }
 
+/** The body asking for the IOC-set draft (#934): a set has no platform and no negative sample. */
+export const IOC_GRADUATION_BODY = { kind: "ioc" } as const;
+
 export type DraftFile = { path: string; content: string };
 
 /** What the draft button shows of the server's answer. */
