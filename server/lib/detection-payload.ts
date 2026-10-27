@@ -13,6 +13,14 @@ const SourceSchema = z.discriminatedUnion("engine", [
   }),
   z.object({ engine: z.literal("correlator"), case_id: z.string().min(1) }),
   z.object({ engine: z.literal("yara"), rule_name: z.string().min(1) }),
+  z.object({
+    engine: z.literal("ioc"),
+    kind: z.enum(["sha256", "sha1", "md5", "ip", "domain"]),
+    indicator: z.string().min(1),
+    feed: z.string().min(1),
+    feed_version: z.string().min(1),
+    reference: z.string().min(1).optional(),
+  }),
 ]);
 
 // Mirrors schema::Detection's JSON shape. The Rust schema owns the wire format;
@@ -60,6 +68,8 @@ function sourceIdentity(source: z.infer<typeof SourceSchema>): Record<string, st
       return { case_id: source.case_id };
     case "yara":
       return { rule_id: source.rule_name };
+    case "ioc":
+      return { indicator: source.indicator, feed: source.feed };
   }
 }
 
