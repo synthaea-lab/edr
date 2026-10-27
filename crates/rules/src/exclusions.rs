@@ -336,6 +336,13 @@ pub(crate) const COMPRESSOR_COMMS: &[&str] = &[
 /// file's suffix being a compression extension ([`COMPRESSION_SUFFIXES`]).
 pub(crate) const COMPRESSION_DRIVER_COMMS: &[&str] = &["logrotate"];
 
+/// `comm` values of `SELinux` policy-store tools whose legitimate rebuild stages
+/// replacement files beside the old ones and then unlinks the old files, matching
+/// the ransomware write-new-then-unlink shape (#1013). This list is only consulted
+/// together with the exec-time trusted-system-path and executable-name checks; a
+/// process that merely sets `comm=semodule` must still be detected.
+pub(crate) const SELINUX_POLICY_TOOL_COMMS: &[&str] = &["semodule"];
+
 /// Suffixes a compression driver appends. Only meaningful together with
 /// [`COMPRESSION_DRIVER_COMMS`]: on their own they are free for an encryptor to copy.
 pub(crate) const COMPRESSION_SUFFIXES: &[&str] = &[".gz", ".xz", ".bz2", ".zst", ".lz4", ".lzma"];

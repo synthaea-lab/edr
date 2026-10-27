@@ -37,10 +37,11 @@ use crate::{
         RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
         SCAN_VERTICAL_THRESHOLD, SCAN_VERTICAL_WINDOW_NS, SELF_SPAWN_EXCLUSIONS,
         SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_SCRIPT_HOSTS, SELF_SPAWN_THRESHOLD,
-        SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS, SERVICE_COMM_PREFIXES, SERVICE_COMMS,
-        SHELL_COMMS, STAGING_PID_CAP, STAGING_READ_DIRS, STAGING_READ_FILES, STAGING_WINDOW_NS,
-        STAGING_WRITE_FILES, STANDARD_PORTS, SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN,
-        TASK_REGISTRATION_DEDUP_WINDOW_NS, TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
+        SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS, SELINUX_POLICY_TOOL_COMMS,
+        SERVICE_COMM_PREFIXES, SERVICE_COMMS, SHELL_COMMS, STAGING_PID_CAP, STAGING_READ_DIRS,
+        STAGING_READ_FILES, STAGING_WINDOW_NS, STAGING_WRITE_FILES, STANDARD_PORTS,
+        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
+        TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
     },
     has_write_intent,
     logon::{LogonBaseline, Observation},
@@ -2935,7 +2936,10 @@ impl RuleState {
         deleted: &str,
         created: &str,
     ) -> Option<Alert> {
-        if self.is_compressor(meta) || self.is_compression_driver(meta, deleted, created) {
+        if self.is_compressor(meta)
+            || self.is_compression_driver(meta, deleted, created)
+            || self.is_selinux_policy_tool(meta)
+        {
             return None;
         }
         let pid_entry = self
@@ -2980,6 +2984,14 @@ impl RuleState {
     /// runs the trusted binary of that name: see [`Self::runs_trusted_binary_named`].
     fn is_compressor(&self, meta: &schema::EventMeta) -> bool {
         COMPRESSOR_COMMS.contains(&meta.comm.as_str()) && self.runs_trusted_binary_named(meta)
+    }
+
+    /// True when this is the real, trusted `semodule` binary rebuilding the `SELinux`
+    /// policy store. Its replacement-file churn is benign, but `comm` alone is freely
+    /// settable and therefore never sufficient evidence for an exclusion (#1013).
+    fn is_selinux_policy_tool(&self, meta: &schema::EventMeta) -> bool {
+        SELINUX_POLICY_TOOL_COMMS.contains(&meta.comm.as_str())
+            && self.runs_trusted_binary_named(meta)
     }
 
     /// True when this pid's exec-time `image_path` is known, sits at a trusted system

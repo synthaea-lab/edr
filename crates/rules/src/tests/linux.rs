@@ -2696,6 +2696,30 @@ fn a_compressor_comm_with_no_known_exec_path_fails_closed() {
     assert_eq!(alerts.len(), 1);
 }
 
+/// Runs the write-new-then-unlink burst under a `semodule` process, optionally
+/// recording its exec-time image path first.
+fn semodule_burst(exec_image: Option<&str>) -> Vec<crate::Alert> {
+    let mut state = RuleState::new();
+    if let Some(image) = exec_image {
+        state.on_exec(&memfd_exec_event(9430, "semodule", image, 0));
+    }
+    write_new_then_unlink_burst(&mut state, 9430, "semodule", false)
+}
+
+#[test]
+fn a_trusted_semodule_policy_store_rebuild_does_not_alert() {
+    assert!(semodule_burst(Some("/usr/sbin/semodule")).is_empty());
+}
+
+#[test]
+fn a_semodule_comm_from_an_untrusted_or_mismatched_binary_still_alerts() {
+    for image in [Some("/tmp/semodule"), Some("/usr/bin/python3"), None] {
+        let alerts = semodule_burst(image);
+        assert_eq!(alerts.len(), 1, "{image:?}");
+        assert_eq!(alerts[0].technique, "T1486");
+    }
+}
+
 #[test]
 fn an_encryptor_that_names_its_output_dot_gz_still_alerts() {
     // A suffix allowlist would be free to copy: the exclusion is on the process, not
