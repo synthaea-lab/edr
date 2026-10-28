@@ -93,6 +93,8 @@ forgotten first.
 A `NetworkFlow` peer address is checked like a connect destination: conntrack reports every live
 flow on each poll, and the cooldown makes that one finding.
 
+The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_findings` and
+`ioc_cooled_down`, so the server can tell a host with no feed from one with a feed and no match.
+
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
-hash, so there is nothing to match until a sensor reports one) and the health-beacon counters
-(`IocStats` exists, nothing reports it yet).
+hash, so there is nothing to match until a sensor reports one).

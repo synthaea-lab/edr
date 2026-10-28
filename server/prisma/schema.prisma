@@ -88,6 +88,11 @@ model AgentHealth {
   tamperEvents           BigInt    @default(0) @map("tamper_events")
   parentImageEvictedLive BigInt    @default(0) @map("parent_image_evicted_live")
   parentImageEvictedDead BigInt    @default(0) @map("parent_image_evicted_dead")
+  // On-device IOC engine (#60); zero for an agent that predates them. `iocIndicators` is a gauge
+  // (indicators in force), the other two are cumulative since the agent started.
+  iocIndicators          BigInt    @default(0) @map("ioc_indicators")
+  iocFindings            BigInt    @default(0) @map("ioc_findings")
+  iocCooledDown          BigInt    @default(0) @map("ioc_cooled_down")
   sensors                Json // [{ name, pulse_count, silent }]
 
   agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
