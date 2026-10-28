@@ -49,7 +49,10 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     "watchdog_restarts": 3,
     "tamper_events": 5,
     "parent_image_evicted_live": 13,
-    "parent_image_evicted_dead": 209000
+    "parent_image_evicted_dead": 209000,
+    "ioc_indicators": 12000,
+    "ioc_findings": 4,
+    "ioc_cooled_down": 31
   }
 }
 ```
@@ -69,8 +72,11 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `tamper_events` | cumulative tamper-class alerts: the agent's own monitors (a sensor confirmed silent, a shipped binary or its signed manifest that no longer verifies) since the agent started, plus the watchdog's self-protection events (service definition drift, a binary that no longer matches its pinned hash). A rule detecting tampering with a protected resource is an ordinary detection and is not counted; a `SIGKILL` of the agent shows as one more `watchdog_restarts`. Zero if the agent predates the field. |
 | `parent_image_evicted_live` | cumulative Linux parent-image cache entries the cap dropped while their process was still alive: the loss (a later child of that process carries no `parent_image_path`, #783). Zero on other platforms and for an older agent. |
 | `parent_image_evicted_dead` | cumulative entries the cap dropped whose process had exited: nothing lost, it shows how full the cache runs. Zero on other platforms and for an older agent. |
+| `ioc_indicators` | indicators in force in the on-device IOC set (#60): a gauge, `0` while no feed is loaded. Zero if the agent predates the field. |
+| `ioc_findings` | cumulative IOC matches that raised a finding since the agent started. Zero if the agent predates the field. |
+| `ioc_cooled_down` | cumulative IOC matches the per-indicator cooldown absorbed: a high count against few findings is one indicator seen again and again. Zero if the agent predates the field. |
 
-The three `rarity_*` fields and the four fields after them (#863) are additive: the server stores a
+The three `rarity_*` fields, the four fields after them (#863) and the three `ioc_*` fields (#60) are additive: the server stores a
 beacon without them (an older agent) as zeros, and an older server ignores them. The ops fleet
 table shows the rarity ones in one "Rarity evidence" column ("N applied, N withheld, N lost") and
 the others in "Watchdog restarts", "Tamper events" and "Parent images evicted" ("N live, N
