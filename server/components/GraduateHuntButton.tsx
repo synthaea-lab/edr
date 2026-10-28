@@ -71,7 +71,7 @@ export function GraduateHuntButton({ huntId }: { huntId: string }) {
     <section className="mb-6 rounded-lg border border-gray-200 bg-white p-4" aria-label="Draft a rule">
       <h3 className="text-lg font-semibold text-gray-900">Graduate to content</h3>
       <p className="mt-1 text-sm text-gray-600">
-        A draft Sigma rule and its samples, or a draft IOC set of the hashes and addresses the
+        A draft Sigma rule and its samples, or a draft IOC set of the hashes, addresses and domains the
         matches carry, from this hunt&apos;s newest finished run. Nothing is saved or shipped:
         review the files and open a pull request.
       </p>
