@@ -56,6 +56,16 @@ describe("parseHeartbeatBody", () => {
     expect([old?.watchdog_restarts, old?.tamper_events, old?.parent_image_evicted_live, old?.parent_image_evicted_dead]).toEqual([0, 0, 0, 0]);
   });
 
+  it("reads the IOC engine counters, and counts them as zero for an agent that predates them (#60)", () => {
+    const withCounters = parseHeartbeatBody({
+      beacon: beacon({ ioc_indicators: 12000, ioc_findings: 4, ioc_cooled_down: 31 }),
+    });
+    expect([withCounters?.ioc_indicators, withCounters?.ioc_findings, withCounters?.ioc_cooled_down]).toEqual([12000, 4, 31]);
+
+    const old = parseHeartbeatBody({ beacon: beacon() });
+    expect([old?.ioc_indicators, old?.ioc_findings, old?.ioc_cooled_down]).toEqual([0, 0, 0]);
+  });
+
   it("returns null for a body with no usable beacon instead of throwing", () => {
     for (const body of [null, "x", 7, {}, { beacon: null }, { beacon: { timestamp_ns: 1 } }]) {
       expect(parseHeartbeatBody(body)).toBeNull();
@@ -70,7 +80,7 @@ describe("parseHeartbeatBody", () => {
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_applied: -1 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_withheld: 0.5 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_unapplied: "3" }) })).toBeNull();
-    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead"]) {
+    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead", "ioc_indicators", "ioc_findings", "ioc_cooled_down"]) {
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: -1 }) }), `${field} -1`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: 0.5 }) }), `${field} 0.5`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: "3" }) }), `${field} "3"`).toBeNull();
