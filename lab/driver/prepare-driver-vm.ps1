@@ -38,8 +38,16 @@ $ErrorActionPreference = "Stop"
 Assert-Admin
 Assert-InTestVm
 
-$secureBoot = $false
-try { $secureBoot = Confirm-SecureBootUEFI } catch { $secureBoot = $false }
+try {
+    $secureBoot = Confirm-SecureBootUEFI
+}
+catch {
+    # #516 review: a query failure is not "Secure Boot is off". Treating it as
+    # off would proceed to enable test-signing without its prerequisite checked.
+    throw ("Could not determine Secure Boot state ($($_.Exception.Message)). " +
+        "Verify it yourself (msinfo32.exe > System Summary > Secure Boot State) " +
+        "and re-run once it reports Off.")
+}
 if ($secureBoot) {
     throw ("Secure Boot is on. Power the VM off, then on the host: VirtualBox: VBoxManage modifynvram <vm> secureboot --disable; " +
         "VMware: VM Settings > Options > Advanced > untick 'Enable secure boot'.")
