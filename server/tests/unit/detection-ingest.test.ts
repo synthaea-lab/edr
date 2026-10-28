@@ -96,6 +96,42 @@ describe("POST /api/ingest/detection", () => {
     }) });
   });
 
+  it("accepts an IOC detection and keeps the indicator and feed provenance in meta", async () => {
+    const source = {
+      engine: "ioc",
+      kind: "ip",
+      indicator: "203.0.113.7",
+      feed: "internal-blocklist",
+      feed_version: "7",
+    };
+    const response = await post({
+      timestamp_ns: 1_700_000_000_200_000_000,
+      severity: "high",
+      title: "Known-bad address",
+      source,
+      techniques: ["T1071"],
+      events: [{ type: "connect" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(db.detection.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      technique: "T1071",
+      meta: expect.objectContaining({ source, indicator: "203.0.113.7", feed: "internal-blocklist" }),
+    }) });
+  });
+
+  it("rejects an IOC detection without feed provenance", async () => {
+    const response = await post({
+      timestamp_ns: 1_700_000_000_200_000_000,
+      severity: "high",
+      title: "Known-bad address",
+      source: { engine: "ioc", kind: "ip", indicator: "203.0.113.7" },
+      events: [],
+    });
+    expect(response.status).toBe(400);
+    expect(db.detection.create).not.toHaveBeenCalled();
+  });
+
   it("keeps accepting the legacy detection shape", async () => {
     const response = await post({
       timestamp_ns: 1_700_000_000_000_000_000,

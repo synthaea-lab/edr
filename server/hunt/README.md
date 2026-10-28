@@ -26,7 +26,9 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   draft Sigma rule and its samples file from the hunt's newest finished run, for a person to
   review and open as a PR; see `docs/detection/detection-as-code.md`. It writes nothing. A hunt's
   page has a "Draft Sigma rule" button (`components/GraduateHuntButton.tsx`) that calls it and
-  shows the files to copy or download, and what a person still has to do.
+  shows the files to copy or download, and what a person still has to do. `{ kind: "ioc" }`
+  (#934, `lib/hunt-ioc-draft.ts`, the "Draft IOC set" button) answers a draft feed file of the
+  hashes and addresses the matches carry, in the `crates/intel` line format.
 - **Console** (`/console/hunts`): the list (with a Delete button per hunt: it asks first, and
   the run history goes with the hunt), a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields
@@ -43,6 +45,6 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - The raw event archive as a further source (needs `server/datalake`, #77).
-- Graduation beyond the assisted Sigma draft: the PR opened from the server, a YARA or IOC-set draft, a selection built from the raw archive.
+- Graduation beyond the assisted drafts: the PR opened from the server, a YARA draft, domains in the IOC-set draft (they wait on the feed builder's public-suffix check), a selection built from the raw archive.
 - Live endpoint queries (ask one host "what is running right now?") ride the
   `response::live` channel with its policy gates, not a separate mechanism.

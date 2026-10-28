@@ -151,8 +151,13 @@ cli status                                  # lists every active suppression
 
 ## Not built yet
 
-- **Host isolation** and the analyst-driven half (`response::live`): blocked on
-  server-side analyst auth.
+- **Host isolation** (ADR-0037). The platform-neutral half is in `response::isolation`:
+  the pinned plan, the persisted intent and the start-up reconciliation. The policy field
+  `response.isolate_enabled` exists and defaults to off. None of this is wired into the
+  agent yet. The Windows WFP implementation, `cli isolate|unisolate` and
+  `agent isolation lift` are the next slice. Until they land, enabling the field does
+  nothing.
+- **The analyst-driven half** (`response::live`): blocked on server-side analyst auth.
 - **A lab run of the whole chain** ("Done when": the beacon scenario with response
   enabled kills the process and quarantines the payload, both audited).
   `lab/scenarios/response.sh` (with `response.yaml` and `response-marker.yar`) is that
