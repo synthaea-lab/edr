@@ -120,7 +120,7 @@ export function draftIocSetFromHunt(hunt: GraduationHunt, detections: Graduation
   const todo = [
     "Every indicator is a value a matched detection carried, not a verdict: drop the benign ones (a shared CDN address, a system binary's hash) before this ships.",
     `The file name is the feed's name in every finding (\`${slug}\`); rename it to say where the indicators came from.`,
-    `The path \`${IOC_DRAFT_DIR}/\` is where this draft proposes IOC sets live in the content repo; no directory or CI check exists for one yet.`,
+    `The path \`${IOC_DRAFT_DIR}/\` is where this draft proposes IOC sets live in the content repo; CI checks every \`*.txt\` there (the engine loads each line, the feed builder applies the public-suffix check), but no feed exists yet.`,
     "Nothing delivers a set to the agents yet: signed delivery through the content manifest waits on the production signing keys (#753).",
   ];
   if (domains.size > 0) {
