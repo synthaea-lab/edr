@@ -65,9 +65,8 @@ came from, `unversioned` without one. Feed ids follow the sorted file names, so 
 the same files agree on which feed wins an overlap. Names and versions are trimmed, stripped of
 control characters and cut at 64 characters, because they travel in every detection.
 Delivery is a signed content release carrying `ioc/<feed>.txt` entries of type `ioc` (ADR-0038,
-"Delivery"); the agent needs nothing new for it. **Nothing builds and publishes such a release yet**, and
-signing it in production waits on the production keys (#753): a feed reaches a host through a release an
-operator signs by hand (test key in the lab), or is a file somebody put there.
+"Delivery"); the agent needs nothing new for it. The server stages a feed for such a release (see below);
+signing it in production waits on the production keys (#753), so until then a feed is a file somebody put there.
 
 Verified in the lab on 2026-10-29 (Fedora 43, kernel 7.2.9, agent built from `main` `609cd1d8`, control
 plane run from the same tree, **public test key only**): release 1 of ring `prod` with `ioc/lab-feed.txt`

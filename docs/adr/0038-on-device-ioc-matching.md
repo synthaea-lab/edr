@@ -150,8 +150,9 @@ feed needs a per-tenant switch before it reaches a host.
 - **Behaviour when the enrichment worker falls behind.** No shedding is defined for the hash lookup.
 - **Signing the sets in production** (blocked on #753) and most of the **server-side feed pipeline**: the
   builder (normalise, dedup, device rules, public-suffix gate) and a CSV source exist, see
-  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, expiry, per-tenant enablement and a step that
-  builds a feed and puts it in a release do not.
+  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, fetching a source on a schedule, expiry and
+  per-tenant enablement do not. A staging route builds a feed from a plain or CSV source and writes it to
+  the artifact store; the manifest is still built and signed by the operator.
 - **Calibration** of the 64 MiB budget and the filter sizing against a fleet. The lab run with a seeded
   indicator #60 asked for was done on 2026-10-26 (three indicators, three findings), which says nothing
   about the budget.
