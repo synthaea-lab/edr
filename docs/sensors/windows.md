@@ -36,10 +36,10 @@ A create that only redirects (`STATUS_REPARSE`, for example through a junction) 
 operation: the re-issued create on the resolved path is the one that is reported.
 
 Protocol version 3 added `dropped_capture_failed`, a cumulative counter for successful
-operations whose source or destination name could not be captured. The driver defers both
+operations whose file source/destination name or volume name could not be captured. The driver defers both
 capture-failure and queue-full accounting until the post-op confirms that the operation
 succeeded, so failed file operations do not inflate those two loss counts. `not_connected`
-is different: while already disconnected, the pre-op counts a qualifying delete, rename or timestamp-set
+is different: while already disconnected, the pre-op counts a qualifying volume-open, delete, rename or timestamp-set
 *attempt* before its result is known. Failed or reparsed attempts can therefore increase it;
 each invocation of a re-issued create's pre-op may be counted. It is an upper bound on lost
 events, not an exact number of successful operations. Nothing is counted while the instance is
@@ -50,7 +50,11 @@ counter and its sequence number is taken back, so the agent sees no gap. Protoco
 the legacy 72-byte header with four signed 64-bit requested `FILE_BASIC_INFORMATION` times at
 offsets 72, 80, 88 and 96 (creation, last access, last write, change). The complete v4 header is
 104 bytes and UTF-16 path payloads start there. The decoder rejects timestamp values on other
-event kinds and rejects a set-time record with no requested time.
+event kinds and rejects a set-time record with no requested time. Protocol v5 appends a 32-bit
+requested `ACCESS_MASK` at bytes 104–107; the complete header is 108 bytes. Kind 4 reports a
+successful mounted-volume open (`FO_VOLUME_OPEN`), with the kernel volume name in the old-path
+slot and no new path or timestamp values. The mask is requested, not granted access. Physical
+disk handles that bypass the filesystem are out of scope.
 
 Queued records survive a client disconnect, subject to the 8,192-record and 16 MiB queue
 limits. A reconnect can therefore receive older records: their timestamps were captured with
