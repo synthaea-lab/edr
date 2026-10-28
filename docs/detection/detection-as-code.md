@@ -52,7 +52,11 @@ the benign ones. **Domains** come from the `query` of a `dns_query` event, as qu
 (lowercased, one trailing dot dropped), and only if they pass the feed builder's rules
 (`normalizeDomain`) and are not a public suffix (`isPublicSuffix`, the check of #1011): a listed
 domain matches every name beneath it and the device carries no public-suffix list (ADR-0038
-section 6). The `todo` counts the names left out and warns that a domain line is wide. The path
+section 6). The `todo` counts the names left out and warns that a domain line is wide.
+Each hash and domain carries a `#` comment with the tenant's fleet prevalence (`seen on N of M hosts,
+first <date>`, or `never seen on this fleet before`), marked `widespread: likely benign` when 5 or
+more hosts and 5% of the reporting hosts have it; nothing is dropped, the person decides. Addresses
+carry none (prevalence does not track them), and the `todo` says so. The path
 `rules/ioc/` is this draft's proposal: the directory does not exist yet, but CI already checks
 every `*.txt` in it (`crates/intel/tests/content.rs`: the engine takes every line;
 `server/tests/unit/ioc-content.test.ts`: the feed builder accepts it, public-suffix check included,

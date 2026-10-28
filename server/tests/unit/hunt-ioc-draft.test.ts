@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import { parseGraduationRequest, type GraduationDetection, type GraduationHunt } from "@/lib/hunt-graduation";
-import { draftIocSetFromHunt, graduationKind, parseIocGraduationRequest } from "@/lib/hunt-ioc-draft";
+import { draftIocSetFromHunt, graduationKind, iocObservations, parseIocGraduationRequest, type IocPrevalence } from "@/lib/hunt-ioc-draft";
+import { prevalenceKey, type Prevalence } from "@/lib/prevalence";
 
 const SHA_A = "a".repeat(64);
 const SHA_B = "0123456789abcdef".repeat(4);
@@ -144,6 +145,56 @@ describe("draftIocSetFromHunt", () => {
       ])
     );
     expect(files[0].content).toBe(golden);
+  });
+});
+
+describe("fleet prevalence in the draft", () => {
+  const seen = (hostCount: number): Prevalence => ({ hostCount, eventCount: hostCount, firstSeen: new Date("2026-09-01T10:00:00Z"), lastSeen: new Date("2026-10-01T10:00:00Z") });
+  const dns = (query: string) => ({ type: "dns_query", query });
+  const detections = [det("1", exec(SHA_A)), det("2", exec(SHA_B)), det("3", dns("cdn.example.com")), det("4", dns("rare.evil.example")), det("5", connect("203.0.113.9"))];
+  const fleet = (hosts: number, found: [string, string, Prevalence][], unchecked: string[] = []): IocPrevalence => {
+    const keys = [...found.map(([k, v]) => prevalenceKey(k as "sha256", v)), ...iocObservations(detections).map((o) => prevalenceKey(o.kind, o.key))].filter((k) => !unchecked.includes(k));
+    return { hosts, found: new Map(found.map(([k, v, p]) => [prevalenceKey(k as "sha256", v), p])), lookedUp: new Set(keys) };
+  };
+  const body = (r: ReturnType<typeof draftIocSetFromHunt>) => ok(r).files[0].content;
+
+  it("takes only hashes and domains to the prevalence lookup", () => {
+    expect(iocObservations(detections).map((o) => o.kind).sort()).toEqual(["domain", "domain", "sha256", "sha256"]);
+  });
+
+  it("comments each hash and domain with how many hosts saw it, and marks a widespread one", () => {
+    const result = draftIocSetFromHunt(hunt, detections, fleet(100, [["sha256", SHA_A, seen(1)], ["domain", "cdn.example.com", seen(40)]]));
+    const text = body(result);
+    expect(text).toContain(`# seen on 1 of 100 hosts, first 2026-09-01\nsha256:${SHA_A}`);
+    expect(text).toContain(`# never seen on this fleet before\nsha256:${SHA_B}`);
+    expect(text).toContain("# seen on 40 of 100 hosts, first 2026-09-01 (widespread: likely benign)\ndomain:cdn.example.com");
+    expect(text).toContain("# never seen on this fleet before\ndomain:rare.evil.example");
+    expect(text).toMatch(/\nip:203\.0\.113\.9\n/);
+    expect(text).not.toMatch(/widespread[^\n]*\nsha256/);
+    const todo = ok(result).todo.join(" ");
+    expect(todo).toMatch(/1 hashes or domains are on at least 5%/);
+    expect(todo).toMatch(/Addresses carry no fleet prevalence/);
+  });
+
+  it("does not call a value widespread on a small fleet, and does not judge a fleet that reported nothing", () => {
+    expect(body(draftIocSetFromHunt(hunt, detections, fleet(10, [["domain", "cdn.example.com", seen(4)]])))).not.toMatch(/widespread/);
+    const empty = body(draftIocSetFromHunt(hunt, detections, fleet(0, [])));
+    expect(empty).not.toMatch(/seen on|never seen/);
+    expect(empty).toBe(body(draftIocSetFromHunt(hunt, detections)));
+  });
+
+  it("does not say unseen about a value the lookup skipped", () => {
+    const skipped = prevalenceKey("sha256", SHA_A);
+    const result = draftIocSetFromHunt(hunt, detections, fleet(100, [], [skipped]));
+    expect(body(result)).toMatch(new RegExp(`^sha256:${SHA_A}$`, "m"));
+    expect(body(result)).not.toMatch(new RegExp(`\\n#[^\\n]*\\nsha256:${SHA_A}`));
+    expect(ok(result).todo.join(" ")).toMatch(/1 hashes or domains were not checked/);
+  });
+
+  it("keeps the file loadable: every comment is a # line", () => {
+    const text = body(draftIocSetFromHunt(hunt, detections, fleet(100, [["sha256", SHA_A, seen(50)]])));
+    const indicators = text.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(indicators).toEqual([`sha256:${SHA_B}`, `sha256:${SHA_A}`, "ip:203.0.113.9", "domain:cdn.example.com", "domain:rare.evil.example"]);
   });
 });
 
