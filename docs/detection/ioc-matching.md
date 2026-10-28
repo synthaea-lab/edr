@@ -1,8 +1,9 @@
 # IOC matching (issue #60, ADR-0038)
 
 `crates/intel` matches file hashes (SHA-256), IP addresses and domains against a loaded indicator
-set. This is the engine only: it is not yet wired into the agent and loads no signed content (see
-"Not decided, not built" in ADR-0038).
+set. The agent loads feed files from its content root and raises a detection on a match (see "In the
+agent" below); no signed delivery of those files exists yet, and ADR-0038 ("Not decided, not built")
+lists what is still open.
 
 ## Building a set
 
@@ -98,3 +99,55 @@ The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_
 
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
 hash, so there is nothing to match until a sensor reports one).
+
+## Server side: building a feed (`server/lib/ioc-feed.ts`)
+
+`buildFeed({ feed, text, isPublicSuffix, defaultKind })` turns the text of one source into the
+`ioc/<feed>.txt` an agent loads: `kind:value` lines, normalised as the device normalises them,
+de-duplicated and sorted, so the same input always gives the same bytes and the same hash. It
+applies the device's own load rules (hash length, loopback and unspecified addresses, IPv4-mapped
+IPv6 canonicalised, domain syntax and 2 to 8 labels, ASCII only) and returns a reason per rejected
+line (`rejected`, bounded to 100 by default, with `rejectedTotal` always exact). One bad line never
+discards a feed. `versionFile` writes the one-line `ioc/VERSION`, `isValidFeedName` guards the file
+stem.
+
+The check the device cannot make is here: a listed domain must not be a public suffix (`co.uk`
+would flag a whole country, since a listed domain covers its subdomains). The suffix list is a
+dependency the module does not carry: the caller passes `isPublicSuffix`, and **without one every
+domain is refused** (`public_suffix_unchecked`) rather than published unchecked. Hashes and
+addresses are unaffected.
+
+`server/lib/public-suffix.ts` is the `isPublicSuffix` to pass: `tldts` (pinned at 7.4.18, MIT, one
+transitive package), private suffixes such as `github.io` and `blogspot.com` counted, so a listed
+`github.io` is refused and `attacker.github.io` is not.
+
+`server/tests/fixtures/ioc-feed-golden.txt` is checked on both sides: the server test asserts the
+builder produces it from `ioc-feed-input.txt`, and `crates/intel/tests/feed_golden.rs` asserts the
+engine takes every line of it unchanged.
+
+### A CSV source (`server/lib/ioc-csv.ts`)
+
+`buildFeedFromCsv({ feed, csv, valueColumn, typeColumn?, defaultKind?, hasHeader?, isPublicSuffix })`
+reads a feed published as CSV (RFC 4180: quoted fields, `""` for a quote, CRLF or LF, a newline inside
+quotes, a byte-order mark) and passes its rows to the same builder core, so a CSV feed gets the same
+normalisation, device rules and public-suffix gate, and gives the same bytes (and hash) as the plain
+`kind:value` text for the same indicators. `server/tests/fixtures/ioc-csv-input.csv` produces
+`ioc-feed-golden.txt` byte for byte.
+
+- **Columns** are named by header (case-insensitive) or, with `hasHeader: false`, by 0-based index. A
+  column that is not there throws: it is a mistake in the configuration, not in the data.
+- **Kind**: from `typeColumn` (`sha256`, `sha-256`, `ip`, `ipv4`, `ipv6`, `ip-src`, `ip-dst`, `domain`,
+  `fqdn`, `hostname`; case-insensitive), else `defaultKind`. A kind the engine does not match (`md5`, `url`)
+  or none at all is rejected as `unknown_kind`. A `kind:` prefix inside the value does not override it.
+- **A bad row never discards the feed.** A row with the wrong number of fields is `bad_csv`; every
+  rejection carries the line its record *starts* on, which a quoted newline makes different from the
+  record's index. A quote that is never closed swallows the rest of the text, so it is one `bad_csv`
+  rejection at its record and the records before it are kept.
+- A line starting with `#` and a blank line are skipped, as in the plain format. A header that itself
+  starts with `#` is therefore skipped too: address the columns by index with `hasHeader: false`.
+- A quote in the middle of an unquoted field is kept as text (lenient on input; the output is always
+  normalised).
+
+Not built: the other sources (STIX/TAXII, MISP), expiry, per-tenant enablement, publishing the file
+through the content manifest (`ContentType` has no `ioc` yet, and delivery waits on #753), and wiring a
+source and `isPublicSuffix` into a publishing path (nothing calls `buildFeed` or `buildFeedFromCsv` yet).
