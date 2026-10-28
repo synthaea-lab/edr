@@ -3,19 +3,23 @@ import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
 import { HuntValidationError, parseHuntQuery } from "@/lib/hunt";
 import { draftRuleFromHunt, parseGraduationRequest } from "@/lib/hunt-graduation";
+import { draftIocSetFromHunt, graduationKind, parseIocGraduationRequest } from "@/lib/hunt-ioc-draft";
 
 /**
- * POST /api/hunts/[id]/graduate — a draft Sigma rule from a saved hunt (#618).
- * Body: `{ platform: "linux" | "windows" | "macos", negative?: { image, cmdline, note? } }`.
- * Answers 200 with `files` (`rules/sigma/<platform>/<slug>.yml` and `.samples.json`, as text)
- * and `todo` (what a person must still do), or 422 with `problems` when no draft can be
- * made. It reads the detections of the hunt's newest finished run and writes nothing:
+ * POST /api/hunts/[id]/graduate — a draft from a saved hunt: a Sigma rule (#618) or an IOC set (#934).
+ * Body: `{ platform: "linux" | "windows" | "macos", negative?: { image, cmdline, note? } }` for
+ * the Sigma draft (`kind: "sigma"`, the default), `{ kind: "ioc" }` for the IOC set.
+ * Answers 200 with `files` (`rules/sigma/<platform>/<slug>.yml` and `.samples.json`, or
+ * `rules/ioc/<slug>.txt`, as text) and `todo` (what a person must still do), or 422 with
+ * `problems` when no draft can be made. It reads the detections of the hunt's newest finished run and writes nothing:
  * the files are for a person to review and open as a PR.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const tenantId = await getTenantId(req);
-    const request = parseGraduationRequest(await req.json().catch(() => null));
+    const body = await req.json().catch(() => null);
+    const kind = graduationKind(body);
+    const request = kind === "sigma" ? parseGraduationRequest(body) : (parseIocGraduationRequest(body), null);
     const hunt = await prisma.hunt.findFirst({ where: { id: params.id, tenantId } });
     if (!hunt) return NextResponse.json({ error: "Hunt not found" }, { status: 404 });
 
@@ -48,13 +52,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       select: { id: true, technique: true, severity: true, event: true, timestamp: true },
       orderBy: { timestamp: "desc" },
     });
-    const result = draftRuleFromHunt(
-      { id: hunt.id, name: hunt.name, description: hunt.description, version: hunt.version, query },
-      detections,
-      request
-    );
+    const graduationHunt = { id: hunt.id, name: hunt.name, description: hunt.description, version: hunt.version, query };
+    const result = request ? draftRuleFromHunt(graduationHunt, detections, request) : draftIocSetFromHunt(graduationHunt, detections);
     if (!result.ok) {
-      return NextResponse.json({ error: "No draft rule can be made from this hunt", problems: result.problems }, { status: 422 });
+      const what = request ? "rule" : "IOC set";
+      return NextResponse.json({ error: `No draft ${what} can be made from this hunt`, problems: result.problems }, { status: 422 });
     }
     return NextResponse.json({ files: result.files, todo: result.todo });
   } catch (error) {
