@@ -1,0 +1,13 @@
+domain:_dmarc.example.org
+domain:a.b.c.d.e.f.g.h
+domain:evil.example.org
+domain:long-label-0123456789-0123456789-0123456789-0123456789-abcde.example.org
+domain:xn--bcher-kva.example
+ip:2001:db8:0:1::1
+ip:2001:db8::
+ip:2001:db8::1
+ip:203.0.113.10
+ip:203.0.113.9
+ip:fe80::1
+sha256:275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f
+sha256:3f35679a96fea74f08742c8dff77edce0e52a48ea347107dfa3405fdf26ce510
