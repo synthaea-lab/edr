@@ -94,7 +94,8 @@ A `NetworkFlow` peer address is checked like a connect destination: conntrack re
 flow on each poll, and the cooldown makes that one finding.
 
 The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_findings` and
-`ioc_cooled_down`, so the server can tell a host with no feed from one with a feed and no match.
+`ioc_cooled_down`, so the server can tell a host with no feed from one with a feed and no match. The
+console's fleet health page shows them in an "IOC feed" column (`docs/architecture/control-plane.md`).
 
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
 hash, so there is nothing to match until a sensor reports one).
