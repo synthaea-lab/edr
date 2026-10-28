@@ -3,9 +3,9 @@ name: Content
 on:
   push:
     branches: [main]
-    paths: ["rules/**", "crates/sigma/**", "crates/yara/**", ".github/workflows/content.yml"]
+    paths: ["rules/**", "crates/sigma/**", "crates/yara/**", "crates/intel/**", ".github/workflows/content.yml"]
   pull_request:
-    paths: ["rules/**", "crates/sigma/**", "crates/yara/**", ".github/workflows/content.yml"]
+    paths: ["rules/**", "crates/sigma/**", "crates/yara/**", "crates/intel/**", ".github/workflows/content.yml"]
   workflow_dispatch:
 
 # Read-only token for every job: nothing here writes to the repo, and a
@@ -31,3 +31,7 @@ jobs:
         run: cargo test -p sigma --test content
       - name: yara content suite
         run: cargo test -p yara --test content
+      # rules/ioc/*.txt: one feed each, every line loaded by the engine's own parser. The
+      # public-suffix half of the check runs in server.yml (it needs the server's list).
+      - name: ioc content suite
+        run: cargo test -p intel --test content

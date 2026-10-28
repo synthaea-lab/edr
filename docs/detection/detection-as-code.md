@@ -53,8 +53,10 @@ the benign ones. **Domains** come from the `query` of a `dns_query` event, as qu
 (`normalizeDomain`) and are not a public suffix (`isPublicSuffix`, the check of #1011): a listed
 domain matches every name beneath it and the device carries no public-suffix list (ADR-0038
 section 6). The `todo` counts the names left out and warns that a domain line is wide. The path
-`rules/ioc/` is this draft's proposal, since the content repo has no IOC directory or CI check
-yet, and delivery to agents waits on #753. A fixture
+`rules/ioc/` is this draft's proposal: the directory does not exist yet, but CI already checks
+every `*.txt` in it (`crates/intel/tests/content.rs`: the engine takes every line;
+`server/tests/unit/ioc-content.test.ts`: the feed builder accepts it, public-suffix check included,
+no duplicate, a valid feed name). Delivery to agents waits on #753. A fixture
 (`server/tests/fixtures/ioc-draft-golden.txt`) is compared to the exporter's output by
 `tests/unit/hunt-ioc-draft.test.ts` and loaded whole by `crates/intel/tests/draft_golden.rs`,
 so the draft is checked against the engine the way the Sigma draft is checked against the
