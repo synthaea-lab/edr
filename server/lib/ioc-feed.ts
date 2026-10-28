@@ -33,7 +33,8 @@ export type RejectReason =
   | "domain_too_broad"
   | "domain_too_deep"
   | "public_suffix"
-  | "public_suffix_unchecked";
+  | "public_suffix_unchecked"
+  | "bad_csv";
 
 export interface Rejection {
   /** 1-based line number in the source text. */
@@ -228,6 +229,14 @@ function parseLine(
 }
 
 /**
+ * One item of a source and the 1-based line it starts on: its text (`kind:value`, or a bare value),
+ * or a rejection the caller already decided on (a CSV row the CSV layer could not read).
+ */
+export type SourceLine =
+  | { line: number; text: string }
+  | { line: number; refuse: { reason: RejectReason; value: string } };
+
+/**
  * Builds one feed file. A bad line is counted and listed, never fatal: one malformed line does not
  * discard a feed (the device behaves the same way).
  *
@@ -236,6 +245,16 @@ function parseLine(
 export function buildFeed(input: FeedInput): FeedResult {
   if (!isValidFeedName(input.feed)) throw new RangeError(`invalid feed name: ${JSON.stringify(input.feed)}`);
   if (Buffer.byteLength(input.text) > MAX_FEED_TEXT_BYTES) throw new RangeError("feed text too large");
+  const lines = input.text.split(/\r?\n/).map((text, index) => ({ line: index + 1, text }));
+  return buildFeedFromLines(input, lines);
+}
+
+/**
+ * The core of {@link buildFeed} over lines the caller already cut, each with the number it carries
+ * in the source (a CSV record can span several physical lines, so the number is not the index).
+ * `input.text` is not read; the caller has checked the feed name and the source size.
+ */
+export function buildFeedFromLines(input: Omit<FeedInput, "text">, sourceLines: SourceLine[]): FeedResult {
   const listed = input.maxRejectedListed ?? 100;
 
   const seen = new Set<string>();
@@ -245,26 +264,35 @@ export function buildFeed(input: FeedInput): FeedResult {
   let read = 0;
   let duplicates = 0;
 
-  input.text.split(/\r?\n/).forEach((raw, index) => {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#")) return;
+  for (const item of sourceLines) {
+    const lineNumber = item.line;
+    if ("refuse" in item) {
+      read++;
+      rejectedTotal++;
+      if (rejected.length < listed) {
+        rejected.push({ line: lineNumber, reason: item.refuse.reason, value: item.refuse.value.slice(0, 80) });
+      }
+      continue;
+    }
+    const line = item.text.trim();
+    if (line === "" || line.startsWith("#")) continue;
     read++;
     const parsed = parseLine(line, input.defaultKind, input.isPublicSuffix);
     if (!parsed.ok) {
       rejectedTotal++;
       if (rejected.length < listed) {
-        rejected.push({ line: index + 1, reason: parsed.reason, value: parsed.value.slice(0, 80) });
+        rejected.push({ line: lineNumber, reason: parsed.reason, value: parsed.value.slice(0, 80) });
       }
-      return;
+      continue;
     }
     const key = `${parsed.kind}:${parsed.value}`;
     if (seen.has(key)) {
       duplicates++;
-      return;
+      continue;
     }
     seen.add(key);
     accepted.push({ kind: parsed.kind, value: parsed.value });
-  });
+  }
 
   const lines = accepted.map((a) => `${a.kind}:${a.value}`).sort();
   const text = lines.length === 0 ? "" : `${lines.join("\n")}\n`;
