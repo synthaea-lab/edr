@@ -5,6 +5,7 @@ import {
   draftDownloadName,
   graduationBody,
   graduationResult,
+  IOC_GRADUATION_BODY,
   isSignInRedirect,
   SESSION_EXPIRED_MESSAGE,
   type GraduationForm,
@@ -14,9 +15,10 @@ import {
 const PLATFORMS: GraduationForm["platform"][] = ["linux", "windows", "macos"];
 
 /**
- * "Draft Sigma rule" on a hunt (#618, #61's graduation box): asks for the assisted draft of the
- * hunt's newest finished run and shows its files and what a person still has to do. It writes
- * nothing: the files are copied or downloaded and go through the normal PR and CI path.
+ * "Draft Sigma rule" and "Draft IOC set" on a hunt (#618, #934, #61's graduation box): asks for
+ * the assisted draft of the hunt's newest finished run and shows its files and what a person
+ * still has to do. It writes nothing: the files are copied or downloaded and go through the
+ * normal PR and CI path.
  */
 export function GraduateHuntButton({ huntId }: { huntId: string }) {
   const [form, setForm] = useState<GraduationForm>({
@@ -29,9 +31,9 @@ export function GraduateHuntButton({ huntId }: { huntId: string }) {
   const [result, setResult] = useState<GraduationResult | null>(null);
   const set = (patch: Partial<GraduationForm>) => setForm((f) => ({ ...f, ...patch }));
 
-  async function handleClick() {
+  async function handleClick(kind: "sigma" | "ioc") {
     setResult(null);
-    const request = graduationBody(form);
+    const request = kind === "ioc" ? { ok: true as const, body: IOC_GRADUATION_BODY } : graduationBody(form);
     if (!request.ok) {
       setResult({ ok: false, message: request.message, problems: [] });
       return;
@@ -69,8 +71,9 @@ export function GraduateHuntButton({ huntId }: { huntId: string }) {
     <section className="mb-6 rounded-lg border border-gray-200 bg-white p-4" aria-label="Draft a rule">
       <h3 className="text-lg font-semibold text-gray-900">Graduate to content</h3>
       <p className="mt-1 text-sm text-gray-600">
-        A draft Sigma rule and its samples from this hunt&apos;s newest finished run. Nothing is
-        saved or shipped: review the files and open a pull request.
+        A draft Sigma rule and its samples, or a draft IOC set of the hashes and addresses the
+        matches carry, from this hunt&apos;s newest finished run. Nothing is saved or shipped:
+        review the files and open a pull request.
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <label className="text-sm text-gray-700">
@@ -88,11 +91,18 @@ export function GraduateHuntButton({ huntId }: { huntId: string }) {
           </select>
         </label>
         <button
-          onClick={handleClick}
+          onClick={() => handleClick("sigma")}
           disabled={pending}
           className="px-3 py-1.5 text-sm font-medium rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {pending ? "Drafting…" : "Draft Sigma rule"}
+        </button>
+        <button
+          onClick={() => handleClick("ioc")}
+          disabled={pending}
+          className="px-3 py-1.5 text-sm font-medium rounded-md border border-indigo-600 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {pending ? "Drafting…" : "Draft IOC set"}
         </button>
       </div>
       <details className="mt-3 text-sm text-gray-700">

@@ -47,7 +47,7 @@ export function parseGraduationRequest(body: unknown): GraduationRequest {
   }
   const raw = body as Record<string, unknown>;
   for (const key of Object.keys(raw)) {
-    if (key !== "platform" && key !== "negative") throw new HuntValidationError(`unknown field "${key}"`);
+    if (key !== "kind" && key !== "platform" && key !== "negative") throw new HuntValidationError(`unknown field "${key}"`);
   }
   if (typeof raw.platform !== "string" || !(PLATFORMS as readonly string[]).includes(raw.platform)) {
     throw new HuntValidationError(`platform must be one of ${PLATFORMS.join(", ")}`);

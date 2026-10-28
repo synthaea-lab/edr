@@ -1,0 +1,6 @@
+# DRAFT graduated from hunt h-1 (query version 3). A person reviews it; it enters the normal PR and CI path.
+# One line per indicator. The matched detections name these values; that does not make each one bad.
+sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ip:2001:db8::1
+ip:203.0.113.9

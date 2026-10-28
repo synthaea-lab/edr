@@ -3,13 +3,15 @@
 - **Status**: proposed
 - **Date**: 2026-10-26
 
-Issue #60. This records what the first slice builds (`crates/intel`) and what it leaves open.
+Issue #60. This records what `crates/intel` builds and what it leaves open. The first slice is
+hashes and addresses; the amendment under "### 6. Domains" (status **proposed**, pending the
+owner's decision) adds domains.
 The number is the next free one on `main` at the time of writing; #969 also names an ADR-0037,
 so renumber on merge if another lands first.
 
 ## Context
 
-Indicator sets (file hashes, IP addresses, later domains) must be matched on the device, against
+Indicator sets (file hashes, IP addresses, domains) must be matched on the device, against
 `enrich` output on exec and write and against connect events, without a round trip per event and
 without unbounded memory: a public feed lists millions of hashes. Matches are detections and
 feed the correlator like any other source.
@@ -61,13 +63,69 @@ sides, judged on the canonical form. A loopback or unspecified address is never 
 (listing `127.0.0.1` would alert on every local connection); it is counted as rejected. A bad line
 in a feed is counted and skipped, so one malformed line does not discard the feed.
 
+### 6. Domains (amendment, proposed)
+
+**A listed domain matches itself and every name beneath it.** `evil.example` flags `evil.example`,
+`www.evil.example` and `a.b.evil.example`, on a label boundary only: `notevil.example` and
+`evil.example.org` do not match, and a suffix is never a substring that starts inside a label. A
+listed `c2.evil.example` does not cover its parent.
+
+Why suffix and not exact only. What a feed lists is a registered or operator-controlled domain;
+what the endpoint resolves is a name beneath it, often one the attacker generates per victim (DGA
+and DNS-tunnelling labels, per-campaign hosts). Exact-only matching would make a feed of domains
+miss most of the traffic it was published for, and a feed author who wants a single host lists
+that host. The cost is blast radius: a wrongly listed parent flags every name under it. That is
+bounded by the rules below and by the server-side pipeline, not by the device.
+
+**Normalisation, applied identically to a listed name and to a queried one**, because the
+two must agree on what a name *is*:
+
+- ASCII-lowercase, and drop one trailing dot (the root). A second dot is an empty label.
+- Labels are 1 to 63 bytes, the name at most 253 bytes (RFC 1035), characters `a-z 0-9 - _`
+  only, no hyphen at either edge of a label. `_` is kept because real DNS names carry it
+  (`_dmarc`, service records) and refusing it would make a feed unable to list such a host.
+- **No Unicode.** DNS carries an internationalised name as punycode (`xn--`), which is plain ASCII
+  and compared as written. The engine does not convert: a non-ASCII indicator is rejected and
+  counted so the feed author fixes the feed, and a non-ASCII query matches nothing. This avoids
+  an IDNA dependency and its version-dependent mapping rules; it assumes the DNS sensors report
+  the wire form, which is what they read.
+- An all-numeric last label is refused, which is how an IPv4 literal (`203.0.113.7`) looks; an
+  address belongs under `ip:`. A name that fails any rule matches nothing and is never an error
+  on the lookup path.
+
+**Too broad to be an indicator, with no dependency.** A single label (`com`, `localhost`) is
+refused (`DomainTooBroad`), so `com` can never flag a whole TLD. This is a floor, and it is not
+enough: `co.uk` has two labels and is a public suffix, so listing it would flag every `*.co.uk`.
+Telling those apart needs the public-suffix list, which the device does not embed: it is a
+dependency or a vendored file that changes monthly and would have to ship through the same signed
+channel as the sets. Decision: the **server-side pipeline** checks every domain against the
+public-suffix list before it enters a set (it is the place that can carry the dependency and
+reject or quarantine the feed), and the device enforces the minimal rule above. The residual
+risk is a bad set that passed the pipeline; it is limited by the canary rings, not by the engine.
+A per-feed hit counter on the server would show such a feed flagging far too much; the device
+does not report per-feed hits yet.
+
+**Bounded lookup cost.** A listed domain has 2 to 8 labels (`DomainTooDeep` beyond that, refused
+at load rather than silently unmatchable). A lookup probes the queried name's label suffixes of 2
+to 8 labels: at most 7 filter checks and binary searches, whatever the name's length (a 253-byte
+name has up to 127 labels and still costs 7), no allocation. Each probe goes through the Bloom
+filter first; the exact tier decides. When several listed suffixes match, the lowest feed id wins,
+as for the other kinds. The counters count a lookup once.
+
+**Memory.** The exact tier holds the name as a boxed string; a name is charged its length plus
+a fixed per-entry overhead (24 bytes for the string header and feed, 16 assumed for the
+allocator) and one Bloom filter shared by all domains. `estimated_bytes_with_domains` takes the
+count and the total name bytes so the budget check stays exact before anything is allocated.
+
+**Not decided here.** Wildcard syntax (`*.evil.example`) and exact-only entries: a feed that
+needs "this host but not its children" has no way to say so, and we do not guess a syntax before
+a real feed asks. The agent wiring (which DNS events feed `lookup_domain`) belongs to the
+sensors that produce them.
+
 ## Not decided, not built
 
-- **Domains.** Whether a listed domain matches its subdomains, and how the DNS telemetry (and its
-  case and trailing-dot forms) is normalised, change what an indicator means and need their own
-  decision.
 - **CIDR ranges, indicator expiry, and a confidence per indicator.**
-- **The schema variant `DetectionSource::Ioc`** (indicator and feed provenance, with fixtures).
+- **The schema variant `DetectionSource::Ioc`** (indicator and feed provenance, with fixtures; PR #1002).
 - **Wiring into the agent**: where hash matching sits on the exec and write path, and the shed
   behaviour when it falls behind.
 - **Signed delivery** of sets (ADR-0016; blocked in production on #753) and the **server-side feed
@@ -76,7 +134,7 @@ in a feed is counted and skipped, so one malformed line does not discard the fee
 
 ## Consequences
 
-- Hash and address matching can be unit-tested and fuzzed with no sensor, no schema change and no
+- Hash, address and domain matching can be unit-tested and fuzzed with no sensor, no schema change and no
   lab.
 - A feed that is too large is a visible failure at load, not a slow memory leak.
 - The filter's false-positive rate and the budget are calibration constants to revisit with fleet
