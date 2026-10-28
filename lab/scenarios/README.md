@@ -26,18 +26,59 @@ To migrate from `old/lab` after review:
 | `encoded-powershell.ps1` | `powershell.exe -EncodedCommand <base64>` invocations | T1059.001 — asserts the ExecEvent-side `check_encoded_powershell` rule |
 | `scheduled-task-persistence.ps1` | `schtasks.exe /Create` a demo task | T1053.005 — asserts the 4698 → `FLAG_PERSISTENCE_TASK_ARTIFACT` → `check_scheduled_task_persistence` end-to-end pipeline |
 | `service-install-persistence.ps1` | `sc.exe create` a demo service (never runs) | T1543.003 — asserts the 7045 → `FLAG_PERSISTENCE_ARTIFACT` → `check_service_install_persistence` end-to-end pipeline |
+| `bits-job.ps1` | `bitsadmin /transfer` of a whoami.exe copy from a localhost listener, then run | T1197 — asserts the Bits-Client `BitsJob` events (file added, completed) and the `check_bits_download_exec` join (issue #284); prints the job's Bits-Client log records as a self-check without the agent |
 | `create-account-persistence.ps1` | `net user /add` a benign local SAM account | T1136.001 — asserts the 4720 → `FLAG_PERSISTENCE_ACCOUNT_ARTIFACT` → `check_account_creation_persistence` end-to-end pipeline (local SAM only; T1136.002 domain accounts are out of scope) |
-| `response.sh` | One process beaconing once a second while a YARA-marked payload is written, run with response on or off (`EXPECT=enforce\|observe`) | `BAYES`, `RESPONSE-KILL`, `RESPONSE-QUARANTINE` (issue #25) — the message says killed/quarantined or observe-only; needs `response-marker.yar` installed under the content dir first. Not yet run on a VM |
+| `response.sh` | One process beaconing once a second while a YARA-marked payload is written, run with response on or off (`EXPECT=enforce\|observe`) | `BAYES`, `RESPONSE-KILL`, `RESPONSE-QUARANTINE` (issue #25) — the message says killed/quarantined or observe-only; needs `response-marker.yar` installed under the content dir first. Run on a VM 2026-10-05 and 2026-10-15 (Fedora 44, 43), observe and enforce (see the yaml; the enforce runs also killed NetworkManager and `sshd-session`, #652) |
 | `ransomware-rename-burst.sh` | Same-pid burst of file renames, each appending a suffix onto its own old name | T1486 — asserts `check_mass_rename_pattern`'s extension-agnostic mass-rename detection (issue #262) |
-| `ransomware-reflex.sh` | A benign encryptor reads the planted canaries, then renames throwaway files one by one; run with kill on or off (`EXPECT=enforce\|observe`, `CANARY_DIR`) | T1083 canary detection + T1486 + `RESPONSE-KILL` (issue #82) — asserts the encryptor is killed before more than `MAX_ENCRYPTED` (default 60) files are renamed; needs `[deception] canary_dirs` outside `/tmp`. Not yet run on a VM |
+| `ransomware-reflex.sh` | A benign encryptor reads the planted canaries, then renames throwaway files one by one; run with kill on or off (`EXPECT=enforce\|observe`, `CANARY_DIR`) | T1083 canary detection + T1486 + `RESPONSE-KILL` (issue #82) — asserts the encryptor is killed before more than `MAX_ENCRYPTED` (default 60) files are renamed; needs `[deception] canary_dirs` outside `/tmp`. Run on a VM 2026-10-08 and 2026-10-15 (Fedora 44, 43), observe and enforce: killed after 20 of 300 renames both times (see the yaml) |
 | `pid-reuse.sh` | A real `sed` runs, its pid is forced to be recycled (`ns_last_pid`) by a forked child that sets `comm=sed` and renames files with a `.bak` suffix; run as root, `recycled` (default) or `real` (control) | T1486 — asserts the in-place-edit exclusion does not follow a recycled pid (#519); `real` expects no alert |
+| `prevalence-lineage.sh` | The `lineage.sh` chain from a directory named by `TAG` (`TAG=shared` on two hosts, `TAG=only-a` on one); needs an uploading agent | T1059 + the fleet triage line on the case: "seen on 2 hosts" for the shared transition, "seen on 1 host" for the one-host one (issue #76, box 1) |
 | `windows-container.ps1` | A process-isolated container (`ping -t`, then `docker exec hostname.exe`) and a `hostname.exe` on the host; elevated, with `-AgentExe` it runs the agent and checks the result | No alert: asserts `EventMeta::container` on the container's exec events (the Docker id, including the process that exits at once) and none on the host's (#371). Needs the Containers feature and Docker in Windows mode (Server 2025 or Windows 11 22H2+ Pro). Not yet run on a VM |
 
-The four persistence and PowerShell `.ps1` scenarios above are the Windows demo surface — see `../../demo/`
+The `.ps1` scenarios above other than `bits-job.ps1` and `windows-container.ps1` are the Windows demo surface — see `../../demo/`
 for the runbook that chains them in the reviewer-facing order.
 
 New scenarios follow the same shape: one script, one documented expectation list,
 runnable against any platform's agent from the VM matrix (`../vagrant`).
+
+## Raw syscall-exit stale-entry regression (#694)
+
+`pending-syscall-exit-exec.c` is a negative check for a thread-group leader blocked in
+`accept(2)` while a worker thread waits for that exact syscall to appear in
+`/proc`, then calls `execve("/bin/true")`. The process should finish as `/bin/true`
+without a fabricated `SocketAccept` event attributed to its PID. Kernel source
+review indicates this sequence consumes the leader's pending accept exit normally,
+so it is not expected to increment `PENDING_EXIT_MISMATCH_DROPPED`.
+
+On a Linux VM with the agent running and event capture enabled:
+
+```sh
+gcc -O2 -Wall -Wextra -pthread lab/scenarios/pending-syscall-exit-exec.c -o /tmp/pending-syscall-exit-exec
+sudo /tmp/pending-syscall-exit-exec
+```
+
+The program prints its PID before blocking; the worker replaces the image, so a
+successful run exits with status 0. In the captured event stream, check that this
+PID has an `ExecEvent` for `/bin/true` and no `SocketAccept` event caused by the
+worker's `execve` return. Set `PID` to the value printed by the program. These commands should print no
+rows for a fabricated accept, and should print the exec event:
+
+```sh
+PID=2540
+jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and (tostring | contains("SocketAccept")))' events.jsonl
+jq -c --arg pid "$PID" 'select(any(.. | objects; (.pid? | tostring) == $pid) and (tostring | contains("/bin/true")))' events.jsonl
+```
+
+The per-CPU map is named `PENDING_EXIT_MISMATCH_DROPPED`; the kernel truncates
+displayed map names to 15 characters (`PENDING_EXIT_MI`). For this scenario,
+compare `sudo bpftool map dump id <ID>` before and after only as a diagnostic;
+the counter is not expected to increase. This program checks that the described
+exec sequence does not fabricate a `SocketAccept`, rather than reproducing the
+stale-entry bug. The host-side syscall-number tests cover the mismatch decision.
+
+This is a live lab check. It complements the deterministic host-side test
+of the syscall-number match logic; it does not rely on timing sleeps to validate
+the core dispatch decision.
 
 Windows scenarios must run on a stock Windows PowerShell 5.1 under any locale
 (#433). They dot-source `common.ps1` and keep to its three rules: ASCII-only source

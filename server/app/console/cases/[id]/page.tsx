@@ -9,6 +9,7 @@ import {
   prevalenceKey,
   triageLines,
 } from "@/lib/prevalence";
+import { headers } from "next/headers";
 import { redirect, notFound } from "next/navigation";
 
 interface NarrativeCitation {
@@ -17,7 +18,7 @@ interface NarrativeCitation {
 }
 
 export default async function CaseDetailPage({ params }: { params: { id: string } }) {
-  const session = await auth.api.getSession();
+  const session = await auth.api.getSession({ headers: await headers() });
 
   if (!session) {
     redirect("/login");

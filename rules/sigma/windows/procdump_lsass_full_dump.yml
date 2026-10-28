@@ -1,0 +1,25 @@
+title: ProcDump full memory dump targeting LSASS by name
+description: >
+  Detects a full ProcDump memory dump with lsass or lsass.exe as the named
+  target. A numeric PID alone cannot identify LSASS in the exec-only engine,
+  so PID-only dumps are deliberately outside this rule.
+tags:
+  - attack.credential_access
+  - attack.t1003.001
+  - synthaea.coverage.credential_access
+level: medium
+falsepositives:
+  - Support engineers dumping LSASS for an authentication fault, authorized
+    forensic collection, and controlled credential-access simulations.
+detection:
+  selection:
+    Image|endswith:
+      - '\procdump.exe'
+      - '\procdump64.exe'
+      - '\procdump64a.exe'
+    CommandLine|contains:
+      - ' -ma lsass.exe'
+      - ' -ma lsass'
+      - ' -ma "lsass.exe"'
+      - ' -ma "lsass"'
+  condition: selection

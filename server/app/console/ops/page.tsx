@@ -3,7 +3,12 @@ import { auth } from "@/lib/auth";
 import { loadFleet, type FleetAgent } from "@/lib/fleet";
 import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
 import type { FleetStatus } from "@/lib/fleet-health";
+import { loadIngestHealth, type AgentIngestHealth } from "@/lib/ingest-stats";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import RingControls from "@/components/RingControls";
+import { NON_ADMIN_NOTE } from "@/lib/ring-actions";
+import { isAdminRole } from "@/lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +27,7 @@ const STATUS_LABEL: Record<FleetStatus, string> = {
 };
 
 export default async function FleetHealthPage() {
-  const session = await auth.api.getSession();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/login");
 
   const tenantId = session.session.activeOrganizationId;
@@ -38,6 +43,14 @@ export default async function FleetHealthPage() {
 
   const agents = await loadFleet(prisma, tenantId);
   const { rings, truncated } = await loadRings(prisma, tenantId);
+  // Halt and roll back are admin actions (#803): only an owner or admin sees the buttons; the
+  // routes check the role again.
+  const member = await prisma.member.findFirst({
+    where: { organizationId: tenantId, userId: session.user.id },
+    select: { role: true },
+  });
+  const isAdmin = isAdminRole(member?.role);
+  const ingest = await loadIngestHealth(prisma, tenantId, new Date());
 
   return (
     <div>
@@ -48,7 +61,7 @@ export default async function FleetHealthPage() {
           had to drop, show here before they show as missing detections.
         </p>
       </div>
-      <RingPanel rings={rings} truncated={truncated} />
+      <RingPanel rings={rings} truncated={truncated} isAdmin={isAdmin} />
       {agents.length === 0 ? (
         <p className="text-sm text-gray-600">No agents enrolled yet.</p>
       ) : (
@@ -61,9 +74,14 @@ export default async function FleetHealthPage() {
                 <th className="px-4 py-2">Ring</th>
                 <th className="px-4 py-2">Last heartbeat</th>
                 <th className="px-4 py-2">Silent sensors</th>
+                <th className="px-4 py-2">Telemetry loss</th>
                 <th className="px-4 py-2 text-right">Spool dropped</th>
                 <th className="px-4 py-2 text-right">Enrich dropped</th>
                 <th className="px-4 py-2 text-right">Spool backlog</th>
+                <th className="px-4 py-2">Rarity evidence</th>
+                <th className="px-4 py-2 text-right">Watchdog restarts</th>
+                <th className="px-4 py-2 text-right">Tamper events</th>
+                <th className="px-4 py-2">Parent images evicted</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -74,6 +92,7 @@ export default async function FleetHealthPage() {
           </table>
         </div>
       )}
+      <IngestPanel agents={agents} ingest={ingest} />
     </div>
   );
 }
@@ -93,10 +112,29 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
       <td className="px-4 py-2 text-gray-700">
         {agent.status === "silent" || !agent.health ? "—" : silentSensors.join(", ") || "none"}
       </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.status === "silent" || !agent.health
+          ? "—"
+          : agent.health.recentLoss
+            ? "Lost telemetry in the last 10 min"
+            : "none recent"}
+      </td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.spoolDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">{agent.health?.enrichDropped ?? "—"}</td>
       <td className="px-4 py-2 text-right tabular-nums">
         {agent.health ? `${agent.health.spoolBytes} B` : "—"}
+      </td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.health
+          ? `${agent.health.rarityApplied} applied, ${agent.health.rarityWithheld} withheld, ${agent.health.rarityUnapplied} lost`
+          : "—"}
+      </td>
+      <td className="px-4 py-2 text-right tabular-nums">{agent.health?.watchdogRestarts ?? "—"}</td>
+      <td className="px-4 py-2 text-right tabular-nums">{agent.health?.tamperEvents ?? "—"}</td>
+      <td className="px-4 py-2 text-gray-700">
+        {agent.health
+          ? `${agent.health.parentImageEvictedLive} live, ${agent.health.parentImageEvictedDead} exited`
+          : "—"}
       </td>
     </tr>
   );
@@ -117,7 +155,7 @@ const ROLLOUT_LABEL: Record<RolloutState, string> = {
 };
 
 /** Content rollout per ring next to the health of the agents in it. */
-function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boolean }) {
+function RingPanel({ rings, truncated, isAdmin }: { rings: RingStatus[]; truncated: boolean; isAdmin: boolean }) {
   return (
     <section className="mb-8" aria-label="Content rings">
       <h3 className="mb-2 text-lg font-semibold text-gray-900">Content rings</h3>
@@ -144,9 +182,11 @@ function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boole
               {r.byStatus.silent > 0 && `, ${r.byStatus.silent} silent`}
               {r.byStatus.degraded > 0 && `, ${r.byStatus.degraded} degraded`}
             </p>
+            {isAdmin && <RingControls ring={r.ring} rollout={r.rollout} servedVersion={r.servedVersion} hasEarlierRelease={r.hasEarlierRelease} />}
           </div>
         ))}
       </div>
+      {!isAdmin && <p className="mt-2 text-xs text-gray-500">{NON_ADMIN_NOTE}</p>}
       {truncated && (
         <p className="mt-2 text-xs text-gray-500">
           Agent counts cover the {rings.reduce((n, r) => n + r.agents, 0)} most recently seen agents only.
@@ -154,4 +194,81 @@ function RingPanel({ rings, truncated }: { rings: RingStatus[]; truncated: boole
       )}
     </section>
   );
+}
+
+/**
+ * Ingest health (#899), in its own table so that it stays apart from `fleetStatus`: a refusal rate
+ * or a stale kind of data does not make a host degraded (that is an open question in the issue).
+ */
+function IngestPanel({
+  agents,
+  ingest,
+}: {
+  agents: FleetAgent[];
+  ingest: Map<string, AgentIngestHealth>;
+}) {
+  if (agents.length === 0) return null;
+  return (
+    <section className="mt-8" aria-label="Ingest health">
+      <h3 className="mb-1 text-lg font-semibold text-gray-900">Ingest health</h3>
+      <p className="mb-2 text-xs text-gray-600">
+        What the server took from each agent, by kind of data. Refused and late are counted over the
+        current and previous hour. Shown, not alerted on, and it does not change a host's status.
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 text-left text-xs uppercase text-gray-500">
+            <tr>
+              <th className="px-4 py-2">Host</th>
+              <th className="px-4 py-2">Last events batch</th>
+              <th className="px-4 py-2">Last detection</th>
+              <th className="px-4 py-2">Last beacon</th>
+              <th
+                className="px-4 py-2"
+                title="Requests refused after the agent was identified, and entries dropped as malformed. The 5xx count is best effort: it under-counts exactly when the database is down, because the count is written to the same database."
+              >
+                Refused / skipped (1 h)
+              </th>
+              <th
+                className="px-4 py-2 text-right"
+                title="Ingest time minus event time. A reconnecting agent uploads events it spooled while offline, so a high worst case right after a reconnection is expected, not a server fault."
+              >
+                Ingest lag (1 h)
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {agents.map((a) => {
+              const h = ingest.get(a.id);
+              return (
+                <tr key={a.id}>
+                  <td className="px-4 py-2 font-medium text-gray-900">{a.hostname ?? a.id}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.events)}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.detection)}</td>
+                  <td className="px-4 py-2 text-gray-700">{when(h?.lastAccepted.beacon)}</td>
+                  <td className="px-4 py-2 text-gray-700">
+                    {h ? `${h.refused4xx} 4xx, ${h.refused5xx} 5xx, ${h.skipped} skipped` : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {h?.lagMaxMs == null || h.lagMeanMs == null
+                      ? "—"
+                      : `${seconds(h.lagMeanMs)} mean, ${seconds(h.lagMaxMs)} max`}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** "never" is a fact (no accepted request retained), "—" would read as unknown. */
+function when(iso: string | null | undefined): string {
+  return iso ? new Date(iso).toLocaleString() : "never";
+}
+
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)} s`;
 }

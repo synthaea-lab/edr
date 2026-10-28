@@ -83,8 +83,8 @@ A host that accepts that trade can opt in with a drop-in
 
 ```ini
 [Service]
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_DAC_OVERRIDE CAP_FOWNER
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_AUDIT_READ CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_NET_ADMIN CAP_KILL CAP_AUDIT_READ CAP_DAC_OVERRIDE CAP_FOWNER
 ProtectHome=no
 ReadWritePaths=/tmp /var/tmp /home
 ```
@@ -92,8 +92,10 @@ ReadWritePaths=/tmp /var/tmp /home
 ## Quarantine layout and reversal
 
 The quarantine directory is `quarantine/` next to the alert log (`--alerts`), no
-separate flag. A payload is moved there, renamed to its own SHA-256, marked
-read-only, with a `<sha256>.origin` sidecar holding its original path.
+separate flag. On Unix it is mode `0700`; each payload is mode `0400` with no execute
+bit, and each `<sha256>.origin` sidecar is mode `0600`. New sidecars record the
+original path and Unix mode so restore can put the mode back. Older sidecars contain
+only the original path and restore as `0400`.
 
 ```
 agent quarantine --alerts /var/lib/synthaea/alerts.ndjson list
@@ -113,8 +115,9 @@ changing nothing, when:
 - the stored file no longer hashes to its name (altered since quarantine);
 - something now exists at the original path. A restore never overwrites.
 
-The restored file stays read-only: whoever restores a payload for investigation
-should decide explicitly that it is safe to make writable or executable again.
+For new Unix records, restore puts the file back with the mode it had before quarantine.
+Older path-only records restore as `0400`; whoever restores one for investigation should
+decide explicitly whether to make it writable or executable again.
 
 A restore that fails before the file is back changes nothing, including when the
 quarantine directory is on another filesystem and the payload has to be copied: a
@@ -148,8 +151,13 @@ cli status                                  # lists every active suppression
 
 ## Not built yet
 
-- **Host isolation** and the analyst-driven half (`response::live`): blocked on
-  server-side analyst auth.
+- **Host isolation** (ADR-0037). The platform-neutral half is in `response::isolation`:
+  the pinned plan, the persisted intent and the start-up reconciliation. The policy field
+  `response.isolate_enabled` exists and defaults to off. None of this is wired into the
+  agent yet. The Windows WFP implementation, `cli isolate|unisolate` and
+  `agent isolation lift` are the next slice. Until they land, enabling the field does
+  nothing.
+- **The analyst-driven half** (`response::live`): blocked on server-side analyst auth.
 - **A lab run of the whole chain** ("Done when": the beacon scenario with response
   enabled kills the process and quarantines the payload, both audited).
   `lab/scenarios/response.sh` (with `response.yaml` and `response-marker.yar`) is that

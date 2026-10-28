@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { lookupSession } from "@/lib/session-lookup";
 import { buildIdentityHeaders, stripIdentityHeaders } from "@/lib/tenant";
 
 export async function middleware(req: NextRequest) {
@@ -19,11 +19,17 @@ export async function middleware(req: NextRequest) {
     // the session check.
     req.nextUrl.pathname === "/api/release/manifest" ||
     req.nextUrl.pathname === "/api/release/artifact" ||
+    // The key rotation an agent applies (ADR-0027): same model, same exact-path rule.
+    req.nextUrl.pathname === "/api/release/key-rotation" ||
     // Agent content download (issue #30): same model as the release routes.
     // The admin routes under /api/content (halt, release, rollback) are not
     // listed and stay behind the session check.
     /^\/api\/content\/manifest\/[^/]+$/.test(req.nextUrl.pathname) ||
     req.nextUrl.pathname === "/api/content/artifact" ||
+    // Agent common-set snapshot download (ADR-0033): the agent's mTLS identity is the
+    // credential, checked by the handlers (`authenticateAgent`); no browser session exists.
+    req.nextUrl.pathname === "/api/snapshot/manifest" ||
+    req.nextUrl.pathname === "/api/snapshot/artifact" ||
     // Scheduled jobs: the caller is a scheduler with no browser session. Each
     // handler authenticates itself with `verifyCronRequest` (CRON_SECRET, fails
     // closed when unset); without this the middleware redirected every cron call
@@ -38,9 +44,9 @@ export async function middleware(req: NextRequest) {
   }
 
   // Check session for protected routes
-  const session = await auth.api.getSession({
-    headers: req.headers,
-  });
+  // Not `auth.api.getSession`: this runs on the Edge runtime, where the database adapter
+  // cannot (#810).
+  const session = await lookupSession(req.headers);
 
   // Redirect to login if no session
   if (!session) {

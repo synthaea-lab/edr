@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { extractEnrollmentId, verifyProxyAuth } from "@/lib/tenant";
 import { beaconTime, parseHeartbeatBody } from "@/lib/health-beacon";
+import { nextLossObservedAt } from "@/lib/fleet-health";
+import { acceptedOutcome, recordIngest } from "@/lib/ingest-stats";
 
 export async function POST(req: NextRequest) {
   try {
@@ -84,13 +86,31 @@ async function storeBeacon(
     const beacon = parseHeartbeatBody(body);
     if (!beacon) return;
 
+    // Loss is told by a counter rising between two beacons, so the stored row is read first
+    // (a beacon older than it is not stored: see `nextLossObservedAt`).
+    const receivedAt = new Date();
+    const previous = await prisma.agentHealth.findUnique({
+      where: { agentId: agent.id },
+      select: { beaconAt: true, spoolDropped: true, enrichDropped: true, lossObservedAt: true },
+    });
+    const loss = nextLossObservedAt(previous, beacon, receivedAt);
+    if (loss.stale) return;
+
     const fields = {
       beaconAt: beaconTime(beacon),
-      receivedAt: new Date(),
+      receivedAt,
+      lossObservedAt: loss.lossObservedAt,
       agentVersion: beacon.agent_version,
       spoolBytes: BigInt(beacon.spool_bytes),
       spoolDropped: BigInt(beacon.spool_dropped),
       enrichDropped: BigInt(beacon.enrich_dropped),
+      rarityApplied: BigInt(beacon.rarity_applied),
+      rarityWithheld: BigInt(beacon.rarity_withheld),
+      rarityUnapplied: BigInt(beacon.rarity_unapplied),
+      watchdogRestarts: BigInt(beacon.watchdog_restarts),
+      tamperEvents: BigInt(beacon.tamper_events),
+      parentImageEvictedLive: BigInt(beacon.parent_image_evicted_live),
+      parentImageEvictedDead: BigInt(beacon.parent_image_evicted_dead),
       sensors: beacon.sensors,
     };
     await prisma.agentHealth.upsert({
@@ -98,6 +118,8 @@ async function storeBeacon(
       create: { agentId: agent.id, tenantId: agent.tenantId, ...fields },
       update: fields,
     });
+    // Only a stored beacon counts: an agent that sends none (an older one) is not "skipped".
+    await recordIngest(prisma, agent.tenantId, agent.id, "beacon", acceptedOutcome(1, 0, null), receivedAt);
   } catch (error) {
     console.error("Health beacon store error:", error);
   }

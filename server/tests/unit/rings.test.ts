@@ -12,7 +12,12 @@ const release = (releaseVersion: number, status: string) => ({
 /** A stub db: `releases` per ring, newest first; agents already shaped like Prisma rows. */
 function stubDb(
   releases: Record<string, ReturnType<typeof release>[]>,
-  agents: { ring: string; lastSeen: Date; sensors?: { name: string; silent: boolean }[] }[]
+  agents: {
+    ring: string;
+    lastSeen: Date;
+    sensors?: { name: string; silent: boolean }[];
+    lossObservedAt?: Date;
+  }[]
 ) {
   return {
     agent: {
@@ -30,6 +35,7 @@ function stubDb(
                 spoolBytes: BigInt(0),
                 spoolDropped: BigInt(0),
                 enrichDropped: BigInt(0),
+                lossObservedAt: a.lossObservedAt ?? null,
                 sensors: a.sensors.map((s) => ({ ...s, pulse_count: 1 })),
               }
             : null,
@@ -37,10 +43,15 @@ function stubDb(
       ),
     },
     contentRelease: {
-      findFirst: vi.fn(({ where }: { where: { ring: string; status?: string } }) =>
-        Promise.resolve(
-          (releases[where.ring] ?? []).find((r) => !where.status || r.status === where.status) ?? null
-        )
+      findFirst: vi.fn(
+        ({ where }: { where: { ring: string; status?: string; releaseVersion?: { lt: number } } }) =>
+          Promise.resolve(
+            (releases[where.ring] ?? []).find(
+              (r) =>
+                (!where.status || r.status === where.status) &&
+                (!where.releaseVersion || r.releaseVersion < where.releaseVersion.lt)
+            ) ?? null
+          )
       ),
     },
   };
@@ -69,6 +80,26 @@ describe("loadRings (issue #83)", () => {
     });
   });
 
+  it("says whether a serving or halted ring has an earlier release to roll back to, and nothing else does", async () => {
+    const db = stubDb(
+      {
+        canary_0: [release(2, "active"), release(1, "rolled_back")],
+        canary_1: [release(1, "active")],
+        canary_2: [release(3, "halted"), release(2, "active")],
+        prod: [release(2, "rolled_back"), release(1, "active")],
+      },
+      []
+    );
+    const { rings } = await loadRings(db as never, "t1", NOW);
+    const has = (ring: string) => rings.find((r) => r.ring === ring)?.hasEarlierRelease;
+    expect(has("canary_0")).toBe(true); // an earlier release of any status is a target, as in the route
+    expect(has("canary_1")).toBe(false); // a single release
+    expect(has("canary_2")).toBe(true);
+    expect(has("prod")).toBe(false); // already rolled back: nothing to offer
+    const empty = await loadRings(stubDb({}, []) as never, "t1", NOW);
+    expect(empty.rings.every((r) => r.hasEarlierRelease === false)).toBe(true);
+  });
+
   it("counts each ring's agents by health status and keeps the rings apart", async () => {
     const recent = new Date(NOW.getTime() - 1000);
     const old = new Date(NOW.getTime() - 3_600_000);
@@ -83,6 +114,26 @@ describe("loadRings (issue #83)", () => {
     expect(prod).toMatchObject({ rollout: "serving", agents: 3 });
     expect(prod?.byStatus).toEqual({ healthy: 1, degraded: 1, silent: 1, no_beacon: 0 });
     expect(rings.find((r) => r.ring === "canary_0")?.agents).toBe(1);
+  });
+
+  it("counts a host that lost telemetry recently as degraded in its ring (#83)", async () => {
+    const recent = new Date(NOW.getTime() - 1000);
+    const db = stubDb({}, [
+      { ring: "prod", lastSeen: recent, sensors: [{ name: "s", silent: false }] },
+      {
+        ring: "prod",
+        lastSeen: recent,
+        sensors: [{ name: "s", silent: false }],
+        lossObservedAt: new Date(NOW.getTime() - 60_000),
+      },
+    ]);
+    const { rings } = await loadRings(db as never, "t1", NOW);
+    expect(rings.find((r) => r.ring === "prod")?.byStatus).toEqual({
+      healthy: 1,
+      degraded: 1,
+      silent: 0,
+      no_beacon: 0,
+    });
   });
 
   it("says when the agent counts cover only one page of the fleet", async () => {

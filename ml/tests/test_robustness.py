@@ -155,58 +155,43 @@ def test_run_robustness_evaluation_missing_scenario() -> None:
         )
 
 
-class _LineageModel:
-    """A stand-in 23-feature T1 model: anomalous exactly when the parent runs from a
-    suspicious path (the last lineage feature). Deterministic, so a test can say which
+class _ContextModel:
+    """A stand-in 17-feature T1 model: anomalous exactly when the command line is longer
+    than 20 characters (the first cmdline feature). Deterministic, so a test can say which
     mutation moves the score and why."""
 
-    n_features_in_ = 23
+    n_features_in_ = 17
 
     def decision_function(self, rows):
-        return np.array([-0.5 if row[-1] == 1.0 else 0.5 for row in rows])
+        return np.array([-0.5 if row[0] > 20 else 0.5 for row in rows])
 
 
-def test_t1_runs_the_lineage_mutators_and_scores_the_lineage_fields(dummy_scenario_yaml) -> None:
-    """#617: the T1 tier used to raise NotImplementedError because the scorer saw only
-    the command line, so a lineage mutation could never move the score."""
+def test_t1_does_not_run_the_lineage_mutators(dummy_scenario_yaml) -> None:
+    """#617: the lineage is no part of the T1 vector (ADR-0034), so a lineage mutation can
+    never move the T1 score and an escape rate over it would be a flattering zero."""
     card = run_robustness_evaluation(
-        model=_LineageModel(),
+        model=_ContextModel(),
         scenario_yaml=dummy_scenario_yaml,
         tier="T1",
     )
     classes = {r.mutation_class for r in card.mutation_results}
-    assert {"fake_parent_name", "parent_path", "remove_lineage"} <= classes
-    # The model's only signal is the parent path, so mutating the path must move it:
-    # system paths score benign, which is an escape from an originally detected sample.
-    heavy_path = [
-        r
-        for r in card.mutation_results
-        if r.mutation_class == "parent_path" and r.intensity == "heavy"
-    ]
-    assert heavy_path
-    assert all(r.escaped and r.score_delta > 0 for r in heavy_path)
-    assert card.escape_rate > 0.0
+    assert classes
+    assert not classes & {"fake_parent_name", "parent_path", "remove_lineage"}
 
 
-def test_t1_lineage_removal_moves_the_score_too(dummy_scenario_yaml) -> None:
-    card = run_robustness_evaluation(
-        model=_LineageModel(),
-        scenario_yaml=dummy_scenario_yaml,
-        tier="T1",
-    )
-    removed = [
-        r
-        for r in card.mutation_results
-        if r.mutation_class == "remove_lineage" and r.intensity in ("medium", "heavy")
-    ]
-    assert removed
-    assert all(r.escaped for r in removed), "no parent path means no suspicious path"
+def test_t1_score_ignores_the_parent_fields() -> None:
+    from synthaea_ml.evaluation.robustness import _t1_features
+
+    record = {"argv": ["/bin/sh", "-c", "id"], "parent_comm": "nginx"}
+    bare = {"argv": ["/bin/sh", "-c", "id"]}
+    assert _t1_features(record) == _t1_features(bare)
+    assert len(_t1_features(record)) == 17
 
 
-def test_t1_refuses_a_model_that_cannot_see_the_lineage(dummy_model, dummy_scenario_yaml) -> None:
-    """A 9-feature T0 model scored on the T1 tier would silently ignore every lineage
-    mutation and report a flattering escape rate."""
-    with pytest.raises(ValueError, match="23 features"):
+def test_t1_refuses_a_model_of_another_width(dummy_model, dummy_scenario_yaml) -> None:
+    """A 9-feature T0 model scored on the T1 tier would silently ignore the whole
+    correlation block."""
+    with pytest.raises(ValueError, match="17 features"):
         run_robustness_evaluation(
             model=dummy_model,
             scenario_yaml=dummy_scenario_yaml,

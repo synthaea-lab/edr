@@ -48,6 +48,7 @@ from synthaea_ml.calibration import calibrate_threshold
 from synthaea_ml.data.behavior_dataset import (
     DEFAULT_WINDOW_NS,
     load_events,
+    load_records,
     records_from_events,
 )
 from synthaea_ml.data.manifest import BEHAVIOR_CAPTURE_FILENAME
@@ -57,12 +58,20 @@ from synthaea_ml.training.train_behavior import (
     FP_BUDGET_PER_ENDPOINT_DAY,
     HYPERPARAMETERS,
     MIN_SAMPLES,
-    load_matrix,
 )
 
 # The baseline is the T1 vector without its lineage block: the lineage features come last.
-BASELINE_FEATURE_COUNT = t1.FEATURE_COUNT - len(lineage.FEATURE_NAMES)
-VARIANTS = {"without_lineage": BASELINE_FEATURE_COUNT, "with_lineage": t1.FEATURE_COUNT}
+# The shipped T1 vector has no lineage (ADR-0034); this tool is what justified that, and what
+# to re-run on a better capture, so it builds its own 23-column vector: T1 plus the lineage.
+BASELINE_FEATURE_COUNT = t1.FEATURE_COUNT
+MEASURED_FEATURE_COUNT = t1.FEATURE_COUNT + len(lineage.FEATURE_NAMES)
+VARIANTS = {"without_lineage": BASELINE_FEATURE_COUNT, "with_lineage": MEASURED_FEATURE_COUNT}
+
+
+def measured_features(record: dict[str, Any]) -> list[float]:
+    """The 23-column vector this tool compares: the T1 vector, then the lineage block."""
+    return [*t1.extract_features(record), *lineage.extract_features(record)]
+
 
 TRAIN_FRACTION = 0.50
 CALIBRATION_FRACTION = 0.25  # the rest is the held-out test
@@ -144,8 +153,8 @@ def measure_gain(benign: np.ndarray, malicious: np.ndarray, seeds: int = 20) -> 
             set is empty.
     """
     for name, matrix in (("benign", benign), ("malicious", malicious)):
-        if matrix.ndim != 2 or matrix.shape[1] != t1.FEATURE_COUNT:
-            raise ValueError(f"{name} matrix must have {t1.FEATURE_COUNT} columns")
+        if matrix.ndim != 2 or matrix.shape[1] != MEASURED_FEATURE_COUNT:
+            raise ValueError(f"{name} matrix must have {MEASURED_FEATURE_COUNT} columns")
     benign, malicious = _distinct(benign), _distinct(malicious)
     if len(benign) < MIN_SAMPLES:
         raise ValueError(
@@ -262,9 +271,27 @@ def malicious_matrix(
         for r in records_from_events(load_events(capture), window_ns)
         if (r["pid"], r.get("process_generation")) in members and r["pid"] != root_pid
     ]
-    return np.array([t1.extract_features(r) for r in records], dtype=np.float32).reshape(
-        -1, t1.FEATURE_COUNT
+    return np.array([measured_features(r) for r in records], dtype=np.float32).reshape(
+        -1, MEASURED_FEATURE_COUNT
     )
+
+
+def benign_matrix(dataset_dirs: list[Path]) -> np.ndarray:
+    """The deduplicated 23-feature matrix of every benign dataset's capture.
+
+    Not the trainer's `load_matrix`, which is the shipped 17-feature vector since ADR-0034: the
+    comparison needs the lineage block on the benign side too, built by the same
+    `measured_features` as the malicious matrix. Deduplicated by feature vector, as the trainer
+    does, so a behavior seen 10 000 times adds one sample.
+    """
+    rows: dict[tuple[float, ...], None] = {}
+    total = 0
+    for directory in dataset_dirs:
+        for record in load_records(directory / BEHAVIOR_CAPTURE_FILENAME):
+            total += 1
+            rows[tuple(measured_features(record))] = None
+    print(f"Benign capture: {total} process incarnations -> {len(rows)} distinct vectors")
+    return np.array(list(rows), dtype=np.float32).reshape(-1, MEASURED_FEATURE_COUNT)
 
 
 def _report_dict(report: GainReport, notes: dict[str, Any]) -> dict[str, Any]:
@@ -282,7 +309,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    benign = load_matrix([d for d in args.benign_dataset])
+    benign = benign_matrix(list(args.benign_dataset))
     malicious = malicious_matrix(args.malicious_capture, args.root_pid, args.start_ns, args.end_ns)
     report = measure_gain(benign, malicious, seeds=args.seeds)
     notes = {

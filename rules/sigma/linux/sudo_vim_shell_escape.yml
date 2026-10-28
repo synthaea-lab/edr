@@ -1,0 +1,33 @@
+title: Sudo launches Vim with an explicit shell escape
+description: >
+  Detects sudo invoking Vim, vi or nvim with an ex command that starts a shell.
+  Interactive escapes without a command-line ex command are not visible. The
+  process event records intent, not whether
+  the editor accepted the command or the shell gained elevated access.
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.003
+  - synthaea.coverage.privesc_impact
+level: medium
+falsepositives:
+  - Authorized privilege-escalation training or administrator troubleshooting
+    that deliberately exercises a Vim shell escape.
+detection:
+  selection:
+    Image|endswith: '/sudo'
+    CommandLine|contains:
+      - ':!/bin/sh'
+      - '!/bin/sh'
+      - ':!/bin/bash'
+      - '!/bin/bash'
+      - ':shell'
+      - ':set shell=/bin/sh|shell'
+      - ':set shell=/bin/bash|shell'
+    CommandLine:
+      - '* vim *'
+      - '* vi *'
+      - '* nvim *'
+      - '*/vim *'
+      - '*/vi *'
+      - '*/nvim *'
+  condition: selection

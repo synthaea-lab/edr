@@ -272,16 +272,32 @@ needs the Decision 9 fallback at the unit level.
 - `updater` becomes the one process authorized to write `versions/` and flip
   `current` — `docs/architecture/threat-model.md`'s "only `updater` may
   change [installed artifacts]" line gets an actual mechanism behind it.
-  `agent::protected` (issue #71's protected-resource monitor) still has no
-  concept of "this write came from the legitimate updater" (that gap is
-  pre-existing, tracked on #71, unaffected by this ADR) — until it does, an
-  update in progress will trigger protected-resource alerts on its own writes;
-  acceptable for this slice, flagged for whoever wires that allowlist next.
+  `agent::protected` (issue #71's protected-resource monitor) needs no concept
+  of "this write came from the legitimate updater": `apply_release` stages
+  into a fresh `versions/<N>/` directory and only then flips `current`, so it
+  never opens the version directory the running process's own binary already
+  resolves to, nor the config/alerts/events/heartbeat paths `protected`
+  watches. An update in progress does not trigger a protected-resource alert
+  on its own writes — settled by PR #770, not left for an allowlist.
 
 - Windows and macOS binary self-update remain unimplemented after this ADR.
   `updater`'s Linux-specific pieces are `cfg(target_os = "linux")`-gated,
   matching the sensor-crate convention (empty stub elsewhere) rather than a
   cross-platform no-op API surface that would misleadingly suggest parity.
+
+- `/usr/bin/synthaea-ctl` is installed by the package (`.deb`/`.rpm`/`.apk`)
+  as its own root-owned copy of `cli`, not a symlink into `current/` — that
+  directory is owned by the unprivileged `synthaea` service user this ADR's
+  updater runs as, and a symlink there let a compromised agent repoint it and
+  get root the next time an operator ran `sudo synthaea-ctl` (#897). This
+  means the packaged CLI is pinned to the installed package version: it can
+  go stale relative to an agent `apply_release` has since self-updated past,
+  refusing to talk to it on a `PROTOCOL_VERSION` mismatch
+  (`crates/ipc/src/protocol.rs`) with a clean, disclosed error rather than
+  silently misbehaving. The fix for that is the next package upgrade, which
+  ships a matching CLI again — accepted as the cost of removing the
+  privilege-escalation path, since `PROTOCOL_VERSION` has only moved twice in
+  this project's life so far.
 
 - Canary-ring *content* distribution (rules, models) is unaffected by this
   ADR and remains fully open — #73 and #49 still need their own design for

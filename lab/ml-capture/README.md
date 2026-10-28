@@ -1,9 +1,11 @@
 # lab/ml-capture: the real capture behind the T1 retrain (#617)
 
-The T1 behavior model scores one process on its command line (9 features), its correlation
-context (8) and its parents (6). #617 asks whether the 23 features detect more than the same
-vector without the parents, at the same false-positive budget. That can only be answered from a
-**real** capture, with these constraints:
+The T1 behavior model scores one process on its command line (9 features) and its correlation
+context (8). #617 asked whether adding the parents (6 more features) detects more at the same
+false-positive budget; the measurement said no in aggregate, so the shipped vector has 17
+features and the parent is judged by rules (ADR-0034). This directory holds the capture that
+measurement came from, and what to re-run it with. It can only be answered from a **real**
+capture, with these constraints:
 
 - the benign part must **vary in its lineage**. An Isolation Forest never splits on a feature
   that is constant in training, so a benign capture whose processes all hang under one shell
@@ -11,14 +13,30 @@ vector without the parents, at the same false-positive budget. That can only be 
   (`test_a_lineage_the_benign_capture_never_varied_is_invisible_to_the_model`);
 - it must come from a real kernel with pids, process generations and parents, not WSL2 (every
   event there has `ppid=0`);
-- **the Linux sensor does not report `parent_image_path`** (first real capture, 2026-10-09: none
-  of 22,022 exec events carries it), so `parent_path_is_system` and `parent_path_is_suspicious`
-  are constant 0 on Linux and the user-installed-binary parents of `benign-workload.sh` do not
-  register as a lineage at all. What varies is `parent_comm`: a shell or not, and a web server
-  or an office name. Check the lineage patterns of the capture before reading any gain;
-- the malicious part is the repository's own lab scenarios: benign by construction, mostly
-  started from a shell. A lineage gain can only show on a scenario whose parent is odd
-  (`lineage.sh`). **Say that when reporting a number.**
+- **the lineage features must be read from the capture, not assumed.** Since #769 the Linux
+  sensor fills `parent_image_path` (93 % of exec events on the 2026-10-12 capture), so
+  `parent_path_is_system` and `parent_path_is_suspicious` vary. That capture also showed how the
+  workload's own habits decide what they mean: with every user tool run from `/tmp`, a
+  "suspicious" parent path was 4.9 % of the benign execs against 2.3 % of the malicious ones, so
+  the feature pointed the wrong way (paired AUC gain -0.077). `benign-workload.sh` now keeps its
+  user-installed tools in the user's own directory, runs one job from `/tmp`, and has
+  web-application parents (`gunicorn`, `uwsgi`, `php-fpm`, `node`, `httpd`, `nginx`) that run one
+  program and never a shell. Office-named parents do not occur on a Linux host, so
+  `parent_comm_is_office` is constant 0 in any honest benign capture: the model cannot learn it,
+  and its feature-bounds guard is what has to catch a value it never saw. Print the per-feature
+  mean and distinct-value count of the benign and the malicious vectors before reading any gain;
+- the malicious part is the repository's own lab scenarios (benign by construction, mostly
+  started from a shell) **plus `odd-parents/`**: a web application that runs a shell and
+  reconnaissance commands, an Office-named process that runs a shell, and a binary dropped into
+  `/dev/shm` or `/var/tmp` that runs children. A lineage gain can only show on scenarios whose
+  parent is odd. **Say that when reporting a number**, with how many of the malicious vectors
+  have each odd lineage. **Split them by what makes the parent odd**: each `odd-parents/*.sh`
+  declares `# Odd by: comm` or `# Odd by: path`, and `ml/tests/test_odd_parent_scenarios.py`
+  keeps it true (the comm ones run from the user's own directory, the path one uses names the
+  comm features do not know). Run the web-application and Office parents from `/var/tmp` and
+  they are odd by both, so a gain on them cannot be credited to either (the first version did
+  this, review of #787). Report the gain separately for odd-by-comm, odd-by-path, both, and
+  ordinary lineage.
 
 ## Procedure (lab VM, isolated; see the `synthaea-lab-vm` notes: snapshot, NAT NIC detached)
 
@@ -56,7 +74,8 @@ All commands run on the VM as root unless noted; the agent is built from `main`
    ```
 
    (Several benign captures can be passed to `--dataset`; give each its manifest.)
-4. **Train** the shipped model, with the T1 robustness card on the malicious capture:
+4. **Train** the shipped 17-feature model, with the T1 robustness card on the malicious capture
+   (command-line mutators only: the parent is not scored, ADR-0034):
 
    ```
    python -m synthaea_ml.training.train_behavior \
@@ -69,7 +88,7 @@ All commands run on the VM as root unless noted; the agent is built from `main`
    ```
 
    `train_behavior.py` refuses fewer than 20 distinct benign vectors: capture longer.
-5. **Measure the gain** (what #617 is for):
+5. **Re-measure the lineage** (what justified ADR-0034; re-run it before changing that decision):
 
    ```
    python -m synthaea_ml.evaluation.t1_lineage_gain \
@@ -79,7 +98,8 @@ All commands run on the VM as root unless noted; the agent is built from `main`
        --output ml/registry/behavior-iforest-linux/0.1.0/t1_lineage_gain.json
    ```
 
-   It fits the 17-feature and the 23-feature model on 20 random splits of the distinct benign
+   It builds its own 23-column vector (the T1 vector plus the lineage block) and fits the 17-feature
+   and the 23-feature model on 20 random splits of the distinct benign
    vectors (same hyperparameters, same FP budget as the trainer) and reports detection rate,
    false-positive rate on a held-out benign part and ROC AUC, with the paired per-seed gain
    and the number of splits where the lineage is not worse.

@@ -1,0 +1,56 @@
+title: Linux curl uploads a file to a cloud storage endpoint
+description: >
+  Detects curl using an upload option (`-T`, `--upload-file`, `-F`/`--form`, or a
+  `@file` body with `-d`, `--data` or `--data-binary`) with a command line that
+  names a common cloud-storage or file-sharing endpoint. It records an attempted
+  command, not transferred bytes or a successful upload. Regional Amazon S3
+  endpoints (`s3.<region>.amazonaws.com`) cannot be written as an edge wildcard
+  and are not covered here; the EGRESS-DOMAIN rule (T1567.002, over DNS and flow
+  volume) does classify them. Other providers and aliases are not covered. The
+  paste services have their own rule, `curl_upload_to_paste_service`.
+tags:
+  - attack.exfiltration
+  - attack.t1567.002
+  - synthaea.coverage.collection_exfiltration
+level: medium
+falsepositives:
+  - Developers publishing build artifacts and administrators uploading
+    approved backups to organizational cloud storage.
+  - An API client that posts a JSON file with `-d @file` or `-F` to one of these
+    hosts (a SharePoint or Graph automation, a Dropbox API script). The `@file`
+    and form shapes were added for issue 380 and widen the rule; narrow them first if it
+    is noisy.
+detection:
+  selection:
+    Image|endswith: '/curl'
+    CommandLine|contains:
+      - '--upload-file'
+      - ' -T'
+      - ' -F '
+      - '--form '
+      - ' -d @'
+      - '--data @'
+      - '--data-binary @'
+    CommandLine:
+      - '*drive.google.com*'
+      - '*storage.googleapis.com*'
+      - '*dropboxapi.com*'
+      - '*dropbox.com*'
+      - '*dropboxusercontent.com*'
+      - '*blob.core.windows.net*'
+      - '*sharepoint.com*'
+      - '*onedrive.live.com*'
+      - '*1drv.ms*'
+      - '*://box.com*'
+      - '*.box.com*'
+      - '*mega.nz*'
+      - '*wetransfer.com*'
+      - '*transfer.sh*'
+      - '*://file.io*'
+      - '*.file.io*'
+      - '*gofile.io*'
+      - '*anonfiles.com*'
+      - '*catbox.moe*'
+      - '*0x0.st*'
+      - '*s3.amazonaws.com*'
+  condition: selection

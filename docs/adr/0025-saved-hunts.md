@@ -41,7 +41,8 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    client. A hunt whose stored query no longer parses is repaired by a PATCH carrying a valid
    one. A run keeps its
    counts and the newest 100 matching detection ids; the newest 100 runs per hunt are kept.
-5. **"New match" means ingested since the hunt's previous successful run started**
+5. **"New match" means ingested since the hunt's previous successful run started** (the last run
+   that finished without an error: a run still going, or one whose server died, is not it)
    (`detection.created_at`), not "first seen on the fleet". It is a count on the run. Nothing
    is notified yet; a notification channel is a separate decision.
 6. **Scheduling is a cron route**, `GET /api/cron/run-hunts` (CRON_SECRET), called every few
@@ -49,13 +50,37 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    week). A call runs at most 20 hunts and starts no new one after 30 s, so one request stays
    within a host's request limit; what is left stays due for the next call. Which hunts are
    due is one grouped query, not one per hunt. A tenant may have 200 hunts.
-7. **A tenant may start 20 runs a minute**, manual and scheduled together (a 429 with
-   `Retry-After` beyond that), read from the run history so it needs no extra state and holds
-   across server instances. It bounds how much a user can chain expensive `text` searches.
+7. **A tenant may start 20 manual runs a minute** (a 429 with `Retry-After` beyond that), read
+   from the run history so it needs no extra state and holds across server instances. A run's
+   row is written when it starts (`finished_at` null until it ends), and the count and the insert
+   are one step under a per-tenant advisory lock, so requests sent together cannot all pass the
+   check: it bounds parallel requests as well as chained ones. It bounds how much a user can
+   start of expensive `text` searches. Scheduled runs count in that minute but are not refused;
+   the cron's own limits (20 hunts a call, none started after 30 s) bound them. A run whose
+   server died stays with `finished_at` null; it ages out of the count after a minute.
 8. **`ownerId` is attribution, not authorization.** It records who made a hunt; every session
    user of the tenant may read, edit, run and delete every hunt of the tenant, like the other
    console resources (cases, rings). A per-owner rule needs roles, which the console does not
    have yet; revisit then.
+
+9. **Ad-hoc search reads rows, with the same queries and limits.** `POST /api/hunts/search` and
+   `GET /api/hunts/[id]/matches` return one page (50 rows, newest first) of what a query matches,
+   so an analyst can look at a hunt's matches before saving it and at a saved hunt's matches now
+   (a run keeps counts and ids, not rows). Two sources, both Postgres: **detections** with a
+   `HuntQuery` exactly as a saved hunt has it, and **cases** with a `CaseQuery`
+   (`kind: "cases"`, `version: 1`: `lastHours` on the case's creation, `severities`, `statuses`,
+   `techniques` of at least one of its detections, `text` in the title or description). Same
+   rules as point 1: validated, unknown fields refused, compiled to parameterized SQL scoped to
+   the tenant, a value never interpolated. A case query is not a hunt: saved hunts, runs, new
+   matches and graduation stay on detections. A row carries ids, times, technique, severity,
+   the case title and a rule title when the detection's `meta` has one (never read from the stored event), never the event's other
+   contents (a command line is not shown). Paging is by a cursor over (time, id), validated like
+   any input, so rows that share a timestamp are neither skipped nor repeated; the count comes
+   with the first page only. A search runs under the statement timeout of point 4 (a 504), and a
+   tenant may have **2 searches in flight**, across every server instance (a 429 beyond that):
+   each takes one of two transaction-scoped advisory locks without waiting, which frees itself
+   when the transaction ends. A per-minute rate is not limited: the concurrency and the timeout
+   bound the load, as the cooldown on runs does for point 7.
 
 ## Consequences
 
@@ -68,6 +93,7 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
 - `text` is a substring scan of the event JSON inside the tenant and window: indexed by
   `(tenant_id, timestamp)` only, so a wide window with a rare string is the expensive case.
   The statement timeout is the bound, not an optimisation.
-- Not built in this slice: the console UI, notifications, graduation itself (#618), live
-  "ask this host now" queries (they ride the `response::live` channel and its gates), and the
-  event archive.
+- Not built in this slice: notifications, live "ask this host now" queries (they ride the
+  `response::live` channel and its gates), and the event archive (`server/datalake`, #77: a
+  third source and a new query version when it exists). The console pages, graduation (#618) and
+  ad-hoc search (point 9) have since been added; their decisions are in the points above.

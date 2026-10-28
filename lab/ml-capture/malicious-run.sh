@@ -25,23 +25,33 @@ set -u
 OUT="${1:?usage: $0 <out-dir>}"
 mkdir -p "$OUT"
 SCENARIO_DIR="$(cd "$(dirname "$0")/../scenarios" && pwd)"
+ODD_DIR="$(cd "$(dirname "$0")/odd-parents" && pwd)"
 GAP="${GAP:-8}"          # seconds between scenarios, so each one's window is its own
 TIMEOUT="${TIMEOUT:-120}"
 
 SCENARIOS=(beacon bind-shell dropper-chain lineage persistence-write respawn-beacon argv log-clear)
 command -v cc >/dev/null 2>&1 && SCENARIOS+=(ld-preload-hijack)
+# Scenarios whose PARENT is odd (a web application or an Office-named process running a shell,
+# a dropped binary running children): the ones a lineage feature has a chance to help on. They
+# live beside this script (`odd-parents/`), not in lab/scenarios, because they have no rule
+# sidecar: they exist for this capture.
+SCENARIOS+=(odd-parents/webapp-spawns-shell odd-parents/office-spawns-shell odd-parents/dropped-binary-spawns-children)
 
 START_NS="$(date +%s%N)"
 RAN=()
 FAILED=()
 for name in "${SCENARIOS[@]}"; do
-    script="$SCENARIO_DIR/$name.sh"
+    case "$name" in
+        odd-parents/*) script="$ODD_DIR/${name#odd-parents/}.sh" ;;
+        *) script="$SCENARIO_DIR/$name.sh" ;;
+    esac
+    log="$OUT/${name//\//-}.log"
     [ -x "$script" ] || { echo "skip $name: $script not executable" >&2; continue; }
     echo "== $name"
-    if timeout "$TIMEOUT" "$script" > "$OUT/$name.log" 2>&1; then
+    if timeout "$TIMEOUT" "$script" > "$log" 2>&1; then
         RAN+=("$name")
     else
-        echo "   exit $? (log: $OUT/$name.log)" >&2
+        echo "   exit $? (log: $log)" >&2
         FAILED+=("$name")
     fi
     sleep "$GAP"

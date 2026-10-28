@@ -49,7 +49,9 @@ downloads:
   is deleted, and the rewrite reports no `FileQuarantine`, because zones 0–2
   are dropped.
 - **A renamed stream** (Kernel-File event 27, `RenamePath`): only deletes
-  (event 26) are consumed.
+  (event 26) are consumed on the ETW path. The minifilter's rename of a
+  `:Zone.Identifier` stream is consumed like a delete (#977; the mark moved to
+  another file still strips this one, a case-only rename removes nothing).
 - **Raw-volume or driver-level stream tampering.**
 
 The minifilter (#136) supersedes this path: it sees stream deletes, renames

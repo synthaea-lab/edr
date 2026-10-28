@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getTenantId, getUserId } from "@/lib/tenant";
+import { getTenantId } from "@/lib/tenant";
+import { requireTenantAdmin } from "@/lib/admin-auth";
 import { z } from "zod";
 
 const RingAssignmentSchema = z.object({
@@ -11,6 +12,7 @@ const RingAssignmentSchema = z.object({
  * POST /api/agents/{agentId}/ring
  * Assign an agent to a canary ring (admin-only, tenant-scoped)
  *
+ * Authentication: better-auth session, `owner` or `admin` member of the tenant (#837)
  * Request body: { ring: "canary_0" | "canary_1" | "canary_2" | "prod" }
  * Response: { status: "ok", agent: Agent, previousRing: string }
  */
@@ -19,8 +21,9 @@ export async function POST(
   { params }: { params: { agentId: string } }
 ) {
   try {
-    const tenantId = await getTenantId(req);
-    const userId = await getUserId(req);
+    const authed = await requireTenantAdmin(req);
+    if ("response" in authed) return authed.response;
+    const { tenantId, userId } = authed;
     const { agentId } = params;
 
     // Parse request body

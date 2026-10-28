@@ -22,5 +22,16 @@ notes: >
   (MY-010925 without the password clause, MY-010926 with it), a user name containing a
   quote and `'@'`, all parsed. MySQL 8 writes these lines only at
   `log_error_verbosity = 3`; its default of 2 writes none, so a source left at the
-  default stays silent. Not covered: the full agent run against MySQL 8, and a client
-  with a resolved IP (source=local here: both servers log the client as `localhost`).
+  default stays silent. Run end to end with the agent on 2026-10-15 on Fedora 43 (kernel 7.2.9,
+  SELinux Enforcing, 0 AVC denials) against MySQL 8.4.10 with `log_error_verbosity = 3` and
+  `log_error = /var/log/mysql/error.log` (Fedora's own mysql-server.cnf sets another log_error:
+  load the override after it, e.g. zz-*.cnf): six failed logins raise T1110 `target=edr_lab_victim
+  source=local: 5 failed authentications in 60s`. A client logged with an IP is keyed by it: with
+  `skip_name_resolve = ON` and an account bound to 127.0.0.1, the same burst raises T1110
+  `source=127.0.0.1`. Without a matching account such a client gets ERROR 1130 (host not allowed),
+  which is not logged as an Access denied line. Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux
+  Enforcing, `ausearch -m avc,user_avc` empty over the session) with MySQL 8.0.45 the same day, agent built
+  static (musl) from main `b28935b` plus #845's diff, `log_error_verbosity = 3` and the same override
+  loaded after RHEL's own mysql-server.cnf (`/etc/my.cnf.d/zz-lab707.cnf`): six failed logins as
+  `edr_lab_victim` raise T1110 `target=edr_lab_victim source=local: 5 failed authentications in 60s`, and
+  with `skip_name_resolve` plus an account bound to 127.0.0.1, `target=edr_ip_victim source=127.0.0.1`.

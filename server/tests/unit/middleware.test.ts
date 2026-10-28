@@ -3,8 +3,10 @@ import { NextRequest } from "next/server";
 import { config, middleware } from "@/middleware";
 
 // vi.mock is hoisted above the imports, so the mock fn must be hoisted with it.
+// The middleware runs in the Edge runtime, so it must not import `@/lib/auth` (Prisma): it
+// asks `lookupSession` (#810).
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
+vi.mock("@/lib/session-lookup", () => ({ lookupSession: getSession }));
 
 /**
  * The request headers `NextResponse.next({ request: { headers } })` forwards
@@ -47,8 +49,11 @@ describe("middleware identity headers", () => {
       "/api/health",
       "/api/release/manifest",
       "/api/release/artifact",
+      "/api/release/key-rotation",
       "/api/content/manifest/canary_0",
       "/api/content/artifact",
+      "/api/snapshot/manifest",
+      "/api/snapshot/artifact",
       "/api/v1/ingest/events",
       "/api/v1/ingest/heartbeat",
       "/api/cron/detect-silent-agents",
@@ -68,7 +73,7 @@ describe("middleware identity headers", () => {
     // Only the two agent download paths are public (issue #30); `/api/release`
     // itself publishes releases and needs a session.
     getSession.mockResolvedValue(null);
-    for (const path of ["/api/release", "/api/release/manifest/extra"]) {
+    for (const path of ["/api/release", "/api/release/manifest/extra", "/api/release/key-rotation/extra"]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }
@@ -95,6 +100,21 @@ describe("middleware identity headers", () => {
       "/api/content/manifest",
       "/api/content/manifest/canary_0/extra",
     ]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toContain("/login");
+    }
+  });
+
+  it("serves the two agent snapshot paths without a session and nothing else under /api/snapshot", async () => {
+    // Regression (#76 lab run): the snapshot endpoints were not on the public list, so behind
+    // nginx an agent got a 307 to /login and no snapshot was ever delivered. The handlers were
+    // tested directly and never met the middleware.
+    getSession.mockResolvedValue(null);
+    for (const path of ["/api/snapshot/manifest", "/api/snapshot/artifact"]) {
+      const res = await middleware(spoofedRequest(path));
+      expect(res.headers.get("location"), path).toBeNull();
+    }
+    for (const path of ["/api/snapshot", "/api/snapshot/other", "/api/snapshot/manifest/extra", "/api/snapshots/manifest"]) {
       const res = await middleware(spoofedRequest(path));
       expect(res.headers.get("location"), path).toContain("/login");
     }
