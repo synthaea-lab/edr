@@ -76,16 +76,42 @@ describe("draftIocSetFromHunt", () => {
     expect(todo.join(" ")).toMatch(/3 values were left out/);
   });
 
-  it("does not draft domains, and says why", () => {
-    const { todo } = ok(
-      draftIocSetFromHunt(hunt, [det("1", exec(SHA_A)), det("2", { type: "dns_query", query: "evil.example.com" })])
+  it("drafts the queried domains, lowercased, once, after the addresses", () => {
+    const { files, todo } = ok(
+      draftIocSetFromHunt(hunt, [
+        det("1", { type: "dns_query", query: "C2.Evil.example.com." }),
+        det("2", { type: "dns_query", query: "c2.evil.example.com" }),
+        det("3", { type: "dns_query", query: "a.evil.example" }),
+        det("4", connect("203.0.113.9")),
+      ])
     );
-    expect(todo.join(" ")).toMatch(/1 DNS queries were not drafted.*public-suffix/);
+    const lines = files[0].content.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(lines).toEqual(["ip:203.0.113.9", "domain:a.evil.example", "domain:c2.evil.example.com"]);
+    expect(todo.join(" ")).toMatch(/every name beneath it/);
+  });
+
+  it("leaves out a public suffix, a name the feed builder refuses, and counts them", () => {
+    const { files, todo } = ok(
+      draftIocSetFromHunt(hunt, [
+        det("1", exec(SHA_A)),
+        det("2", { type: "dns_query", query: "co.uk" }),
+        det("3", { type: "dns_query", query: "blogspot.com" }),
+        det("4", { type: "dns_query", query: "localhost" }),
+        det("5", { type: "dns_query", query: "\u212A.example.com" }), // KELVIN SIGN
+        det("6", { type: "dns_query", query: "1.2.3.4" }),
+        det("7", { type: "dns_query" }),
+        det("8", { type: "dns_query", query: "evil.co.uk" }),
+      ])
+    );
+    const lines = files[0].content.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(lines).toEqual([`sha256:${SHA_A}`, "domain:evil.co.uk"]);
+    expect(todo.join(" ")).toMatch(/2 DNS queries were left out because the name is a public suffix/);
+    expect(todo.join(" ")).toMatch(/4 values were left out/);
   });
 
   it("refuses when no match carries an indicator, naming what was skipped", () => {
     const result = draftIocSetFromHunt(hunt, [
-      det("1", { type: "dns_query", query: "evil.example.com" }),
+      det("1", { type: "dns_query", query: "co.uk" }),
       det("2", exec(undefined)),
       det("3", connect("127.0.0.1")),
       det("4", null),
@@ -93,7 +119,7 @@ describe("draftIocSetFromHunt", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems[0]).toMatch(/SHA-256/);
-    expect(result.problems[0]).toMatch(/1 DNS queries/);
+    expect(result.problems[0]).toMatch(/1 DNS queries for a public suffix/);
     expect(result.problems[0]).toMatch(/1 loopback/);
   });
 
@@ -112,6 +138,9 @@ describe("draftIocSetFromHunt", () => {
         det("3", connect("203.0.113.9")),
         det("4", connect("2001:db8::1", "network_flow")),
         det("5", connect("127.0.0.1")),
+        det("6", { type: "dns_query", query: "C2.Evil.example." }),
+        det("7", { type: "dns_query", query: "a.evil.example" }),
+        det("8", { type: "dns_query", query: "co.uk" }),
       ])
     );
     expect(files[0].content).toBe(golden);
