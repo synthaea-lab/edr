@@ -32,6 +32,19 @@ export function lostRecently(lossObservedAt: Date | null | undefined, now: Date)
   return !!lossObservedAt && now.getTime() - lossObservedAt.getTime() < LOSS_WINDOW_MS;
 }
 
+/**
+ * The on-device IOC engine (#60) as one line for the console. `indicators` is a gauge, `0` while no
+ * feed is loaded and for an agent that predates the counters, so the two read alike ("no feed"):
+ * what the server can tell is a host with no feed from one with a feed and no match. `findings` and
+ * `cooledDown` are cumulative since the agent started; a repeat of an indicator inside the cooldown
+ * is counted in `cooledDown` and raised no second finding.
+ */
+export function iocFeedSummary(ioc: { iocIndicators: number; iocFindings: number; iocCooledDown: number }): string {
+  if (ioc.iocIndicators === 0) return "no feed";
+  const base = `${ioc.iocIndicators} indicators, ${ioc.iocFindings} findings`;
+  return ioc.iocCooledDown > 0 ? `${base}, ${ioc.iocCooledDown} repeats held back` : base;
+}
+
 /** What `agent_health` holds about an agent's last beacon, as far as loss detection reads it. */
 export type StoredLoss = {
   beaconAt: Date;
