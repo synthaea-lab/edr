@@ -64,8 +64,9 @@ written in the line format above; an optional `VERSION` file (first line) names 
 came from, `unversioned` without one. Feed ids follow the sorted file names, so two agents with
 the same files agree on which feed wins an overlap. Names and versions are trimmed, stripped of
 control characters and cut at 64 characters, because they travel in every detection.
-**Nothing delivers these files yet:** signed delivery through the content manifest waits on the
-production signing keys (#753), so today a feed is a file somebody put there.
+Delivery is a signed content release carrying `ioc/<feed>.txt` entries of type `ioc` (ADR-0038,
+"Delivery"); the agent needs nothing new for it. **Nothing builds and publishes such a release yet**, and
+signing it in production waits on the production keys (#753), so today a feed is a file somebody put there.
 
 Loaded at startup and on `reload_content` (IPC `ReloadContent`): a present directory replaces the
 set, an absent one unloads it, an unreadable or over-budget one keeps the previous set (logged).
@@ -148,6 +149,12 @@ normalisation, device rules and public-suffix gate, and gives the same bytes (an
 - A quote in the middle of an unquoted field is kept as text (lenient on input; the output is always
   normalised).
 
-Not built: the other sources (STIX/TAXII, MISP), expiry, per-tenant enablement, publishing the file
-through the content manifest (`ContentType` has no `ioc` yet, and delivery waits on #753), and wiring a
-source and `isPublicSuffix` into a publishing path (nothing calls `buildFeed` or `buildFeedFromCsv` yet).
+### Publishing (`ioc` content type)
+
+A feed is published as an `ioc` entry of a content release (`ContentType` has `ioc`): the file as
+`ioc/<feed>.txt` and, optionally, `ioc/VERSION`. At publish (`POST /api/content/release`) the server refuses
+the release when the type and the path disagree or a feed has a line the device would skip. See ADR-0038,
+"Delivery", for why the pairing is checked on the server.
+
+Not built: the other sources (STIX/TAXII, MISP), expiry, per-tenant enablement, a step that turns a source
+into a release (nothing calls `buildFeed` outside this check yet), and production signing (#753).

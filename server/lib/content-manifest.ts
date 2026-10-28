@@ -18,6 +18,7 @@ export const ContentType = z.enum([
   "rule",   // Sigma YAML detection rule
   "model",  // ML model (pickle + model_record.json)
   "policy", // JSON policy configuration
+  "ioc",    // On-device IOC feed (#60, ADR-0038): `ioc/<feed>.txt` or `ioc/VERSION`
 ]);
 
 export type ContentType = z.infer<typeof ContentType>;
