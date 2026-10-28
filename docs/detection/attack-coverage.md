@@ -55,6 +55,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1055 | 6 | `correlator:crates/correlator/src/rules.rs` |
 | T1070.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1070.002 | 3 | `rules:crates/rules/src/stateless.rs` |
+| T1070.006 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1127 | 3 | `rules:crates/rules/src/state.rs` |
 | T1197 | 3 | `rules:crates/rules/src/state.rs` |
 | T1218 | 3 | `rules:crates/rules/src/state.rs` |
