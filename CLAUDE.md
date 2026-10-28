@@ -35,9 +35,10 @@ New crate? Add it to the rules in `tools/check-deps.py` in the same change.
   permission and descriptor helpers in `crates/response/src/quarantine.rs`**. Sensors and updater compile to empty
   stubs elsewhere. `updater`'s exception is scoped narrowly: ADR-0015 is a
   Linux-first slice (the `bootstrap`/`current`/`versions` layout and its atomic
-  symlink swap are POSIX-shaped by nature); ADR-0039 is the Windows slice this
-  led to (its own layout, DACL and SCM-recovery mechanics — not shared with
-  Linux's trait or module). macOS self-update still needs its own design
+  symlink swap are POSIX-shaped by nature); ADR-0039 (proposed) is the
+  Windows slice this led to (its own layout, DACL and SCM-recovery mechanics
+  — not shared with Linux's trait or module); its code lands once the ADR is
+  accepted, not before. macOS self-update still needs its own design
   before it gets a stub worth writing (ADR-0015 Deferred) — this
   is not a general invitation for leaf crates to grow platform branches. The
   quarantine exception is limited to mode/ACL enforcement and to opening and moving the

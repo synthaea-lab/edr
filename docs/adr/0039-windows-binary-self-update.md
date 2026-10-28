@@ -53,9 +53,8 @@ What Windows actually has today, from `packaging/windows/` and `watchdog/src/ser
   (`watchdog/src/service/windows.rs:347`'s `--alerts` default resolving to
   `C:\ProgramData\Synthaea\alerts.ndjson`); in a real install, the MSI passes
   `--alerts "[INSTALLFOLDER]alerts.ndjson"` (`Product.wxs:92`), so today's
-  actual alerts file lives in `Program Files\Synthaea`, not `ProgramData`
-  (reviewed finding on an earlier draft, which cited the test fixture as if
-  it described production behavior). `Program Files\Synthaea` stays the
+  actual alerts file lives in `Program Files\Synthaea`, not `ProgramData`.
+  `Program Files\Synthaea` stays the
   right place for the install itself regardless — admin-write-protected by
   default ACLs, the same "package-owned, never touched by the updater"
   property Linux's `bootstrap/` has by virtue of package ownership
@@ -73,9 +72,8 @@ What Windows actually has today, from `packaging/windows/` and `watchdog/src/ser
   MOVEFILE_REPLACE_EXISTING)` fails with `ACCESS_DENIED` when the destination
   is an existing directory, reparse point or not — confirmed against Wine's
   own test suite and Git for Windows's `mingw_rename`, which special-cases
-  exactly this error (reviewed finding on an earlier draft of this ADR, which
-  had claimed the single-rename form works; Decision 4 below has the actual
-  two-step mechanism this requires). What *is* still true and still
+  exactly this error; Decision 4 below has the actual two-step mechanism
+  this requires. What *is* still true and still
   load-bearing: a running process keeps its own image mapped by handle, not
   by path — Windows allows renaming (not overwriting) a file a process has
   open from it, so the old target's `watchdog.exe` stays safely runnable
@@ -106,9 +104,9 @@ without change. It does not revisit any Linux decision.
    explicitly **not** part of this binary pair, and this ADR does not cover
    updating it — a kernel driver's own signing/install path (WHQL, a
    reboot-capable INF-based install) is a different, heavier mechanism than
-   swapping two usermode EXEs, and designing it is out of scope here
-   (reviewed finding on this ADR; see Deferred for the consequence of leaving
-   this gap open). macOS binary self-update remains unimplemented and
+   swapping two usermode EXEs, and designing it is out of scope here; see
+   Deferred for the consequence of leaving this gap open. macOS binary
+   self-update remains unimplemented and
    undesigned (ADR-0015 Deferred still applies there). Content distribution is out
    of scope here exactly as it was in ADR-0015.
 
@@ -117,17 +115,46 @@ without change. It does not revisit any Linux decision.
    `entries: BTreeMap<PathBuf, String>`, Ed25519 signature via `ring`) that
    ADR-0015 Decision 2 defined. One difference: normalization happens once, at
    **build time**, in `release-tool` — never at verify time, and never
-   per-platform. `release-tool` rejects a candidate entry outright (refuses to
-   build the manifest, not a warning) if its path contains a `..` segment, a
-   backslash (a legal filename character on Linux, so rewriting it to forward
-   slash on read could make two different signed-over paths collide or resolve
-   differently from what was actually signed — reviewed finding on this ADR),
-   a colon anywhere but a Windows drive letter's second character (an
-   alternate-data-stream name), a `\\?\`-prefixed or UNC form, or a component
-   that is (case-insensitively, with or without an extension) one of the
-   Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
-   `LPT1`-`LPT9`). What survives is stored as a forward-slash string, exactly
-   as ADR-0015 Decision 2 already did.
+   per-platform. A manifest key is always relative (ADR-0015 Decision 2), so
+   `release-tool` rejects a candidate entry outright (refuses to build the
+   manifest, not a warning) if its path contains a `..` segment, a backslash
+   (a legal filename character on Linux, so rewriting it to forward slash on
+   read could make two different signed-over paths collide or resolve
+   differently from what was actually signed), **any colon at all** — not
+   only an alternate-data-stream name but a drive letter too, since a
+   relative key has no legitimate reason to carry one: an earlier version of
+   this rule exempted a colon at a drive letter's second character, which let
+   `C:evil.dll` straight through — `versions\vN\` joined with it is a
+   drive-relative path that lands outside the staged directory entirely.
+   That exemption is removed; any entry starting with a drive letter or a
+   backslash (an absolute or rooted path) is rejected the same way, alongside
+   a `\\?\`-prefixed or UNC form, or a component that is (case-insensitively,
+   with or without an extension) one of the Windows reserved device names
+   (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) or ends in a
+   trailing dot or space (both are silently stripped by Windows's own path
+   normalization, so `agent.exe.` and `agent.exe` name the same file on NTFS
+   even though they differ as manifest keys). `release-tool` also rejects the
+   whole manifest if any two entries collide case-insensitively (`Agent.exe`
+   and `agent.exe`): the manifest is signed once on a case-sensitive build
+   host, but Windows's `Layout` looks entries up case-insensitively (NTFS's
+   own default collation) — the two verify as distinct entries on Linux and
+   collapse onto one file on NTFS, so the hash actually checked may not be
+   the hash of the file actually executed. What survives is stored as a
+   forward-slash string, exactly as ADR-0015 Decision 2 already did.
+   **8.3 short names are a related, narrower residual risk the checks above
+   do not close**: two long names that differ (`Agent-v2.exe`,
+   `Agent-v3.exe`) can still generate the same legacy 8.3 short name
+   (`AGENT~1.EXE`) if short-name generation is enabled on the volume, and
+   either one could then be opened through the other's short name. Closing
+   this at the manifest level would mean reimplementing Windows's 8.3
+   generation algorithm in `release-tool` just to reject collisions against
+   it; cheaper and more certain is for `cmd_install` to disable short-name
+   generation on `%ProgramData%\Synthaea\versions\` itself (`fsutil
+   8dot3name set <path> 1`, supported per-directory since Windows
+   8/Server 2012) before `apply-release` ever stages a file under it, as a
+   hard install failure if it cannot be disabled — the same "hard-fail, do
+   not silently proceed" posture Decision 3's squatting defense already
+   takes.
    This check has a real, already-shipped bug to fix before it means
    anything: `release-tool/src/manifest_dir.rs`'s `walk()` joins each
    directory entry into a relative path (`relative.join(name)`) and then
@@ -137,15 +164,11 @@ without change. It does not revisit any Linux decision.
    backslash rule above can never fire: a literal backslash inside one
    filename (legal on Linux) is silently turned into an extra path
    separator, manufacturing a signed-over entry that never existed on disk,
-   exactly the collision this rule exists to prevent (reviewed finding on
-   this ADR). The fix is to validate each `name` from `read_dir` on its own,
-   as a single untouched component, before it is joined or slash-normalized
-   at all — not to validate the final string, which by construction can no
-   longer contain the thing being rejected. On read, Windows's `Layout` looks entries
-   up case-insensitively (NTFS's own default collation); Linux's keeps the
-   existing case-sensitive lookup — both compare against the one canonical set
-   of strings the manifest actually carries, so there is nothing left to
-   normalize per platform at verify time.
+   exactly the collision this rule exists to prevent. The fix is to validate
+   each `name` from `read_dir` on its own, as a single untouched component,
+   before it is joined or slash-normalized at all — not to validate the
+   final string, which by construction can no longer contain the thing being
+   rejected.
 
 3. **Layout**: `updater::layout` grows a Windows-native sibling, not a
    `cfg`-abstracted trait with two bodies — the two platforms' primitives
@@ -177,7 +200,7 @@ without change. It does not revisit any Linux decision.
      (Context) is explicit that no DACL-based equivalent of that check exists
      yet — this is it. Failing to apply the DACL is a hard install/startup
      failure, not a logged warning.
-     **Squatting defense (reviewed finding on this ADR):** a non-admin can
+     **Squatting defense:** a non-admin can
      pre-create `%ProgramData%\Synthaea\` before the MSI ever runs —
      ordinary `BUILTIN\Users` rights on `%ProgramData%` allow it — and an
      owner keeps `WRITE_DAC` over what they created, so merely *setting* a
@@ -227,7 +250,7 @@ without change. It does not revisit any Linux decision.
       architecture — is rejected the same way a bad signature is (Decision 5's
       `Failed` outcome, `versions\vN\` left on disk for inspection, nothing
       live touched). This is the actual fix for "a broken release reaches
-      `binPath`" (reviewed finding on Decision 6): it is cheaper and more
+      `binPath`": it is cheaper and more
       certain to never promote an unlaunchable binary than to depend on
       exactly how the SCM's failure actions treat a launch failure versus a
       post-launch crash, which (Decision 6) is not fully settled.
@@ -241,26 +264,25 @@ without change. It does not revisit any Linux decision.
       `Failed` outcome, surfaced, never a logged warning): `current` has not
       moved yet (step 3), so the service is still consistently on the old
       version on both counts — never the "`current` says vN, `binPath` says
-      old" lie this ordering exists to prevent. This reverses the step order
-      an earlier draft of this ADR had (`current` flipped first); flipping
-      `current` before `sc config` could succeed leaves exactly that lie live
-      if `sc config` is then denied or power is lost before it runs.
+      old" lie this ordering exists to prevent: flipping `current` before
+      `sc config` succeeds would leave exactly that lie live if `sc config`
+      is then denied or power is lost before it runs, so `sc config` must
+      run first.
    3. **ACL reset/reharden is unconditional**, not best-effort, and brackets
       both step 2 and step 5 below in one continuous window — not two
       separate brackets: `reset_service_acl_best_effort()` runs once, before
       step 2; `harden_service_acl()` runs once, after step 5, via a small
       RAII guard (or equivalent) that calls it on drop regardless of how
       steps 2-5 returned, so an early `?` anywhere in between can never
-      leave the service on the permissive SDDL (reviewed finding:
-      `cmd_install`'s existing bracket has exactly this gap today and needs
-      the same fix, not just this ADR's new call site). Extending the
+      leave the service on the permissive SDDL — `cmd_install`'s existing
+      bracket has exactly this gap today and needs the same fix, not just
+      this ADR's new call site. Extending the
       bracket over the restart (step 5) is itself required, not cosmetic —
       see step 5's own note below.
       Rehardening's own failure is itself a hard failure, logged and
       surfaced, never swallowed — losing the #71 self-protection ACL
       silently is worse than a failed promotion. **This is a real behavior
-      change, not just a relocation** (reviewed finding on an earlier draft,
-      which claimed otherwise): `harden_service_acl()` as it exists today
+      change, not just a relocation**: `harden_service_acl()` as it exists today
       (`watchdog/src/service/windows.rs:163`) only logs a warning and
       continues on failure; every call site, including `cmd_install`'s
       existing two, now hard-fails instead. That is the intended fix, not an
@@ -269,8 +291,8 @@ without change. It does not revisit any Linux decision.
       Both ACL functions move from `watchdog/src/service/windows.rs` into
       `updater`'s own Windows layout module: `updater` is a leaf crate
       (`tools/check-deps.py`'s LEAF tier, base-tier dependencies only), so it
-      cannot depend on `watchdog` (a *binary*, Context) for them — the
-      dependency the earlier draft waved at would be backwards. `watchdog`
+      cannot depend on `watchdog` (a *binary*, Context) for them — that
+      dependency direction would be backwards. `watchdog`
       (free to depend on anything, being a binary) calls them from `updater`
       instead of owning them; `cmd_install` changes its two call sites
       accordingly. One more required change comes with the move: `run_sc`
@@ -289,44 +311,53 @@ without change. It does not revisit any Linux decision.
       single atomic `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` rename
       ADR-0015 Decision 5 relies on for Linux: that call fails with
       `ACCESS_DENIED` when the destination is an existing directory, reparse
-      point or not (reviewed finding on this ADR) — a plain file-over-file
-      rename it is not. The gap between the two calls is real but small and
+      point or not — a plain file-over-file rename it is not. The gap between the two calls is real but small and
       already accounted for: Decision 3 has `current`'s readers fall back to
       `binPath` when it is absent, precisely for this window; `binPath` itself
       (step 2) already points at vN before this step runs, so nothing is
       misreported in between, only momentarily unavailable from `current`.
    5. **Restarts the service with `sc stop` then `sc start`, explicitly —
-      not `ControlService` plus the existing `sc failure` auto-restart**
-      (reviewed finding on an earlier draft, which left this unpinned and
-      offered both as equivalent). They are not: a deliberate stop is not a
-      service *failure*, so `sc failure`'s configured actions — the restart
-      ladder Decision 6 relies on — never fire for it; relying on that path
-      here would leave the service simply stopped. The other reason this
-      step must run inside step 3's ACL bracket rather than after it: the
-      hardened SDDL (`watchdog/src/service/windows.rs:150`) grants `BA`
-      (built-in Administrators) `RP` (`SERVICE_START`) but not `WP`
-      (`SERVICE_STOP`), so an `apply-release` invoked by an administrator
-      (Decision 4's own "operator/timer/scheduler-invoked", Context) cannot
-      `sc stop` a hardened service at all — only `SY` can. Running the stop
-      inside the permissive window step 3 already opens for `sc config`
-      costs nothing extra (the bracket is already there) and is the only
-      way this step works for a non-SYSTEM caller. The currently-running
-      old-version watchdog process keeps running from its own open file
-      handle until this restart actually happens (Context), so there is no
-      window where the service is simultaneously "promoted" and "running
-      neither version."
+      not `ControlService` plus the existing `sc failure` auto-restart.**
+      They are not equivalent: a deliberate stop is not a service *failure*,
+      so `sc failure`'s configured actions — the restart ladder Decision 6
+      relies on — never fire for it; relying on that path here would leave
+      the service simply stopped. The other reason this step must run
+      inside step 3's ACL bracket rather than after it: the hardened SDDL
+      (`watchdog/src/service/windows.rs:150`) grants `BA` (built-in
+      Administrators) `RP` (`SERVICE_START`) but not `WP` (`SERVICE_STOP`),
+      so an `apply-release` invoked by an administrator (Decision 4's own
+      "operator/timer/scheduler-invoked", Context) cannot `sc stop` a
+      hardened service at all — only `SY` can. Running the stop inside the
+      permissive window step 3 already opens for `sc config` costs nothing
+      extra (the bracket is already there) and is the only way this step
+      works for a non-SYSTEM caller. The currently-running old-version
+      watchdog process keeps running from its own open file handle until
+      this restart actually happens (Context), so there is no window where
+      the service is simultaneously "promoted" and "running neither
+      version."
+      **The SCM reads the exit code from `SetServiceStatus`, not the
+      process's own exit code** — `dwWin32ExitCode` (or
+      `dwServiceSpecificExitCode` with `dwWin32ExitCode` set to
+      `ERROR_SERVICE_SPECIFIC_ERROR`), reported when the service transitions
+      to `SERVICE_STOPPED` on handling `SERVICE_CONTROL_STOP`. This matters
+      here because `cmd_install` sets `failureflag= 1` (Decision 6), which
+      makes the SCM queue a failure action for *any* stop reported with a
+      non-zero code, deliberate or not: the watchdog's own
+      `SERVICE_CONTROL_STOP` handler must report `ERROR_SUCCESS` for this
+      explicit `sc stop`, or the restart ladder's `run`/`restart` action
+      fires and races the `sc start` this step issues next. A failed
+      rollback (Decision 5) is the opposite case and must report non-zero on
+      purpose — the two paths share the mechanism and must not share the
+      exit code.
 
-   **MSI upgrade and uninstall (revised — reviewed finding on an earlier
-   draft, which got this wrong on two counts):** the earlier framing — "leave
-   `%ProgramData%\Synthaea\` in place on uninstall, the same posture as the
-   RPM fix on #861" — does not hold on Windows. `Product.wxs`'s own custom
-   action runs `rd /s /q` on the install folder specifically because, on
-   this platform, "uninstall must be clean and complete" (the comment
-   directly above it); carrying over the *RPM* posture while contradicting
-   the *Windows installer's own stated one* is not reusing an existing
-   convention, it is picking a different, unstated one. Nor is it true that
-   nothing reads leftover state: `Layout::rollback_target` and `recover`
-   (Decision 5/6) read `versions\` and `.healthy` directly, and the
+   **MSI upgrade and uninstall:** `Product.wxs`'s own custom action runs `rd
+   /s /q` on the install folder because, on this platform, "uninstall must
+   be clean and complete" (the comment directly above it) — a stricter
+   posture than the RPM precedent on #861, which this ADR does not carry
+   over to Windows. `%ProgramData%\Synthaea\` is untouched by that action,
+   so a plain uninstall leaves it behind; left alone across a reinstall,
+   that stale state is not inert, because `Layout::rollback_target` and
+   `recover` (Decision 5/6) read `versions\` and `.healthy` directly, and the
    self-integrity monitor (`agent/src/integrity.rs:51`) reads `current` — so
    an operator who uninstalls a bad release's MSI and reinstalls an older
    one to escape it would hit a `recover`/health-check path that still sees
@@ -363,12 +394,14 @@ without change. It does not revisit any Linux decision.
    `banned_versions.json` shape and location convention
    (`%ProgramData%\Synthaea\banned_versions.json`), flips `current` back
    (Decision 4's `RemoveDirectoryW`-then-`MoveFileExW` pair, same as a
-   promotion), and exits non-zero so `sc failure`'s configured restart action
-   relaunches from the rolled-back `binPath` — this depends on `cmd_install`
-   also calling `sc failureflag SynthaEDR 1` (Decision 6): by default the SCM
-   ignores a clean non-zero exit entirely and only queues failure actions for
-   a crash, so without that flag this rollback would leave the service simply
-   stopped, not relaunched. On success, the watchdog writes `.healthy` and
+   promotion), and reports `SERVICE_STOPPED` with a non-zero
+   `dwWin32ExitCode` via `SetServiceStatus` (Decision 4 step 5's exit-code
+   note) so `sc failure`'s configured restart action relaunches from the
+   rolled-back `binPath` — this depends on `cmd_install` also calling `sc
+   failureflag SynthaEDR 1` (Decision 6): by default the SCM ignores a clean
+   stop reported with a non-zero code entirely and only queues failure
+   actions for a crash, so without that flag this rollback would leave the
+   service simply stopped, not relaunched. On success, the watchdog writes `.healthy` and
    prunes releases older than the rollback target, same as Linux (ADR-0015
    Decision 8/amendment) — except a prune that hits a sharing violation
    (`ERROR_SHARING_VIOLATION`, e.g. a lingering handle from a process that
@@ -391,8 +424,7 @@ without change. It does not revisit any Linux decision.
    `sc failure dfs reset= 60 command= c:\path\restart_dfs.exe actions=
    run/5000` is Microsoft's own example pairing). Three corrections to
    `cmd_install`'s existing `sc failure`/`sc failureflag` setup are needed for
-   this to actually work (all three are reviewed findings on this ADR, not
-   implementation polish — explained below):
+   this to actually work, not implementation polish:
 
    - **`reset=` must be a real window, not `0`.** `cmd_install` (Context)
      today calls `sc failure` with `reset= 0 actions=
@@ -441,42 +473,54 @@ without change. It does not revisit any Linux decision.
      crash after `.healthy` is set, say, from file corruption on disk after
      promotion) and the launch-failure case stays covered solely by the
      pre-flight check's prevention, not by this decision's recovery.
-   `recover`'s job is `Layout::rollback_target`'s existing logic
-   (Decision 5), **applied against the version that is actually failing, not
-   just "the newest healthy one"** (reviewed finding on an earlier draft,
-   which had `recover` pick the newest `.healthy`-and-not-banned version
-   with no reference point: if the *currently* running version, already
-   marked `.healthy` from an earlier successful promotion, is the one now
-   crashing — corrupted on disk after the fact, say — that is still "the
-   newest healthy one," so the earlier design re-selects exactly the broken
-   version on every restart and crash-loops forever instead of recovering).
-   `recover` instead: reads the service's current `binPath` (`sc qc`) to
-   identify which `versions\vN` (or `Program Files\Synthaea`, meaning no
-   staged version) is the one that just failed to come up; **bans that
-   version** in `banned_versions.json` (this also resolves the "still open"
-   question below — a start failure bans the same way a health-check
-   failure already does in Decision 5, for the same reason: without it, a
-   reboot re-promotes the identical broken release and the crash-loop just
-   restarts itself one `sc failure` cycle later); then calls
+   `recover`'s job is `Layout::rollback_target`'s existing logic (Decision
+   5), applied against the version that is actually failing, not just "the
+   newest healthy one": picking the newest `.healthy`-and-not-banned version
+   with no reference point would, if the *currently* running version —
+   already marked `.healthy` from an earlier successful promotion — is the
+   one now crashing (corrupted on disk after the fact, say), still call that
+   "the newest healthy one" and re-select exactly the broken version on
+   every restart, crash-looping forever instead of recovering. `recover`
+   instead: reads the service's current `binPath` (`sc qc`) to identify
+   which `versions\vN` (or `Program Files\Synthaea`, meaning no staged
+   version) is the one that just failed to come up; **bans that version**
+   in `banned_versions.json` if it is a staged version (this also resolves
+   the "still open" question below — a start failure bans the same way a
+   health-check failure already does in Decision 5, for the same reason:
+   without it, a reboot re-promotes the identical broken release and the
+   crash-loop just restarts itself one `sc failure` cycle later); then calls
    `rollback_target` with that failing version's number, getting back a
    strictly older `versions\vN` with `.healthy` set and not banned, or
    `Program Files\Synthaea` if none qualifies; rewrites `binPath` to that
    target (the same `sc config`-bracketed-by-ACL pair as a promotion); and
-   starts the service. This has no manifest/health-check context available
-   by construction (this path exists because the health-check watchdog
-   process itself may never get far enough to run), but reading `binPath`
-   directly needs none.
+   starts the service.
+   **When `binPath` already points at `Program Files\Synthaea` itself** —
+   the install-directory copy is the one crashing, from antivirus
+   quarantine or on-disk corruption, say — there is no older target:
+   `rollback_target` has nothing to return, and banning the install
+   directory would ban the one thing Decision 3's "package-owned, never
+   touched by the updater" posture depends on staying unbanned. `recover`
+   does not ban it and does not loop looking for an alternative; it logs
+   this at error level as a terminal, updater-cannot-help-further condition
+   and starts `Program Files\Synthaea\watchdog.exe` again as-is — the best
+   available action, since that binary is still the one the MSI installed
+   and verified, and the actual fix (repairing or reinstalling the MSI) is
+   an operator action outside this mechanism's scope. This has no
+   manifest/health-check context available by construction (this path
+   exists because the health-check watchdog process itself may never get
+   far enough to run), but reading `binPath` directly needs none.
    **Still open**: the exact `command=` string quoting/escaping for a path
-   containing spaces (`Program Files`) through `sc`'s own `/`-delimited
-   `actions=` parsing is an implementation question for whoever builds this
-   slice, not answered by this ADR. A transient failure unrelated to the
-   release itself (disk-full at exec time, say) would still get banned by
-   this logic — the same false-positive exposure Decision 5's health-check
-   ban already accepts, not a new risk this introduces. All three corrections above
-   (`reset=`, `failureflag`, the `run` slot) are changes to `cmd_install`'s
-   existing `sc failure`/`sc failureflag` setup, run once at install time
-   inside the reset-then-reharden bracket that is already there (not a new
-   one) — none of this is part of `apply-release`'s per-promotion steps.
+   containing spaces (`Program Files` always has one) through `sc`'s own
+   `/`-delimited `actions=` parsing is an implementation question for
+   whoever builds this slice, not answered by this ADR. A transient failure
+   unrelated to the release itself (disk-full at exec time, say) would
+   still get banned by this logic — the same false-positive exposure
+   Decision 5's health-check ban already accepts, not a new risk this
+   introduces. All three corrections above (`reset=`, `failureflag`, the
+   `run` slot) are changes to `cmd_install`'s existing `sc
+   failure`/`sc failureflag` setup, run once at install time inside the
+   reset-then-reharden bracket that is already there (not a new one) —
+   none of this is part of `apply-release`'s per-promotion steps.
 
 ## Consequences
 
@@ -485,11 +529,11 @@ without change. It does not revisit any Linux decision.
   refactor of the existing Linux path.
 - **This ADR widens `CLAUDE.md`'s `updater` platform-code exception**, which
   today scopes the crate's `#[cfg(target_os = ...)]` code to ADR-0015's
-  Linux-first slice and says Windows "need[s] its own design" first
-  (reviewed finding on this ADR — the exception's own text names this ADR's
-  job and should say so once it exists, rather than leaving a future reader
-  to wonder whether the Windows module it names is actually sanctioned).
-  This PR amends that paragraph; the scope stays narrow — this ADR's own
+  Linux-first slice and says Windows "need[s] its own design" first — the
+  exception's own text should name this ADR's job once it exists, rather
+  than leaving a future reader to wonder whether the Windows module it names
+  is actually sanctioned. This PR amends that paragraph; the scope stays
+  narrow — this ADR's own
   layout/promotion logic, not a general invitation for `updater` to grow
   unrelated platform branches.
 - `agent/src/integrity.rs` (issue #71) can finally gain a Windows call site once
@@ -529,13 +573,10 @@ without change. It does not revisit any Linux decision.
 ## Deferred
 
 - **The `command=` path-quoting detail** (Decision 6) — the trigger
-  mechanism itself (`sc failure`'s `run` action, with a corrected
-  `reset=`/`failureflag` and a `command=` pinned to the `Program Files`
-  copy) is identified, and `recover`'s own logic — read the failing version
-  from `binPath`, ban it, roll back to a strictly older healthy one — is
-  decided (Decision 6); only the exact `command=` string quoting/escaping
-  for a path containing spaces through `sc`'s `/`-delimited `actions=`
-  parsing is left as an implementation detail.
+  mechanism and `recover`'s own logic are both decided there; only the
+  exact `command=` string quoting/escaping for a path containing spaces
+  through `sc`'s `/`-delimited `actions=` parsing is left as an
+  implementation detail.
 - **Whether the SCM's configured failure actions fire for a launch failure
   (`CreateProcess` erroring) the same way they fire for a post-launch crash**
   (Decision 6) — genuinely unresolved by documentation, needs an empirical
