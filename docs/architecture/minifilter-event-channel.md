@@ -1,28 +1,20 @@
 # Minifilter event channel (milestone 2c, #136)
 
-Status: **being implemented**. The user-mode side is in place (the receive loop, the
-decoder, the event mapping and the agent wiring); the kernel side is its own PR (#857),
-reviewed against this document. **Landing order: #857 first, then #853.** The driver and the
-client must agree on the protocol version (3), and #857 carries the client's version
-constant, so each step on `main` is consistent: #857 alone is a v3 driver with a v3 connect
-client that does not read its events yet (the queue fills and the loss is counted); #853
-then adds the receiver. #853 alone would be a v3 client against the v1 driver on `main`,
-which refuses it at connect. Design of the first milestone where `SynthaeaFilter`
-sends events to the agent. Builds on #508 (skeleton), #750 (port, agent-only) and #765
-(user-mode client). The binding rules are
+Status: **implemented through protocol v5**. The channel carries deletes, renames, successful explicit
+`FileBasicInformation` timestamp requests, and successful opens of mounted logical volumes. The driver and user-mode client
+must be updated together; they reject a protocol-version mismatch. Builds on #508, #750 and
+#765. The binding rules are
 [ADR-0012](../adr/0012-windows-driver-framework-language-choice.md)'s
 guardrails; this document says how 2c meets each one.
 
 ## Scope
 
-**In:** file **deletes** and **renames**, the two events ETW doesn't give us
-(audit F-6) and the earliest ransomware signal (#82: mass rename/delete
-bursts). They map onto the existing `Event::FileDelete` / `Event::FileRename`
-(#262), so **no schema change**: Windows starts filling variants Linux and
-macOS already emit, and the cross-platform rules apply unchanged.
+**In:** deletes, renames, explicit timestamp-change requests (`FileSetTime`), and mounted volume
+opens (`RawVolumeOpen`). Raw-volume events describe the requested access mask, not granted rights
+or subsequent I/O; T1006 severity is Low for read/maximum-allowed and Medium for write-capable requests.
 
-**Out, later milestones of #136:** ADS, timestomping (`SetInformation` on
-`FileBasicInformation`), raw-volume access, named pipes. Also out: any
+**Out, later milestones of #136:** ADS and named pipes. Also out: physical disk opens such as
+`\\.\PhysicalDrive0` (which bypass the filesystem), and any
 filtering or detection in the kernel (guardrail 1).
 
 ## Kernel side
@@ -34,6 +26,8 @@ filtering or detection in the kernel (guardrail 1).
 | Delete via `FileDispositionInformation(Ex)` with `DeleteFile`/`FILE_DISPOSITION_DELETE` | `IRP_MJ_SET_INFORMATION` pre + post | post-op, success status other than `STATUS_REPARSE` |
 | Delete via `FILE_DELETE_ON_CLOSE` at open | `IRP_MJ_CREATE` pre + post | post-op, success status other than `STATUS_REPARSE` (a reparsed create is re-issued on the resolved path and reported once, there) |
 | Rename via `FileRenameInformation(Ex)` and the `...BypassAccessCheck` classes (kernel callers such as the SMB server) | `IRP_MJ_SET_INFORMATION` pre + post | post-op, success status other than `STATUS_REPARSE` |
+| Explicit timestamp set via `FileBasicInformation` | `IRP_MJ_SET_INFORMATION` pre + post | post-op success; zero fields are unchanged and `-1`/`-2` are automatic-update sentinels |
+| Mounted logical-volume open (`FO_VOLUME_OPEN`) | `IRP_MJ_CREATE` pre + post | post-op success; volume device name and requested `DesiredAccess` |
 
 Not reported: hard links (`FileLinkInformation` and its `Ex`/`BypassAccessCheck` classes).
 Creating a name is neither a delete nor a rename, and removing the original name is reported
@@ -70,7 +64,7 @@ and post-op callbacks can run at `DISPATCH_LEVEL`. So:
 Paths are UTF-16 and capped at **4,096 code units** each in the record; a
 longer path is truncated and flagged. The user-mode receiver counts and logs
 such records instead of forwarding a partial path as a complete rule event.
-This avoids matching an incomplete name, but means a delete or rename with an
+This avoids matching an incomplete name, but means a delete, rename or set-time request with an
 overlong path is not visible to detection rules; the loss is observable only
 through the receiver's truncation counter and logs.
 
@@ -123,14 +117,13 @@ the agent holds the port" becomes "unload while the agent holds the port
 
 ## Wire format
 
-One message per record, all integers little-endian, packed, versioned by the
-existing connection-context protocol version, now **3**: 2 was the first 2c layout, and 3
-added the fourth counter after the low-resources lab run of #857. A client at another
-version is refused at connect, never fed a format it can't read. The header is **72 bytes**.
+One message per record, all integers little-endian, packed, versioned by the connection
+context. Protocol **v5** retains the v4 prefix and appends a requested `ACCESS_MASK`;
+a client with another version is refused at connect. The header is **108 bytes**.
 
 | Field | Type | Notes |
 |---|---|---|
-| `kind` | u16 | 1 = delete, 2 = rename |
+| `kind` | u16 | 0 = heartbeat, 1 = delete, 2 = rename, 3 = set-time, 4 = raw-volume open |
 | `flags` | u16 | bit 0: delete-on-close (vs disposition); bit 1: old path truncated; bit 2: new path truncated |
 | `seq` | u64 | per-connection sequence number, starts at 1 |
 | `timestamp` | i64 | `KeQuerySystemTimePrecise`, 100 ns since 1601 |
@@ -139,8 +132,10 @@ version is refused at connect, never fed a format it can't read. The header is *
 | `dropped_send_failed` | u64 | cumulative, since load |
 | `not_connected` | u64 | cumulative, since load |
 | `old_path_len`, `new_path_len` | u16 ×2 | in UTF-16 code units; `new_path_len = 0` for a delete |
-| `dropped_capture_failed` | u64 | cumulative, since load: an operation of a reported kind that succeeded but whose names or record could not be obtained (v3, byte 64) |
-| paths | UTF-16 | `old_path` then `new_path`, not NUL-terminated, from byte 72 |
+| `dropped_capture_failed` | u64 | cumulative, since load: a successful operation whose file/volume name or record could not be obtained (v3, byte 64) |
+| `creation_time`, `last_access_time`, `last_write_time`, `change_time` | i64 ×4 | requested raw FILETIME values (v4, bytes 72–103); all zero except set-time |
+| `desired_access` | u32 | requested Windows ACCESS_MASK (v5, bytes 104–107); zero except raw-volume open |
+| paths | UTF-16 | `old_path` then `new_path`, not NUL-terminated, from byte 108; set-time and raw-volume open use only `old_path` |
 
 Carrying the counters in **every** message means the agent always has the
 current loss figures without a second request path (there is still no
@@ -153,7 +148,7 @@ resets the sequence, the counter can still expose a failed send without a visibl
 (`ChannelStats::total_lost`). A heartbeat the
 sender cannot send is not a lost record: the sender takes its number back, so a quiet period
 with no read pending leaves no gap and moves no counter. `dropped_capture_failed` counts an
-operation that succeeded but whose names could not be obtained; it is only counted once the
+operation that succeeded but whose file/volume names could not be obtained; it is only counted once the
 operation's own status is known, and not while the instance is draining or the driver is
 unloading.
 
