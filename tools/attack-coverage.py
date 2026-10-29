@@ -148,6 +148,7 @@ TECHNIQUE_TACTIC = {
     "T1136.001": "Persistence",
     "T1197": "Defense Evasion",
     "T1204": "Execution",
+    "T1566": "Initial Access",
     "T1218": "Defense Evasion",
     "T1218.011": "Defense Evasion",
     "T1490": "Impact",
@@ -203,6 +204,18 @@ def discover() -> dict[str, dict[str, set]]:
     return findings
 
 
+# Coverage a tag does not yet claim, rendered after the matrix so a reader of the
+# T1566.001 row does not assume a mail client the rule never saw.
+UNVERIFIED_NOTES = [
+    "T1566.001 (mail attachment) is tagged only for a mark written by Apple Mail "
+    "(quarantine agent `Mail`). Outlook is **not verified**. Hypothesis: the "
+    "opened attachment is copied under the `Content.Outlook` folder; whether it "
+    "carries a mark, and which process writes it, is still to be observed. "
+    "Thunderbird is not verified either. Neither is in the rule until a lab "
+    "capture shows the mark and its writer (#376).",
+]
+
+
 def render(findings: dict[str, dict[str, set]]) -> str:
     by_tactic: dict[str, list[str]] = {}
     for technique_id in findings:
@@ -240,6 +253,11 @@ def render(findings: dict[str, dict[str, set]]) -> str:
             sources = ", ".join(f"`{s}`" for s in sorted(info["sources"]))
             lines.append(f"| {technique_id} | {layers} | {sources} |")
         lines.append("")
+
+    lines.append("## Not verified")
+    lines.append("")
+    lines.extend(f"- {note}" for note in UNVERIFIED_NOTES)
+    lines.append("")
 
     return "\n".join(lines) + "\n"
 

@@ -15,8 +15,16 @@ ADR-0018). Two rules consume it:
 
 | Rule | Fires when | Technique |
 | --- | --- | --- |
-| `check_quarantined_exec` | a marked file is executed within 10 min of the mark (`QUARANTINE_EXEC_WINDOW_NS`) | T1204.002 |
+| `check_quarantined_exec` | a marked file is executed within 10 min of the mark (`QUARANTINE_EXEC_WINDOW_NS`) | T1204.002; `T1566.001/T1204.002` when the mark's writer is Apple Mail (quarantine agent `Mail`) |
 | `check_exec_after_motw_removal` | a file is executed within the same window after its mark was **removed**: `Unblock-File`, `Remove-Item -Stream Zone.Identifier`, Explorer's "Unblock" checkbox (#442) | T1553.005 |
+
+The mail-client tag (`MAIL_CLIENT_QUARANTINE_AGENTS`) is a label on the same
+alert, not a second rule: same window, same signature gate, same one alert per
+mark. It says "marked by Mail", not "phishing": a person who saved an
+attachment on purpose and ran it matches too. **Outlook and Thunderbird are
+not in the list**: that the opened attachment carries a mark, which process
+writes it, and where (hypothesis: a `Content.Outlook` folder) are not
+observed. They stay plain T1204.002 until a lab capture shows them.
 
 Removing a mark doesn't alert on its own. `Unblock-File` over a downloaded
 PowerShell module tree removes hundreds of marks legitimately. The removal is

@@ -72,6 +72,20 @@ pub(crate) const MEMFD_EXEC_WINDOW_NS: u64 = 5_000_000_000; // 5s
 /// minutes stays; macOS, without the gate, keeps the noise.
 pub(crate) const QUARANTINE_EXEC_WINDOW_NS: u64 = 600_000_000_000; // 10 min
 
+/// Quarantine agents that are a mail client, for the T1566.001 tag on the
+/// provenance join ([`crate::RuleState`]'s `check_quarantined_exec`, #376).
+/// Only a client whose mark was observed is listed: Apple Mail records itself
+/// as `Mail` in the `com.apple.quarantine` agent field. Matched exactly
+/// (ASCII case-folded), not as a substring: `Mail` must not match a browser
+/// extension or `Mailspring`.
+///
+/// Deliberately absent: Outlook (`outlook.exe`, `olk.exe`) and Thunderbird.
+/// Nothing shows that they write a mark on an opened attachment, which
+/// process writes it, or where (Outlook's temporary copy is assumed to be
+/// under `Content.Outlook`). An entry is added once a lab capture shows the
+/// mark and its writer.
+pub(crate) const MAIL_CLIENT_QUARANTINE_AGENTS: &[&str] = &["Mail"];
+
 /// Window between a BITS job adding or completing a file and an exec of that
 /// file that still counts as "BITS-downloaded, then run" (T1197, #284). The
 /// same 10 min as [`QUARANTINE_EXEC_WINDOW_NS`]: the window runs from the
