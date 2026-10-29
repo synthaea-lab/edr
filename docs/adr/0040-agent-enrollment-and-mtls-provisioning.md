@@ -9,11 +9,11 @@ Every agent-to-server connection is already authenticated by mTLS, and the serve
 that is fully built: nginx terminates TLS and forwards `X-Client-Cert-Verified`/
 `X-Client-Cert-Subject`; `server/lib/agent-auth.ts`'s `authenticateAgent` reads an
 `enrollmentId` out of the certificate's CN (`extractEnrollmentId`) and looks it up against
-`Agent.enrollmentId` (`@unique`, `server/prisma/schema.prisma:46`). `docs/architecture/
-control-plane.md`'s heartbeat contract is explicit that this is the *only* identity that
-counts: `agent_id` in a request body is `null` today and is "never trusted" — correctly,
-since trusting a self-reported field over the verified certificate would be the actual
-vulnerability. None of that is in question here.
+`Agent.enrollmentId` (`@unique`, `server/prisma/schema.prisma`'s `Agent` model).
+`docs/architecture/ control-plane.md`'s heartbeat contract is explicit that this is the
+*only* identity that counts: `agent_id` in a request body is `null` today and is "never
+trusted" — correctly, since trusting a self-reported field over the verified certificate
+would be the actual vulnerability. None of that is in question here.
 
 What is missing is everything upstream of a certificate existing. Today, per
 `docs/operations/binary-releases.md`'s description of `agent run`'s upload path:
@@ -47,13 +47,22 @@ server, because signing happens out of band before a manifest is ever published,
 server only ever serves bytes it did not sign. An enrollment CA cannot work that way: it has
 to sign a certificate synchronously, in response to a live HTTP request, while the server is
 up — "the signing key is never on the control plane" is not an available answer here the way
-it was for ADR-0027. The threat model differs accordingly: a compromised `release` key is root
-code execution on every agent; a compromised enrollment CA key lets an attacker mint a
-certificate that impersonates a *new* agent to *this one tenant's* server — serious, but not
-the same order of damage, and already bounded by the fact that a self-hosted deployment's
-server process is already trusted with that tenant's database, cases, and every detection in
-it. Holding the CA key at the same trust level as the server process it runs inside of is a
-narrower ask than ADR-0027's, not a weaker version of the same one.
+it was for ADR-0027. The threat model differs accordingly. A compromised `release` key is root
+code execution on every agent. A compromised enrollment CA key is not bounded to one tenant:
+there is one CA per deployment behind one nginx `ssl_client_certificate`, and the identity is
+just a UUID in the CN, so a leaked key mints a certificate for *any* `enrollmentId` in *any*
+tenant of that deployment — impersonating any existing agent to the server (injecting or
+suppressing its telemetry, heartbeats, detections and decoy hits) and pulling content and
+releases as it. That is serious. What bounds it is not tenancy but where the key lives: it
+sits inside the server process, and an attacker able to read it from there can already write
+any tenant's rows directly (the server holds the database connection string). The key being
+online adds no capability over a server compromise *while it lasts*; what it adds is
+persistence — a copied key outlives the cleanup of the server it was copied from, which is
+why CA rotation (Deferred) is the incident-response half of this design, not an optional
+extra. It reaches agents' *inputs* only through the server (content and releases stay signed
+by ADR-0027's offline keys, which this key cannot forge), so it never becomes code execution
+on an agent. Holding the CA key at the server process's own trust level is a narrower ask
+than ADR-0027's, not a weaker version of the same one.
 
 ## Decision
 
@@ -65,31 +74,45 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
 
 2. **A per-deployment CA, generated once, self-hosted with everything else, scoped to one
    job only: signing agent client certificates.** Each self-hosted instance generates its
-   own root CA keypair at first setup (a `docker-compose` init step or an explicit
-   `synthaea-ctl init-ca`-style one-shot command — naming the exact mechanism is
-   implementation detail, not decided here) and stores the private key the same place the
-   deployment already keeps its other server-side secrets (the database connection string,
-   better-auth's own secret — whatever that convention already is, reused rather than
-   inventing a second one). This key is held by the running server process, deliberately
-   unlike ADR-0027's keys, for the reason in Context: enrollment has to sign on demand.
-   The CA's public certificate becomes nginx's `ssl_client_certificate`
-   (`server/nginx.conf:29`, today a pre-placed `ca.crt`) — the CA nginx trusts to verify an
-   *incoming agent's* client certificate. **It is not, and must not become, what an agent
-   trusts to verify the *server*.** That is `server.ca_cert`
-   (`docs/operations/binary-releases.md`), which verifies nginx's own listener certificate
-   (`ssl_certificate`/`server.crt`, `nginx.conf:25`) — a separate credential, provisioned
-   however this deployment's public-facing TLS already is (a real domain's ACME
-   certificate, or an operator-supplied one; orthogonal to this ADR, unchanged by it).
-   Collapsing these two into one CA was an earlier draft's mistake (review of #314's ADR):
-   a leaked enrollment-CA key would then also mint a certificate that *agents* accept as
-   *the server*, turning "impersonate one new agent" into "run a MITM every already-enrolled
-   agent trusts" — a materially larger blast radius than Context's "bounded" claim allows
-   for. Keeping them separate is what makes that claim true. The CA this ADR creates issues
-   nothing but agent client certificates, is constrained to that at signing time (Decision
-   3), and every certificate it issues is logged (`AuditLog`, same table and shape as every
-   other privileged action) — "bounded by the server's existing trust" holds only because
-   of those constraints, not merely because the key lives at the same privilege level as the
-   server process.
+   own CA keypair once, in a one-shot setup step run **before** `docker compose up` (not by
+   the running server): it writes the public certificate next to nginx's existing
+   certificates in `./certs`, and the private key **outside** `./certs` — the `proxy`
+   container mounts that whole directory, and nginx has no business holding the key. The
+   `server` container's other secrets (`DATABASE_URL`, `BETTER_AUTH_SECRET`) arrive as
+   environment variables in `docker-compose.yml`; a PEM key is a file, so it gets a
+   read-only mount into `server` only, from a path `server/.gitignore` covers so a
+   development checkout cannot commit it. This key is then held by the running
+   server process, deliberately unlike ADR-0027's keys, for the reason in Context:
+   enrollment has to sign on demand.
+
+   nginx is a separate container that reads its client-CA file once, at startup, from the
+   `./certs` mount (`ssl_client_certificate` in `server/nginx.conf`, today a pre-placed
+   `ca.crt`). The setup step therefore writes a **bundle** — the existing, operator-managed
+   `ca.crt` followed by the new enrollment CA's certificate — and `ssl_client_certificate`
+   points at that bundle. Two consequences, both intended: hosts already running with
+   certificates an operator signed by hand against `ca.crt` keep working unchanged (nothing
+   forces a flag day), and because the CA exists before nginx starts, no runtime reload is
+   needed. Dropping the legacy CA from the bundle is an operator decision once every host has
+   enrolled, not something this ADR schedules.
+
+   This CA is what nginx trusts to verify an *incoming agent's* client certificate. **It is
+   not, and must not become, what an agent trusts to verify the *server*.** That is
+   `server.ca_cert` (`docs/operations/binary-releases.md`), which verifies nginx's own
+   listener certificate (`ssl_certificate`) — a separate credential, provisioned however
+   this deployment's public-facing TLS already is (a real domain's ACME certificate, or an
+   operator-supplied one; orthogonal to this ADR, unchanged by it). Collapsing these two into
+   one CA was an earlier draft's mistake (review of #314's ADR): a leaked enrollment-CA key
+   would then also mint a certificate that agents accept as *the server* — a MITM of every
+   enrolled agent, on top of Context's already-serious impersonation.
+
+   The CA is constrained in its own certificate and in every certificate it issues, so the
+   key can do exactly one thing: the CA certificate carries `basicConstraints CA:TRUE,
+   pathlen:0` (it can sign leaves, nothing it signs can sign further); every issued
+   certificate carries `CA:FALSE`, `keyUsage digitalSignature`, `extendedKeyUsage
+   clientAuth` only, and the capped lifetime of Decision 4. No name constraint is claimed:
+   the identity is a random UUID in the CN, not a DNS name or an address, so there is no
+   name space for a constraint to narrow. Every issuance is logged
+   (`AuditLog`, same table and shape as every other privileged action).
 
 3. **Enrollment: a shared, time-boxed, usage-capped token; the agent generates its own
    keypair; the server, never the agent, picks the identity.** An admin (an authenticated
@@ -97,10 +120,13 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
    their tenant: a random secret, an expiry, and a usage cap (more than 1 — a fleet deployed
    from one golden image or one deployment script enrolls many hosts with the same token in
    a short window; unlimited reuse forever would make the token a long-lived shared secret,
-   which defeats the point). How the token physically reaches the new host is the operator's
-   existing deployment tooling's problem, exactly as it already is for today's manual
-   certificate file — this ADR does not change who is responsible for that step, only what
-   the host does once the token is there.
+   which defeats the point). The server generates the token, never the operator: the
+   presented form is `<token id>.<secret>`, the secret 256 bits from the OS CSPRNG, so
+   guessing is not an attack worth rate-limiting against and the id lets the server count
+   failures against one token without ever storing the secret in plaintext. How the token
+   physically reaches the new host is the operator's existing deployment tooling's problem,
+   exactly as it already is for today's manual certificate file — this ADR does not change
+   who is responsible for that step, only what the host does once the token is there.
 
    A new one-shot agent subcommand, `agent enroll --token <token> --server <url>` (matching
    the existing one-shot style of `apply-release`/`apply-content-manifest`, ADR-0015's
@@ -120,85 +146,158 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
 
    The call target is `POST /api/v1/enroll`, reachable without a client certificate — there
    isn't one yet, by construction — but **not reachable without verifying the server**:
-   `agent enroll` uses the exact same `server.ca_cert`/`--ca-cert` mechanism `apply-release`
-   and `apply-content-manifest` already use today (`docs/operations/binary-releases.md`) to
-   verify the TLS certificate `/api/v1/enroll` presents, before it ever sends the token. This
-   is not a new mechanism to design: the operator already has to hand a new host its
-   `server.ca_cert` bundle for every other one-shot command to work at all (it's a required
-   `[server]` config field already), so handing it over alongside the enrollment token costs
-   nothing new and closes the "agent trusts whatever answers" gap a bare, unauthenticated TLS
-   connection would otherwise leave open. `--token` also accepts `--token-file <path>` or `-`
-   (read from stdin) as alternatives to the bare argument, so an operator's deployment script
-   is not forced to leave the secret sitting in `ps` output and shell history — `--token`
-   itself stays available for interactive use, where that risk is already the operator's to
-   manage.
+   `agent enroll` verifies the TLS certificate `/api/v1/enroll` presents with the exact same
+   trust anchor `apply-release` and `apply-content-manifest` already use
+   (`docs/operations/binary-releases.md`): `server.ca_cert`/`--ca-cert` when set, otherwise
+   the platform's built-in roots (`server.ca_cert` is optional — absent means the built-in
+   roots, `crates/config`'s `an_absent_ca_cert_means_the_builtin_roots`). A deployment
+   whose listener certificate chains to a public root needs nothing extra; one with a
+   private listener CA already has to ship that file to every host for the other one-shot
+   commands, and ships it alongside the enrollment token the same way. Either way the agent
+   never sends the token to a server it has not verified.
 
-   Server-side, one request does, in a single database transaction: validates the token
-   (hashed lookup — tokens are stored hashed, never in plaintext, same posture as any other
-   bearer secret this project stores) and atomically decrements its remaining-uses counter in
-   the same statement that checks it is still positive and unexpired (a conditional
-   `UPDATE ... WHERE uses_remaining > 0 AND expires_at > now() RETURNING ...`, not a
-   check-then-decrement in two steps) — so two concurrent enrollments against a
-   one-remaining-use token cannot both succeed, regardless of request ordering; generates the
-   `enrollmentId`; creates the `Agent` row; signs the CSR with the deployment's CA, with the
-   signing call itself constrained to this CA's one job (Decision 2) — client-auth key usage
-   only, no `CA:TRUE`, a capped certificate lifetime (Decision 4); and writes one `AuditLog`
-   row for the issuance. A signing failure after a successful decrement burns that use rather
-   than leaking an extra one past the cap — an accepted, bounded cost, not a correctness gap.
-   `/api/v1/enroll` is rate-limited per source address (nginx's existing `limit_req_zone`
-   mechanism, `nginx.conf:14`'s `cron` zone is the precedent to mirror), since it is, by
-   necessity, the one agent-facing endpoint with no certificate to key a cost on. The server
-   returns the signed certificate; `agent enroll` writes it, and the private key it already
-   generated, to the paths `server.mtls_cert`/`server.mtls_key` already name — `agent run`
-   needs no change at all; it already loads whatever is at those paths.
+   **`agent enroll` never presents a client certificate**, even when `server.mtls_cert`/
+   `server.mtls_key` already exist on disk. That matters because of how nginx is set up:
+   `ssl_verify_client optional` lets a client that presents *no* certificate through, but a
+   client that presents one that does not verify (expired, or signed by a CA no longer in
+   the bundle) is rejected before any route runs. A host re-enrolling after its certificate
+   expired would hit exactly that if `enroll` loaded the configured identity, so its TLS
+   client is built with no client identity at all. `--token` also accepts `--token-file
+   <path>` or `-` (read from stdin) as alternatives to the bare argument, so an operator's
+   deployment script is not forced to leave the secret sitting in `ps` output and shell
+   history — `--token` itself stays available for interactive use, where that risk is
+   already the operator's to manage.
+
+   Server-side, the request first checks the CSR, outside any transaction, and refuses it
+   with `400` before touching the token if it fails: the CSR's self-signature verifies
+   (proof the requester holds the private key), and the key is ECDSA P-256 or RSA of at least
+   3072 bits — anything else is refused, not upgraded. Then **one database transaction**
+   holds everything that must happen together, and the certificate is returned only after it
+   commits:
+
+   1. the token is consumed by a single conditional `UPDATE ... SET uses_remaining =
+      uses_remaining - 1 WHERE id = $1 AND secret_hash = $2 AND uses_remaining > 0 AND
+      expires_at > now() AND NOT locked RETURNING ...` — tokens are stored hashed, never in
+      plaintext, and two concurrent enrollments against a one-remaining-use token cannot
+      both succeed, regardless of ordering;
+   2. the server generates the `enrollmentId` and inserts the `Agent` row (or, for a
+      reissue token, updates the existing one — Decision 4);
+   3. it signs the certificate in-process with the CA key — no network call, so holding the
+      transaction across it costs milliseconds;
+   4. it writes the `AuditLog` issuance row;
+   5. it commits, and only then returns the certificate.
+
+   Any failure before the commit — signing included — rolls back all of it: the use is not
+   consumed, no `Agent` row exists, nothing is audited, and the agent gets a `5xx` it may
+   retry with the same token. A failure *at* commit leaves a signed certificate that was
+   never returned and names an `enrollmentId` with no `Agent` row, which `authenticateAgent`
+   already refuses. There is no state in which a use is consumed without a matching `Agent`
+   and `AuditLog` row, or the reverse.
+
+   Abuse is bounded per token, not per address. A presented token whose id exists but whose
+   secret does not match increments that token's failure count, outside the rolled-back
+   transaction, and the token locks after a small number of failures (an admin can unlock or
+   reissue it); an unknown id is a plain `401`. The usage cap bounds how many identities one
+   leaked token can mint, and the expiry bounds for how long. nginx also gets a
+   `limit_req_zone` for `/api/v1/enroll`, with the existing `cron` zone as the precedent, but
+   only as a coarse flood guard: its burst is sized so a golden-image fleet enrolling behind
+   one NAT address is not refused, and it is not what stops a distributed attacker — the
+   token's entropy, lock, cap and expiry are.
+
+   The server returns the signed certificate; `agent enroll` writes it, and the private key
+   it already generated, to the paths `server.mtls_cert`/`server.mtls_key` already name —
+   `agent run` needs no change at all; it already loads whatever is at those paths.
 
 4. **Concrete lifetime, renewal window, and a cheap revocation check on both.** A signed
-   certificate is valid 30 days; `agent enroll --renew` (or a periodic trigger — #754's own
-   timer work, applicable here too, once it ships) is expected to run by day 20, a 10-day
-   lead — generous enough that a control-plane outage has to run longer than ten days before
-   any agent is actually at risk of hitting its hard expiry, and staggered fleet renewal
-   times mean a shorter outage affects none of them. These are config defaults, not
-   hardcoded forever, but they are *stated*: Decision 5's original text left both unset and
-   called the trade-off a future decision, which left this ADR's own renewal design
-   unimplementable (review of #314's ADR) — a number has to exist for "the server was down
-   longer than the cert lifetime" to even be a question with an answer.
+   certificate is valid 30 days, and renewal starts with at least a 10-day lead — generous
+   enough that a control-plane outage has to run longer than ten days before any agent is at
+   risk of hitting its hard expiry. These are config defaults, not hardcoded forever, but they
+   are *stated*: a number has to exist for "the server was down longer than the cert
+   lifetime" to even be a question with an answer.
 
-   `agent enroll --renew` connects **with its current, still-valid mTLS certificate** to a
-   renewal endpoint and receives a freshly-signed certificate for the same `enrollmentId`,
-   same key or a freshly rotated one. No token is involved: the existing certificate is
-   already proof of enrollment — **but only if the `Agent` row behind it is not revoked.**
-   Both the renewal endpoint and `authenticateAgent` (the single existing chokepoint every
-   agent-facing route already calls, per Context) check a new `Agent.revoked` boolean before
-   accepting the certificate for anything. This makes revocation genuinely cheap to add: no
-   new DB round trip (the row is already fetched by `enrollmentId` on every authenticated
-   call), no CRL, no short-lived-certificate scheme — an admin flips one flag from the
-   console, and the next request *of any kind* from that host, renewal included, is refused.
-   It is not TLS-layer revocation: nginx's mTLS handshake itself has no opinion on
-   `Agent.revoked` and completes normally for a revoked certificate right up to the
-   application layer, where every route that matters already stops it. That boundary — and
-   the fact that it depends on every agent-facing route actually going through
-   `authenticateAgent`, which Context already establishes as true today — is the honest
-   shape of this mitigation, not a CRL's or a short-lived-certificate scheme's, and it
-   substantially narrows what Decision 5 below still has to leave open.
+   **The renewal trigger ships with enrollment, not after it.** It does not wait for #754's
+   periodic update timer, which is still open: if enrollment shipped first, every host
+   enrolled through it would reach hard expiry with nothing to renew it, and hosts enrolled
+   together from one golden image would all expire together, taking upload, content and
+   release fetches down fleet-wide at once. So `agent run` owns the trigger itself: it reads
+   its own certificate's `notAfter` at startup and on a daily tick, and renews in-process once
+   inside the renewal window — the same code path `agent enroll --renew` runs by hand. Each
+   agent picks its renewal point at random between 15 and 10 days before expiry, so a batch
+   enrolled the same hour spreads its renewals over five days instead of arriving at once;
+   a failed attempt retries on the next tick, inside the same window. It writes the new pair
+   to the same `server.mtls_cert`/`server.mtls_key` paths with the ownership and mode the old
+   pair had, each atomically (temp file and rename), and only switches the in-memory
+   identity once both are on disk.
+
+   Renewal is its own route, `POST /api/v1/enroll/renew`, the reverse of `/api/v1/enroll`
+   in every respect that matters: it **requires** the current, still-valid client
+   certificate (no token is involved — the certificate is the proof of enrollment), so its
+   own exact-match nginx block keeps the `$ssl_client_verify` check `/api/v1/enroll` drops,
+   and its handler goes through `authenticateAgent` like any other agent route. Its
+   middleware exemption is the same exact-path kind the agent's release and content routes
+   already have (`/api/v1/enroll/renew`, not a prefix, so nothing else under `/api/v1/enroll`
+   inherits it). It re-signs for the same `enrollmentId`, with a fresh keypair the agent
+   generated for the purpose, under the same CSR checks as Decision 3.
+
+   **Revocation is a flag every agent route checks.** A new `Agent.revoked` boolean is read by
+   `authenticateAgent`, and a revoked agent is refused with `403` and a body that names
+   revocation, so it reads as revocation in the agent's logs rather than a generic auth
+   failure. Today that check would not be enough on its own, because `authenticateAgent` is
+   *not* the single chokepoint an earlier draft of this ADR said it was: on `main`,
+   `ingest/events`, the `content/*`, `release/*` and `snapshot/*` routes go through it, but
+   `ingest/heartbeat`, `ingest/detection`, `ingest/decoy` and `corpus/submit` call
+   `extractEnrollmentId` and `verifyProxyAuth` directly and look the agent up themselves. As
+   part of this change those four move onto `authenticateAgent` (heartbeat's `lastSeen`
+   update then keys on the returned `Agent.id`), and `revoked` joins its `select`, so a
+   revoked host's heartbeats, detections, decoy hits and corpus submissions are refused along
+   with everything else, renewal included. No CRL and no new database round trip: the row is
+   already fetched on every authenticated call.
+
+   For the agent, a revocation `403` is final, not a transient failure: transport already
+   treats `403` as non-retryable, so uploads stop being accepted and fetches stop
+   succeeding, while the agent keeps detecting and responding locally — revocation cuts a
+   host off from the control plane, it does not disarm it. That is a different state from
+   `server.offline_fallback`, which only covers a certificate missing or unreadable at
+   startup; a revoked host still has a valid certificate and is told, on every request, that
+   it no longer counts. It is not TLS-layer revocation: nginx's handshake has no opinion on
+   `Agent.revoked` and completes normally right up to the application layer (Decision 5).
 
    If the certificate has already expired — a host offline past its renewal window — there
    is nothing valid left to authenticate a renewal with, and the host needs a fresh
-   enrollment token, an operator action, same as a first install. `docs/operations/
-   binary-releases.md`'s `offline_fallback` (default `true`) already covers "a host without
-   certificates" this way; a host with an expired one degrades into the same path. Stated
-   fully rather than just by its `UPLOAD-DISABLED` log line: that fallback stops *every*
-   server interaction this ADR's design depends on, not only upload — content-manifest and
-   release fetches stop too, so a long-offline host also stops receiving new detection
-   content and agent updates until it is re-enrolled, not only losing its own telemetry
-   upload. A fresh enrollment after expiry does not have to mean a fresh identity, either: an
-   enrollment token can optionally be scoped to a specific, already-known `Agent` (an
-   operator picks "reissue for this host" in the console rather than "new enrollment" when
-   creating the token) — the server then rotates that existing row's `enrollmentId` to the
-   newly-minted one instead of inserting a new row. Every relation that matters
-   (`AgentHealth`, `Detection`, cases, decoy tokens) already keys off `Agent.id`, the stable
-   row identity, never `enrollmentId` — so this preserves a host's full history across
-   re-enrollment, and a token *not* scoped to an existing agent still creates a fresh row,
-   exactly as a genuine first install should.
+   enrollment token, an operator action, same as a first install. Such a host does *not*
+   land in `server.offline_fallback` (`docs/operations/binary-releases.md`): that path is
+   for a certificate or key that is missing or unreadable, which stops `run` from setting
+   upload up at all. An expired certificate is still readable, so upload is set up and every
+   request then fails at nginx, which refuses a presented certificate that does not verify
+   before any route runs. The end state is the same — the host keeps detecting locally, but
+   uploads nothing and fetches no content or releases until it is re-enrolled — and
+   `agent run`'s own expiry check (above) says so in the journal, so the operator reads
+   "certificate expired, re-enroll this host" rather than a stream of `400`s to interpret.
+
+   A fresh enrollment after expiry does not have to mean a fresh identity: an enrollment
+   token can be scoped to a specific, already-known `Agent` (an operator picks "reissue for
+   this host" in the console rather than "new enrollment"), and redeeming it rotates that
+   row's `enrollmentId` to the newly minted one instead of inserting a row. Every relation
+   that matters (`AgentHealth`, `Detection`, cases, decoy tokens) keys off `Agent.id`, the
+   stable row identity, never `enrollmentId`, so the host keeps its history. A reissue
+   token follows three rules:
+
+   - **Same tenant, checked twice.** The token can only be created for an `Agent` in the
+     admin's own tenant, and redemption re-checks that the token's tenant and the `Agent`'s
+     tenant are still the same, inside the same transaction as Decision 3's.
+   - **It never un-revokes.** A reissue token cannot be created for a revoked `Agent`, and
+     redeeming one against an `Agent` revoked since fails like an exhausted token.
+     Un-revoking is its own console action, audited on its own, so bringing a revoked host
+     back is always a deliberate step and never a side effect of reissuing it.
+   - **Rotation is the kill switch for the old certificate, on purpose.** Once
+     `enrollmentId` rotates, the previous certificate names an `enrollmentId` no `Agent` row
+     carries, and `authenticateAgent` refuses it from the next request, for the up to 30
+     days it would otherwise have stayed valid. That is the point of reissuing a host whose
+     old key may have leaked or whose disk was lost. The audit row records both the old and
+     the new `enrollmentId`.
+
+   A token *not* scoped to an existing agent still creates a fresh row, exactly as a genuine
+   first install should.
 
 5. **A token is revocable outright; a certificate is revocable at the application layer, not
    the TLS layer.** An admin can delete an unused or still-valid enrollment token from the
@@ -219,39 +318,46 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
 ## Consequences
 
 - `server/app/api/v1/enroll/route.ts` (new): the one agent-facing endpoint with no client
-  certificate at all, by necessity. Concretely, not just "needs the same care": a new
-  `location /api/v1/enroll` block in `server/nginx.conf`, alongside the existing
-  `/api/v1/ingest/` one, that does *not* add the `if ($ssl_client_verify != "SUCCESS")`
-  check those neighboring blocks have (`nginx.conf:59-68`) — everything else about it is
-  unchanged from the pattern already there: `proxy_set_header X-Client-Cert-Verified
-  $ssl_client_verify` still runs server-block-wide (`nginx.conf:33`) and always carries
-  nginx's own computed value, never a client-suppliable one, so the backend correctly sees
-  "no cert" with no special-casing needed; `X-Proxy-Secret` (`nginx.conf:45`) is still
-  attached the same as every other route. A new `limit_req_zone`
-  (`nginx.conf:14`'s `cron` zone is the existing precedent) bounds it per source address.
-  `server/middleware.ts` gets one more exact-path exemption
-  (`req.nextUrl.pathname === "/api/v1/enroll"`, alongside `/api/release/manifest` and its
-  siblings, `middleware.ts:20-23`) so it bypasses the browser-session check the same way —
-  `stripIdentityHeaders` still runs on that branch, so a client-supplied identity header is
-  dropped here exactly as it already is on every other public path.
-- A new `EnrollmentToken` model (tenant-scoped, expiry, usage cap/count, hashed secret, and
-  an optional `agentId` for a token scoped to re-enrolling a specific host rather than
-  minting a new one — Decision 4) and the console UI to create and list them — the only new
-  piece of UI this ADR requires; everything else is agent-side or a one-shot endpoint.
-- `Agent.revoked: Boolean` (default `false`) and `revokedAt`, checked by `authenticateAgent`
-  and the renewal endpoint (Decision 4) — console gets a "revoke" action alongside each
-  agent, the cheap partial answer to certificate revocation this ADR actually ships.
-- `agent enroll`/`agent enroll --renew`: new one-shot subcommands, `updater`-adjacent in style
-  but not in that crate (no manifest, no signature, no rollback — a CSR and a cert, nothing
-  staged) — probably its own small module, named here as `enroll` for discussion, not fixed.
-  `--token` accepts a bare argument, `--token-file <path>`, or `-` for stdin.
+  certificate at all, by necessity. In `server/nginx.conf`, a new exact-match `location =
+  /api/v1/enroll` block beside the existing `/api/v1/ingest/` one, without the `if
+  ($ssl_client_verify != "SUCCESS")` check that block has, and with its own `limit_req_zone`
+  (the `cron` zone is the precedent; Decision 3 says why it is only a flood guard).
+  Everything else follows the pattern already there: the server-block-wide `proxy_set_header
+  X-Client-Cert-Verified $ssl_client_verify` always carries nginx's own computed value,
+  never a client-suppliable one, so the backend correctly sees "no cert" with no
+  special-casing; `X-Proxy-Secret` is attached as on every other route.
+  `server/middleware.ts` gets one more exact-path entry in its public-route list
+  (`req.nextUrl.pathname === "/api/v1/enroll"`, beside the `/api/release/manifest` group) so
+  it bypasses the browser-session check; `stripIdentityHeaders` still runs on that branch.
+- `server/app/api/v1/enroll/renew/route.ts` (new): a `location = /api/v1/enroll/renew` block
+  that *keeps* the `$ssl_client_verify` check, a handler that goes through
+  `authenticateAgent`, and its own exact-path middleware entry (Decision 4). Being exact
+  matches, neither nginx block nor either middleware entry covers any other path.
+- `ingest/heartbeat`, `ingest/detection`, `ingest/decoy` and `corpus/submit` move onto
+  `authenticateAgent` (Decision 4), so revocation reaches every agent route — a refactor of
+  existing routes that ships with this change, not after it.
+- A one-shot CA setup step, run before `docker compose up`: generates the CA keypair, puts
+  the key outside `./certs` where only the `server` container reads it, and writes the
+  client-CA bundle (existing `ca.crt` plus the new CA) that `ssl_client_certificate` now
+  points at (Decision 2). `docker-compose.yml` gains the key mount for `server`.
+- A new `EnrollmentToken` model (tenant-scoped; id plus hashed 256-bit secret; expiry; usage
+  cap and count; failure count and `locked`; optional `agentId` for a reissue token) and the
+  console UI to create, list, unlock and delete them.
+- `Agent.revoked: Boolean` (default `false`) and `revokedAt`, read by `authenticateAgent`;
+  console "revoke" and "un-revoke" actions, each audited.
+- `agent enroll` (token, never presents a client certificate) and `agent enroll --renew`
+  (current certificate), plus the renewal check inside `agent run` (Decision 4) —
+  `updater`-adjacent in style but not in that crate (no manifest, no signature, no rollback
+  — a CSR and a certificate, nothing staged), probably its own small module. `--token`
+  accepts a bare argument, `--token-file <path>`, or `-` for stdin.
 - The CA private key moves the server process's own trust boundary slightly wider than
   ADR-0027's keys ever did (Context) — this is a deliberate, scoped exception to "no private
   key lives on the control plane," not a precedent for weakening that rule elsewhere. Any
   future key this project adds should default to ADR-0027's offline posture unless it has
-  the same "must sign online, synchronously" requirement this one does. Its blast radius
-  depends on the CA doing only one job — client-auth certificates, nothing else, every
-  issuance audited — not on the key's storage location alone (Decision 2).
+  the same "must sign online, synchronously" requirement this one does. Its blast radius is
+  every agent identity in the deployment, across tenants (Context); the constraints of
+  Decision 2 keep it from being anything *more* than that, and CA rotation (Deferred) is
+  what ends it after a leak.
 - `docs/architecture/control-plane.md` gains the "enrollment/PKI" section its header has
   promised since before this ADR existed.
 - Issue #314 narrows to exactly this ADR once accepted; its other two bullets are already
@@ -261,18 +367,25 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
 
 - **TLS-layer certificate revocation** (Decision 5) — `Agent.revoked` closes revocation at
   the application layer (every route that matters refuses a revoked host immediately), but
-  nginx's own mTLS handshake still completes for a revoked certificate; closing that needs
-  a revocation list nginx checks per connection, or certificate lifetimes short enough that
-  a successful-but-useless handshake is cheap to tolerate. Not designed here.
-- **The CA private key's own custody mechanics** (Decision 2) — "store it the way the
-  deployment already stores its other secrets" names a posture, not an implementation; which
-  secret-storage convention that actually is depends on how `docker-compose`/self-hosting
-  config already works, which this ADR does not re-derive.
-- **CA rotation** — if the deployment's own CA key is ever rotated (suspected compromise, a
-  long-lived deployment's routine hygiene), every already-issued agent certificate needs a
-  story for staying trusted or being re-issued against the new CA. Not designed here; the
-  new CA endpoint and `--renew` give a mechanism a future design could build on, but the
-  actual rotation procedure is not this ADR's job.
+  nginx's own mTLS handshake still completes for a revoked certificate; closing that needs a
+  revocation list nginx checks per connection, or certificate lifetimes short enough that a
+  successful-but-useless handshake is cheap to tolerate. Not designed here.
+- **Hardening the CA key's storage beyond a mounted file** (Decision 2) — a read-only file
+  mounted only into the `server` container is the posture decided here. Moving it into an
+  HSM or a KMS the server signs through is a later option for deployments that need it;
+  nothing in this design depends on the key being a plain file.
+- **CA rotation** — the incident response to a leaked CA key (Context), and routine hygiene
+  for a long-lived deployment: every already-issued agent certificate needs a story for
+  staying trusted or being re-issued against the new CA. Not designed here, but the pieces
+  this ADR ships are what one would use: nginx already reads a CA *bundle* (Decision 2), so
+  old and new CA can be trusted side by side while `--renew` moves the fleet over, then the
+  old one dropped. Until that procedure exists, a leaked key's only remedy is re-enrolling
+  every host against a fresh CA.
+- **Per-tenant CAs** — one CA per tenant, with the backend checking the certificate's issuer
+  against the `Agent`'s tenant, would narrow a leaked key to one tenant's agents. Not done:
+  every tenant's key would still sit in the same server process, so it narrows a leak of one
+  key file, not a server compromise, and it needs nginx to forward the issuer DN. Worth
+  revisiting if a deployment ever hosts mutually distrusting tenants.
 - **Multi-server / high-availability deployments** — this ADR assumes the CA key is held by
   "the server process," singular. A deployment running more than one server instance behind
   a load balancer needs the signing capability (and the key) reachable from whichever
@@ -300,7 +413,7 @@ narrower ask than ADR-0027's, not a weaker version of the same one.
   it.
 - `docs/operations/binary-releases.md` — today's manual certificate loading, the
   `server.ca_cert`/`--ca-cert` mechanism `agent enroll` reuses to verify the server
-  (Decision 3), and the `offline_fallback` degrade path Decision 4's expired-certificate case
-  reuses as-is.
+  (Decision 3), and `server.offline_fallback`, which covers a missing certificate but not
+  an expired or revoked one (Decision 4).
 - `docs/architecture/control-plane.md` — the heartbeat/ingest contract doc this ADR's
   "enrollment/PKI" section (once written) belongs in.
