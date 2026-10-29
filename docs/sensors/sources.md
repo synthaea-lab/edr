@@ -30,8 +30,7 @@ per-platform tables below carry the detail behind every cell.
 
 **Legend:** ✅ used · 🔨 built (runtime prerequisite outstanding) ·
 📋 planned (issue filed) · 🔍 evaluated (matrix) · ⭕ gap (no mechanism
-evaluated yet) · ❌ rejected (the reason is in the platform's table) ·
-— not applicable · 🟡\* telemetry lands, detection content
+evaluated yet) · — not applicable · 🟡\* telemetry lands, detection content
 pending (the coverage packs #376–#381 — see
 [attack-coverage.md](../detection/attack-coverage.md))
 
@@ -44,7 +43,7 @@ pending (the coverage packs #376–#381 — see
 | **DNS**<br><sub>TA0011 C2</sub> | 📋 #267 | ✅ ETW | 🔨 NE |
 | **Lateral-movement services**<br><sub>TA0008</sub> | 🟡* SSH-out content | ✅ SMB + WMI + BITS | 🟡* SSH-out content |
 | **Encrypted traffic**<br><sub>TA0011 C2 · TA0010 Exfil</sub> | ✅ uprobes · 📋 JA4 #86 | 📋 #373 | 📋 #360 |
-| **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | ❌ shell input (#374) · ✅ ES exec argv |
+| **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | ✅ ES exec argv (shell input: rejected, #374) |
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
 | **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL + RDP sessions | ✅ ES + log |
 | **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · 📋 #266 setuid | 🟡* UAC content | ✅ sudo · 📋 #356 native |
@@ -210,8 +209,7 @@ gap.
 | **Network** | ES · mount | mount/unmount (DMG delivery, USB staging) → v21 `Mount` | ✅ used | staging, evidence destruction | #96 |
 | **DNS** | NE · DNS-proxy | proxied query/response with process attribution → `DnsQuery` (RCODE in `status`) | 🔨 built | T1071.004, domain↔process join | #33/#351 |
 | **Encrypted traffic** | NE · filter-data | TLS ClientHello peek → SNI + JA4 (Linux #86 parity) | 📋 planned | C2 fingerprints | #360 |
-| **Scripts & shells** | ES · exec + file events | every command that execs, with full argv (`bash -c`, `osascript -e`, pipelines); a builtin's side effects (the file a redirection writes, via ES; the connection, via NE once #351 lands) | ✅ used | T1059.004 | #32 |
-| **Scripts & shells** | none supported | interactive shell input, Linux #90 parity: the text typed at a prompt, including builtins that never exec (`cd`, `source`, `eval`, functions, `ztcp`). No supported, deployable mechanism exists; see Rejected below. Session context (which pty, which login) comes from ES pty events (#355) | ❌ rejected | T1059 | #374 |
+| **Scripts & shells** | ES · exec + file events | every command that execs, with full argv (`bash -c`, `osascript -e`, pipelines); a builtin's side effects (the file a redirection writes, via ES; the connection, via NE once #351 lands). Interactive shell input (Linux #90 parity: builtins that never exec, such as `cd`, `source`, `eval`, functions, `ztcp`) has no supported, deployable mechanism and is rejected; the reasons are under Rejected below (#374). Session context (which pty, which login) will come from ES pty events once #355 (planned) lands | ✅ used | T1059.004 | #32 |
 | **Memory & injection** | ES · widening | task-port acquisition, ptrace, remote thread creation, CS invalidation, suspend/resume, RWX mprotect, pty — the coverage-matrix promise #32/#96 only partially landed | 📋 planned | T1055, T1562 | #355 |
 | **Identity & privilege** | ES · sessions | SSH/console/loginwindow logins → `Auth` (13+) | ✅ used | T1078 | #96 |
 | **Identity & privilege** | unified log · sudo | sudo outcomes → `Auth`; ES-native su/sudo supersedes on 14+ | ✅ / 📋 | T1548.003 | #95; #356 |
@@ -237,7 +235,7 @@ gap.
 | openbsm audit trail | deprecated; ES supersedes |
 | FSEvents | coarser than ES file events; no attribution |
 | DTrace | requires SIP disabled — a dev-machine tool by construction, not deployable telemetry. This is also why the `pid` provider cannot stand in for Linux's readline uprobes (#374) |
-| Interposing the shell's line editor (`DYLD_INSERT_LIBRARIES` into `zsh`/`bash`) | `/bin/zsh` and `/bin/bash` are SIP-protected platform binaries, and dyld drops `DYLD_*` variables for them. Even where it loads, it is the in-process hooking the Windows table rejects (#374) |
+| Interposing the shell's line editor (`DYLD_INSERT_LIBRARIES` into `zsh`/`bash`) | for the system shells it does not load: `/bin/zsh` and `/bin/bash` are SIP-protected platform binaries, and dyld drops `DYLD_*` variables for restricted binaries (SIP-protected, or hardened-runtime and entitled ones). A user-installed shell (Homebrew `bash`/`zsh`) is not restricted and was not evaluated further: it would load there, but it is the in-process hooking the Windows table rejects, and the user can switch back to the system shell, which it cannot reach (#374) |
 | A `preexec` hook in `/etc/zshrc` (or `/etc/bashrc`) | it runs inside the user's own shell, so what it reports can be forged by the user it watches. `zsh -f` or `bash --norc` skips it, and an OS update may replace Apple's file. It is a shell setting, not a sensor (#374) |
 | Shell history files (`~/.zsh_history`, `~/.zsh_sessions/`) | the shell writes them when it chooses (by default at exit), and the user controls whether it does (`unset HISTFILE`, `kill -9 $$`). Clearing history is itself T1070.003. ES file events already see the writes and deletes, so this is DFIR material pulled on demand, not streaming telemetry (#374) |
 | Keystroke capture (`CGEventTap`, IOHID) | the privacy line, same as on Windows. It also needs a TCC Input Monitoring grant (#374) |
