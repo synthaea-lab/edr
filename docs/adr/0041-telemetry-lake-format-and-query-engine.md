@@ -107,16 +107,35 @@ agent keeps its contract (`2xx` drops the segment).
 - Everything in "Measurements owed" is unmeasured; the engine and the hot-window design are
   assumptions until it is.
 
-## Decisions only the owner can make
+## Decisions taken under the owner's delegation, 2026-10-29
 
-- [ ] **Engine:** DuckDB in process (proposed), or ClickHouse.
-- [ ] **Object store** for a self-hosted install (MinIO proposed) and which cloud object store for a
-  hosted one.
-- [ ] **Retention defaults** per tenant, and whether a tenant may set zero (keep nothing).
-- [ ] **Crypto-shredding** (a per-tenant data key whose destruction makes the files unreadable) in
-  addition to prefix deletion. It strengthens "provable" against provider backups and costs key
-  management; not proposed for the first slice.
-- [ ] **ADR-0025 point 9** (ad-hoc search), which #933 also waits on through #910.
+The owner said "prends les décisions sur l'ADR pour 77". Taken by session edr-repo-49. The status of
+this ADR stays **proposed**: acceptance is the owner's, on the PR. Each decision below is reversible
+before code exists; the ones that stop being reversible once data is written say so.
+
+- **Engine: DuckDB in process, on a worker.** Parquet is the contract, not DuckDB: the files stay
+  readable by ClickHouse, so choosing the engine now does not lock the data. The exit is the one in
+  "Alternatives considered", taken if the measurements owed below show the in-process engine does
+  not hold over an object store.
+- **Object store: the S3 API is the interface, MinIO is what the self-hosted compose runs.** The
+  server talks to "an S3-compatible endpoint, bucket and credentials" from its configuration, and
+  nothing else. **Not decided here:** which hosted provider or account, because that is a fact about
+  accounts and vendors (as the custody of #753), not a design choice.
+- **Retention default: 90 days per tenant, set per tenant, from 0 to 365 days.** `0` means the writer
+  skips that tenant (nothing is kept). Provisional: a number chosen without a compliance requirement
+  or a measured volume, to be revisited with both. Lowering a tenant's retention deletes at the next
+  job run; raising it never brings back what was deleted.
+- **Crypto-shredding: not in the first slice.** Prefix deletion with an audit row is what is built.
+  Revisit when a customer or a regulation asks to survive provider backups, since it adds key
+  management for every tenant.
+- **ADR-0025 point 9: already confirmed on 2026-10-21** under the same delegation (comment on #910),
+  so it no longer blocks #933. Not a decision of this ADR.
+- **What the lake stores: everything the agent uploads, `file_open` included, for the first slice.**
+  The lake is the ground truth, and sampling at the agent or filtering in the writer would make the
+  archive unable to answer questions nobody has asked yet. This is the decision that stops being
+  reversible as data is written (what was never stored cannot be recovered). It is revisited after
+  one measurement on a real host over a day, since `file_open` was 90 % of the bytes in the lab run
+  below, and the writer may then drop or sample it behind a per-type setting.
 
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
