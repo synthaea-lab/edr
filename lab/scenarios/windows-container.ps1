@@ -144,15 +144,28 @@ function Assert-Prerequisites {
     Invoke-Native docker @("pull", "-q", $Image)
 }
 
-function Invoke-ContainerScenario {
+# The first processes of a container start before the Host Compute Service lists
+# them, and a failed lookup is retried only after the sensor's RETRY_NS (10 s,
+# silo.rs). A fixed sleep shorter than that races the short-lived `docker exec`
+# below; wait until an event carries the container id instead (bounded), or,
+# with no agent to watch, past one retry window.
+function Wait-ContainerMapped($Agent, [string]$Id) {
+    if (-not $Agent) { Start-Sleep -Seconds 12; return }
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        if (Select-String -LiteralPath $Agent.Events -SimpleMatch $Id -Quiet) { return }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Host "warning: no event carried the container id within 30 s; the exec check may fail" -ForegroundColor Yellow
+}
+
+function Invoke-ContainerScenario($Agent) {
     docker rm -f $Name 2>$null | Out-Null
     Write-Host "docker run --isolation=process $Image (ping -t, kept running)"
     $id = (docker run -d --isolation=process --name $Name $Image cmd /c "ping -t 127.0.0.1").Trim()
     if ($LASTEXITCODE -ne 0 -or $id -notmatch '^[0-9a-f]{64}$') { throw "docker run failed: $id" }
     Write-Host "container id $id"
-    # The first processes of a container start before the Host Compute Service
-    # lists them; the sensor's lookup retries, and these runs come after.
-    Start-Sleep -Seconds 6
+    Wait-ContainerMapped $Agent $id
     Write-Host "docker exec $Name hostname.exe (exits at once)"
     Invoke-Native docker @("exec", $Name, "hostname.exe")
     Write-Host "hostname.exe on the host"
@@ -249,7 +262,7 @@ logman stop $TraceName -ets 2>$null | Out-Null
 Invoke-Native logman @("start", $TraceName, "-p", "Microsoft-Windows-Kernel-Process", "0x4000", "-ets", "-o", "$dir\silo.etl")
 try {
     if ($AgentExe) { $agent = Start-ScenarioAgent $dir }
-    $run = Invoke-ContainerScenario
+    $run = Invoke-ContainerScenario $agent
     # @(): a function's one-element array comes back unrolled to a bare string, and
     # Test-Scenario's $SiloIds[0] then reads its first character ("2" of "220").
     $siloIds = @(Show-SiloDiagnostics $dir)

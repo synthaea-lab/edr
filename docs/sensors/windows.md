@@ -50,6 +50,7 @@ neither the object-manager link nor which volume a container process's file
 events land on. A sibling needs one of the two: the container's own volume per
 silo (so a containerized write to a host volume is the signal), or
 symbolic-link telemetry from the driver work (#136, #39).
+
 **Status (issue #725, process incarnation):** `EventMeta::process_generation` and
 `parent_process_generation` (#519) carry the kernel's process sequence number, unique
 per process for the boot. Exec events take both from Kernel-Process `ProcessStart` v4+
