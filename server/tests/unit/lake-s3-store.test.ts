@@ -4,8 +4,9 @@ import { FsLakeStore, lakeEnabled } from "@/lib/lake-store";
 import { S3LakeStore } from "@/lib/lake-s3-store";
 import { lakeStoreFromEnv } from "@/lib/lake-env";
 
-/** An in-memory bucket behind the one method the store uses, with pages of two and injectable delete errors. */
-function fakeBucket(opts: { deleteErrors?: { Key: string; Code: string }[] } = {}) {
+/** An in-memory bucket behind the one method the store uses, with pages of two and injectable delete errors (per key, or a whole request failing on its nth call). */
+function fakeBucket(opts: { deleteErrors?: { Key: string; Code: string }[]; failDeleteCall?: number } = {}) {
+  let deleteCalls = 0;
   const objects = new Map<string, Uint8Array>();
   const sent: { name: string; input: Record<string, unknown> }[] = [];
   const client = {
@@ -28,7 +29,10 @@ function fakeBucket(opts: { deleteErrors?: { Key: string; Code: string }[] } = {
         };
       }
       if (command instanceof DeleteObjectsCommand) {
-        for (const o of c.input.Delete.Objects) objects.delete(o.Key);
+        deleteCalls += 1;
+        if (opts.failDeleteCall === deleteCalls) throw new Error("connection reset");
+        const failing = new Set((opts.deleteErrors ?? []).map((e) => e.Key));
+        for (const o of c.input.Delete.Objects) if (!failing.has(o.Key)) objects.delete(o.Key);
         return { Errors: opts.deleteErrors };
       }
       throw new Error(`unexpected command ${c.constructor.name}`);
@@ -54,7 +58,7 @@ describe("S3LakeStore", () => {
     expect(Array.from(objects.keys())).toEqual([`prod/telemetry/${KEY("t1")}`]);
     expect(await store.list("")).toEqual([{ key: KEY("t1"), size: 4 }]);
     expect(await store.list("tenant=t1/")).toEqual([{ key: KEY("t1"), size: 4 }]);
-    await store.delete([KEY("t1")]);
+    expect(await store.delete([KEY("t1")])).toEqual({ deleted: [KEY("t1")], failed: [] });
     expect(objects.size).toBe(0);
   });
 
@@ -93,9 +97,27 @@ describe("S3LakeStore", () => {
     expect(sent[0].input.Delete).toMatchObject({ Quiet: true });
   });
 
-  it("fails when S3 reports a per-key delete error, which a 200 would otherwise hide", async () => {
-    const { client } = fakeBucket({ deleteErrors: [{ Key: KEY("t1"), Code: "AccessDenied" }] });
-    await expect(new S3LakeStore({ bucket: "lake", client }).delete([KEY("t1")])).rejects.toThrow(/1 of 1 keys.*AccessDenied/);
+  it("reports a per-key delete error, which a 200 answer would otherwise hide, and the keys that did go", async () => {
+    const { client, objects } = fakeBucket({ deleteErrors: [{ Key: KEY("t1", "2026-10-29", "b"), Code: "AccessDenied" }] });
+    const store = new S3LakeStore({ bucket: "lake", client });
+    for (const n of ["a", "b", "c"]) await store.put(KEY("t1", "2026-10-29", n), new Uint8Array(1));
+    const result = await store.delete(["a", "b", "c"].map((n) => KEY("t1", "2026-10-29", n)));
+    expect(result.deleted).toEqual([KEY("t1", "2026-10-29", "a"), KEY("t1", "2026-10-29", "c")]);
+    expect(result.failed).toEqual([{ key: KEY("t1", "2026-10-29", "b"), error: "AccessDenied" }]);
+    expect(Array.from(objects.keys())).toEqual([KEY("t1", "2026-10-29", "b")]);
+  });
+
+  it("when a later batch fails outright, keeps the earlier batches as deleted and does not try the rest", async () => {
+    const { client, objects, sent } = fakeBucket({ failDeleteCall: 2 });
+    const store = new S3LakeStore({ bucket: "lake", client });
+    const keys = Array.from({ length: 2500 }, (_, i) => KEY("t1", "2026-10-29", `f${i}`));
+    for (const k of keys.slice(0, 5)) objects.set(k, new Uint8Array(1));
+    const result = await store.delete(keys);
+    expect(result.deleted).toHaveLength(1000);
+    expect(result.failed).toHaveLength(1500);
+    expect(result.failed[0]).toEqual({ key: keys[1000], error: "connection reset" });
+    expect(result.failed[1000].error).toBe("not attempted: connection reset");
+    expect(sent.filter((s) => s.name === "DeleteObjectsCommand")).toHaveLength(2);
   });
 
   it("refuses a key that could escape, before sending anything", async () => {

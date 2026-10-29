@@ -1,5 +1,5 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
-import { assertSafeKey, type LakeStore } from "@/lib/lake-store";
+import { assertSafeKey, type DeleteResult, type LakeStore } from "@/lib/lake-store";
 
 /**
  * The lake on an S3-compatible object store (issue #77, ADR-0041): AWS S3, or MinIO in the
@@ -75,21 +75,34 @@ export class S3LakeStore implements LakeStore {
     return out.sort((a, b) => (a.key < b.key ? -1 : 1));
   }
 
-  async delete(keys: string[]): Promise<void> {
+  async delete(keys: string[]): Promise<DeleteResult> {
     for (const key of keys) assertSafeKey(key);
+    const result: DeleteResult = { deleted: [], failed: [] };
     for (let i = 0; i < keys.length; i += DELETE_BATCH) {
       const batch = keys.slice(i, i + DELETE_BATCH);
-      const res = await this.client.send(
-        new DeleteObjectsCommand({
-          Bucket: this.bucket,
-          Delete: { Objects: batch.map((key) => ({ Key: this.full(key) })), Quiet: true },
-        })
-      );
+      let res;
+      try {
+        res = await this.client.send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucket,
+            Delete: { Objects: batch.map((key) => ({ Key: this.full(key) })), Quiet: true },
+          })
+        );
+      } catch (e) {
+        // The request itself failed (network, credentials, a 5xx): nothing is known about this batch, and the
+        // ones after it are not tried. Earlier batches are already gone and stay in `deleted`.
+        const error = e instanceof Error ? e.message : String(e);
+        for (const key of keys.slice(i)) result.failed.push({ key, error: key === batch[0] || batch.includes(key) ? error : `not attempted: ${error}` });
+        return result;
+      }
       // DeleteObjects answers 200 with a per-key error list: a missing key is not an error in S3, anything else is.
-      if (res.Errors && res.Errors.length > 0) {
-        const first = res.Errors.slice(0, 3).map((e) => `${e.Key}: ${e.Code}`).join("; ");
-        throw new Error(`S3 delete failed for ${res.Errors.length} of ${batch.length} keys (${first})`);
+      const errors = new Map((res.Errors ?? []).map((e) => [e.Key, `${e.Code}${e.Message ? `: ${e.Message}` : ""}`] as const));
+      for (const key of batch) {
+        const error = errors.get(this.full(key));
+        if (error === undefined) result.deleted.push(key);
+        else result.failed.push({ key, error });
       }
     }
+    return result;
   }
 }
