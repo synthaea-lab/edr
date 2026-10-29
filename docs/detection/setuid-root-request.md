@@ -51,6 +51,19 @@ What the telemetry is: the call at syscall **entry**, `meta.user` the caller's r
   **Their real operation was not exercised**, so `pkexec`, the polkit helper, `newuidmap` and
   container tooling may alert: the reason for Low and a provisional list.
 
+**The image is the one the pid had at the request's time, and the judgment waits for it.** Jihair54
+live-tested the first version on Fedora (A/B, quiet against an exec burst, on #1054): the exec event
+reaches the rules after the raw identity events of the same process, so reading the pid's image on
+arrival saw its *previous* exec (`bash -c '... sudo ...'`), its *next* one (sudo's child calls
+`setuid(0)` before it execs `unix_chkpwd`) or none, and then the parent's, so every `sudo` run from a
+shell under load alerted as `/usr/bin/bash`, and sudo's forked children alerted too. A request is now
+queued (the pre-filter runs first, so the queue is small), kept in a bounded queue of 1024, and judged
+once the stream clock (the latest timestamp of any identity or exec event) is 5 s past it
+(`IDENTITY_DEFER_NS`), against the latest exec of the pid, else of its parent, with a timestamp at or
+before the request. The 5 s is a bound on the exec's latency and is **not measured**: an exec that
+arrives later is not seen and the request is silent. A host where nothing else happens does not move
+the clock, so a finding waits for the next event; requests still queued at shutdown are not judged.
+
 A child that forked and never exec'd takes its **parent's** image (`reader_image`), so the forked winner
 of a race-window exploit alerts as the exploit and `sshd`'s privilege-separated children resolve to
 `sshd-session`; only one level of fork is followed.
