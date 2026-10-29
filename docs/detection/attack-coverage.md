@@ -20,6 +20,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1047 | 3 | `sigma:rules/sigma/windows/wmic_remote_process_inline_password.yml` |
 | T1059 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/linux/susp_tmp_exec.yml`, `sigma:rules/sigma/windows/susp_appdata_exec.yml`, `sigma:rules/sigma/windows/web_server_spawned_interpreter.yml` |
 | T1059.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/browser_spawned_interpreter.yml`, `sigma:rules/sigma/windows/iis_worker_spawned_interpreter.yml`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml`, `sigma:rules/sigma/windows/powershell_encoded.yml` |
+| T1059.002 | 3 | `rules:crates/rules/src/osascript.rs` |
 | T1059.004 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/reverse_shell.yml`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml` |
 | T1204 | 3 | `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml` |
 
@@ -76,6 +77,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1003.003 | 3 | `sigma:rules/sigma/windows/ntds_ifm_export.yml` |
 | T1003.004 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
 | T1003.008 | 3 | `rules:crates/rules/src/credfiles.rs`, `sigma:rules/sigma/linux/shadow_file_copy.yml`, `sigma:rules/sigma/linux/unshadow_live_password_databases.yml` |
+| T1056.002 | 3 | `rules:crates/rules/src/osascript.rs` |
 | T1110 | 3 | `rules:crates/rules/src/state.rs` |
 | T1552 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1552.001 | 3 | `rules:crates/rules/src/credfiles.rs` |
