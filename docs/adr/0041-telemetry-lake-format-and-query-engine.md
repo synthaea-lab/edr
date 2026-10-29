@@ -104,6 +104,17 @@ agent keeps its contract (`2xx` drops the segment).
 - The deployment gains an object store. For a self-hosted install that is a MinIO (or any
   S3-compatible service); this is a decision of the owner's (below).
 - Provable deletion is real for the lake bucket and stated as such, not for the provider's backups.
+- **The ingest queue is unbounded, and it lives in Postgres.** Decision 3 queues each accepted batch
+  in a Postgres table until the writer drains it. If the writer is not scheduled, or the object
+  store is down, nothing drains it and the table grows without limit in the system of record that
+  this ADR says stays separate from the lake: a lake outage becomes a database-disk problem for the
+  detections and cases too. **Unresolved.** The options each cost something: refuse ingest (`503`)
+  past a bound, which makes a lake outage an ingest outage and the agents spool; drop the oldest
+  queued batches, which loses telemetry silently unless it is counted and alerted; or leave it
+  unbounded and alert on queue depth, which delays the problem. The first slice (`lib/lake-writer.ts`)
+  does none of them: it returns `remaining` from the writer's cron so a growing queue is visible, and
+  queues nothing while `LAKE_DIR` is unset. A bound, and what happens at it, is a decision for the
+  slice that adds compaction, and needs a measured queue depth under an outage to size.
 - Everything in "Measurements owed" is unmeasured; the engine and the hot-window design are
   assumptions until it is.
 
