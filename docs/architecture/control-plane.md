@@ -80,8 +80,12 @@ The three `rarity_*` fields, the four fields after them (#863) and the three `io
 beacon without them (an older agent) as zeros, and an older server ignores them. The ops fleet
 table shows the rarity ones in one "Rarity evidence" column ("N applied, N withheld, N lost") and
 the others in "Watchdog restarts", "Tamper events" and "Parent images evicted" ("N live, N
-exited"). **None of the four makes a host `degraded`**: they are information about the agent's
-self-protection and a cache, not lost telemetry, and the live evictions lose one field of one
+exited"). The three `ioc_*` fields are one "IOC feed" column: "no feed" while `ioc_indicators` is 0
+(a host with no feed loaded, and an agent that predates the field, read alike), otherwise "N
+indicators, N findings", plus ", N repeats held back" once the cooldown has absorbed any. They are
+also in the `/api/ops/fleet` rows as `iocIndicators`, `iocFindings` and `iocCooledDown`.
+**None of these makes a host `degraded`**: they are information about the agent's
+self-protection, a cache and a feed, not lost telemetry, and the live evictions lose one field of one
 event, not an event. Making a rising tamper count or a restart loop a status of its own is a
 separate decision (#863). `transport`'s
 `heartbeat_body_is_the_documented_wire_shape` test pins this exact shape. A change that breaks it

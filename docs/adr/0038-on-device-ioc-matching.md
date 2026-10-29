@@ -125,13 +125,16 @@ sensors that produce them.
 ## Not decided, not built
 
 - **CIDR ranges, indicator expiry, and a confidence per indicator.**
-- **The schema variant `DetectionSource::Ioc`** (indicator and feed provenance, with fixtures; PR #1002).
-- **Wiring into the agent**: where hash matching sits on the exec and write path, and the shed
-  behaviour when it falls behind.
+- **File-write hashes.** The agent matches exec image hashes, connect and `NetworkFlow` addresses and DNS
+  queries (`docs/detection/ioc-matching.md`); `FileWriteEvent` carries a descriptor and a byte count, no
+  path and no hash, so nothing is matched on writes until a sensor reports one.
+- **Behaviour when the enrichment worker falls behind.** No shedding is defined for the hash lookup.
 - **Signed delivery** of sets (ADR-0016; blocked in production on #753) and most of the **server-side feed
-  pipeline**: only the builder (normalise, dedup, device rules, public-suffix gate) exists, see
-  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, CSV, expiry and per-tenant enablement do not.
-- A lab run with a seeded indicator, which #60's "done when" asks for.
+  pipeline**: the builder (normalise, dedup, device rules, public-suffix gate) and a CSV source exist, see
+  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, expiry, per-tenant enablement and publishing do not.
+- **Calibration** of the 64 MiB budget and the filter sizing against a fleet. The lab run with a seeded
+  indicator #60 asked for was done on 2026-10-26 (three indicators, three findings), which says nothing
+  about the budget.
 
 ## Consequences
 
