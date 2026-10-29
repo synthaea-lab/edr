@@ -153,6 +153,25 @@ ADR-0003's full role set as #89's own remaining items, not blockers here.
      their canonical encodings (same format, ordered by `timestamp, id`). That snapshot
      makes later edits to old rows detectable relative to the migration moment, while
      saying honestly that nothing vouches for them before it.
+   - **Tenants created after the migration.** A tenant needs its head and genesis row
+     before its first append, or `FOR UPDATE` locks nothing and the first row has no
+     `prevHash`. Two places guarantee it:
+     - **Eagerly, at creation.** `provisionTenant` (`server/lib/tenant-provisioning.ts`,
+       the only production path that creates a tenant) writes the tenant's
+       `AuditChainHead` and its genesis row (`seq = 1`, pre-chain count 0) in the same
+       transaction that creates the `Tenant`, `Organization` and owner `Member`, before
+       its own `tenant.create` audit row, which then chains as `seq = 2`. If any of it
+       fails, the whole provision rolls back: no tenant ever exists without a chain.
+     - **Lazily, as a safety net**, for a tenant made any other way (the hand-made tenant
+       `server/README.md` still describes, test fixtures). The append helper starts with
+       `INSERT INTO audit_chain_heads (tenant_id, seq, head_hash) VALUES ($1, 1,
+       $genesisHash) ON CONFLICT (tenant_id) DO NOTHING RETURNING tenant_id`. When it
+       returns a row, the same transaction inserts the genesis row that hash describes.
+       Either way it then takes `SELECT ... FOR UPDATE` on the head. Two concurrent first
+       appends cannot both bootstrap: the second blocks on the primary key until the
+       first commits, then its insert does nothing and it chains onto the first's
+       genesis. A failed bootstrap rolls back the write being audited with it, the same
+       rule as any append: no privileged write lands without its audit row.
    - **System actors.** `userId` stays a free string without a foreign key, as today.
      `"system"` is the reserved actor for scheduled jobs (the ring-health cron already
      uses it); any other non-human writer names itself the same way
@@ -183,8 +202,10 @@ it); `Case.assignedToUserId`; `CaseNote`, `CaseLink`, `AuditChainHead` models;
 `AuditLog.seq`/`prevHash`/`rowHash` and `@@unique([tenantId, seq])`; the `PATCH`,
 `close`, `reopen`, `notes` and `links` routes; one shared append helper every
 `auditLog.create` call site moves onto (fourteen today, across thirteen files, plus the
-new routes) so no route writes an unchained row; the canonical-encoding golden test; the `UPDATE`/`DELETE`
-trigger; `AuditLog → Tenant` as `onDelete: Restrict`; the genesis migration; a
+new routes) so no route writes an unchained row; the canonical-encoding golden test; the
+`UPDATE`/`DELETE` trigger; `AuditLog → Tenant` as `onDelete: Restrict`; the genesis
+migration; `provisionTenant` bootstrapping each new tenant's head and genesis row, with
+the append helper's `ON CONFLICT DO NOTHING` bootstrap as the fallback; a
 `verify-audit-chain` script.
 
 **Closes**, as a side effect: #89's "RBAC enforced on one privileged path end to end with
