@@ -105,6 +105,44 @@ describe("POST /api/content/release: nothing is published that an agent could no
     expect(db.auditLog.create).toHaveBeenCalledOnce();
   });
 
+  it("publishes an IOC feed and its version file as entries of type ioc (#60)", async () => {
+    const feedBytes = Buffer.from(`sha256:${"a".repeat(64)}\nip:203.0.113.9\n`);
+    const versionBytes = Buffer.from("2026-10-28\n");
+    const manifest = manifestFor({
+      entries: [
+        { path: "ioc/lab.txt", type: "ioc", sha256: sha(feedBytes), size: feedBytes.length },
+        { path: "ioc/VERSION", type: "ioc", sha256: sha(versionBytes), size: versionBytes.length },
+      ],
+    });
+    store(manifest, { feed: feedBytes, version: versionBytes });
+    const res = await publish(post(publishBody(manifest)));
+    expect(res.status).toBe(200);
+    expect(db.contentRelease.create).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a release whose rule entry sits under ioc/, which the agent would load as a feed (#60)", async () => {
+    const manifest = manifestFor({
+      entries: [{ path: "ioc/sneaky.txt", type: "rule", sha256: sha(RULE_V2), size: RULE_V2.length }],
+    });
+    store(manifest, { rule: RULE_V2 });
+    const res = await publish(post(publishBody(manifest)));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("ioc/");
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a release whose IOC feed has a line the device would skip (#60)", async () => {
+    const bad = Buffer.from("ip:127.0.0.1\n");
+    const manifest = manifestFor({
+      entries: [{ path: "ioc/lab.txt", type: "ioc", sha256: sha(bad), size: bad.length }],
+    });
+    store(manifest, { bad });
+    const res = await publish(post(publishBody(manifest)));
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain("unusable_address");
+    expect(db.contentRelease.create).not.toHaveBeenCalled();
+  });
+
   it("numbers the release after the ring's highest, rolled-back releases included", async () => {
     const manifest = manifestFor();
     store(manifest, GOOD_ARTIFACTS);

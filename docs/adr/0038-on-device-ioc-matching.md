@@ -122,6 +122,25 @@ needs "this host but not its children" has no way to say so, and we do not guess
 a real feed asks. The agent wiring (which DNS events feed `lookup_domain`) belongs to the
 sensors that produce them.
 
+## Delivery: an `ioc` content type
+
+Sets travel as signed content (ADR-0016) under a fourth content type, `ioc`: `ioc/<feed>.txt` and an
+optional `ioc/VERSION`. **No agent change is needed**: `crates/updater` keeps `type` as a plain string and
+the agent applies an entry by its path, so a signed `ioc/<feed>.txt` is written to
+`<content_root>/ioc/`, the directory the agent's IOC loader already reads. The manifest schema version
+does not change, and an agent that predates the loader stores the files and ignores them.
+
+Because the agent chooses by path and never by type, **the server pins the pairing at publish**
+(`iocEntryError`, `server/lib/content-publish.ts`): only an `ioc` entry may sit under `ioc/` (a `rule`
+named `ioc/x.txt` would otherwise load as a feed), an `ioc` entry must be a feed or the version file, and a
+feed must be one the device loads whole: every line a valid indicator under the device's own rules, no
+listed public suffix. The device skips a bad line without a word, so this is the only place anyone is told.
+Withdrawing a feed is a corrective release without the entry (ADR-0032): the file is removed and the set
+unloads at the next reload.
+
+Not decided here: who may publish an `ioc` entry (today, whoever may publish any content), and whether a
+feed needs a per-tenant switch before it reaches a host.
+
 ## Not decided, not built
 
 - **CIDR ranges, indicator expiry, and a confidence per indicator.**
@@ -129,9 +148,10 @@ sensors that produce them.
   queries (`docs/detection/ioc-matching.md`); `FileWriteEvent` carries a descriptor and a byte count, no
   path and no hash, so nothing is matched on writes until a sensor reports one.
 - **Behaviour when the enrichment worker falls behind.** No shedding is defined for the hash lookup.
-- **Signed delivery** of sets (ADR-0016; blocked in production on #753) and most of the **server-side feed
-  pipeline**: the builder (normalise, dedup, device rules, public-suffix gate) and a CSV source exist, see
-  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, expiry, per-tenant enablement and publishing do not.
+- **Signing the sets in production** (blocked on #753) and most of the **server-side feed pipeline**: the
+  builder (normalise, dedup, device rules, public-suffix gate) and a CSV source exist, see
+  `docs/detection/ioc-matching.md`; STIX/TAXII, MISP, expiry, per-tenant enablement and a step that
+  builds a feed and puts it in a release do not.
 - **Calibration** of the 64 MiB budget and the filter sizing against a fleet. The lab run with a seeded
   indicator #60 asked for was done on 2026-10-26 (three indicators, three findings), which says nothing
   about the budget.
