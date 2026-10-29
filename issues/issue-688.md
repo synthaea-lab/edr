@@ -19,7 +19,7 @@ callback is the follow-up that closes the exec → callback window.
 - `crates/schema/src/lib.rs` — `ExecEvent::image_file_id`; `SCHEMA_VERSION` 57 → 58
   (`tests/fixtures/v58/`, new `exec_image_file_id` golden)
 - `crates/enrich/src/lib.rs` — `path_identity`, `FileEnrichment::file_id`
-- `crates/sensors/windows/etw/src/providers.rs` (+ `Cargo.toml`) — records the identity at exec
+- `crates/sensors/windows/etw/src/{providers,winapi,lib}.rs` — records the identity at exec with its own FFI (`image_file_id`, `identity_token`): sensor crates may depend on `schema` only, so it cannot call `enrich`; a Windows agent test pins the two formats together
 - `crates/rules/src/signature_gate.rs` — `SignatureGatedAlert::unconfirmed_image`
 - `agent/src/enrich_queue.rs` — `image_confirmed`, applied to the gated alert
 - `docs/sensors/sources.md`, `docs/detection/download-provenance.md`
