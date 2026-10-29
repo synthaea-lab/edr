@@ -16,3 +16,6 @@ notes: >
   (`lab/captures/test-1044-20261029/`). Known limits measured the same day: a chain deeper
   than 8 directories reports its last 8 names behind `/...`; a name over 31 bytes is cut; a
   file on another mount than `/` (here `/tmp`, tmpfs) reports its path without the mount point.
+  Noise measured the same day with 3000-file `tar x`, `cp -a` and `rsync -a` (events on): one
+  alert per process per 60 s, so 7 alerts in total for the three, not ~2850; `rpm -ivh` of two
+  packages: events seen, no alert (`cpio` on the same files alerts). `lab/captures/test-1044-20261029/`.
