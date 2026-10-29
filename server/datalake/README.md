@@ -40,14 +40,25 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   tenant's events (counted as `droppedNoRetention`).
 - **Retention job.** `GET /api/cron/prune-lake` (`CRON_SECRET` bearer; run it once a day) deletes every
   `date=` partition whose age in UTC days has reached its tenant's retention (`0` keeps nothing, today
-  included) and writes one `lake_deletions` row per partition: tenant, date, file count, bytes, a
-  SHA-256 over the sorted `key:size` listing that was deleted, whether the prefix listed empty
-  afterwards, the run id and the time. The row has no foreign key to the tenant, so it outlives it. A
-  partition that still lists files after the deletion is recorded as not verified empty and the route
-  answers `500` with the counts. A `tenant=` prefix whose tenant is not in Postgres is **not** deleted:
-  it is counted as `orphanTenantPrefixes` and left for a person. Keys that are not a
-  `tenant=…/date=YYYY-MM-DD/…` partition are never touched. "Provable" means the audit row; it does
-  not reach a storage provider's backups or versioning (ADR-0041).
+  included), one partition at a time, and keeps a `lake_deletions` row for each:
+  - **Written before the deletion**, from the listing: tenant, date, file count, bytes, a SHA-256 over
+    the sorted `key:size` lines, run id, start time. If that row cannot be written the partition is not
+    deleted and waits for the next run.
+  - **Completed after it**, from what the prefix lists afterwards, not from what the store claimed: how
+    many files really went (`deleted_count`), how many are still there (`failed_count`), the first error,
+    whether the prefix listed empty (`verified_empty`), and `completed_at`.
+  - A row with `completed_at` null is a deletion that started and was never recorded as finished (a crash,
+    or the database going away): the files may or may not be gone.
+  - A failure on one partition is recorded and the run goes on to the next, so one bad tenant does not
+    stop the others. The route answers `500` with the counts and the first errors when any partition was
+    not fully deleted or could not be recorded.
+  - A partition that keeps failing adds one row per daily run: that is the signal.
+  - The row has no foreign key to the tenant, so it outlives it.
+  A `tenant=` prefix whose tenant is not in Postgres is **not** deleted: it is counted as
+  `orphanTenantPrefixes` and left for a person. Keys that are not a `tenant=…/date=YYYY-MM-DD/…`
+  partition are never touched. "Provable" means the audit row; it does not reach a storage provider's
+  backups or versioning (ADR-0041). `LakeStore.delete` reports `{ deleted, failed }` per key instead of
+  throwing, because by the time a later key fails the earlier ones are already gone.
 
 ## What is not built
 

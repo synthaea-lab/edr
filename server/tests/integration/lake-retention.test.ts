@@ -67,7 +67,7 @@ describe("lake retention against Postgres", () => {
 
     const rows = await prisma.lakeDeletion.findMany({ orderBy: { date: "asc" } });
     expect(rows.map((r) => r.date)).toEqual(["2026-07-21", "2026-09-28"]);
-    expect(rows.every((r) => r.tenantId === tenant.id && r.verifiedEmpty && r.objectCount === 1 && r.runId === result.runId)).toBe(true);
+    expect(rows.every((r) => r.tenantId === tenant.id && r.verifiedEmpty && r.objectCount === 1 && r.deletedCount === 1 && r.failedCount === 0 && r.error === null && r.completedAt !== null && r.runId === result.runId)).toBe(true);
     const gone = before.filter((f) => f.key.includes("date=2026-07-21"));
     expect(rows[0].manifestSha256).toBe(manifestHash(gone));
     expect(rows[0].bytes).toBe(BigInt(gone[0].size));
@@ -120,6 +120,32 @@ describe("lake retention against Postgres", () => {
     await store.put(`tenant=${tenant.id}/date=2020-01-01/type=exec/orphan.parquet`, new Uint8Array(1));
     expect(await pruneLake(prisma, store, NOW)).toMatchObject({ orphanTenantPrefixes: 1, partitionsDeleted: 0 });
     expect(await store.list(`tenant=${tenant.id}/`)).toHaveLength(1);
+  });
+
+  it("keeps a record of a partition it could not delete, and still does the others", async () => {
+    const [t1, t2] = [await createTestTenant(), await createTestTenant()];
+    const [a1, a2] = [await createTestAgent(t1.id), await createTestAgent(t2.id)];
+    await prisma.tenant.updateMany({ where: { id: { in: [t1.id, t2.id] } }, data: { lakeRetentionDays: 1 } });
+    await write(t1.id, a1.id, 10, 1);
+    await write(t2.id, a2.id, 10, 1);
+    // A read-only directory: unlink of a file in it fails with EACCES, a real removal error.
+    const [stuck] = await store.list(`tenant=${t1.id}/`);
+    const lockedDir = path.join(dir, stuck.key.replace(/\/[^/]+$/, ""));
+    const { chmod } = await import("node:fs/promises");
+    await chmod(lockedDir, 0o555);
+    try {
+      const result = await pruneLake(prisma, store, NOW);
+      expect(result).toMatchObject({ partitionsDeleted: 1, notEmpty: 1, failedPartitions: 1 });
+      expect(result.errors[0]).toMatch(/not fully deleted/);
+      expect(await store.list(`tenant=${t2.id}/`)).toEqual([]);
+      expect((await store.list(`tenant=${t1.id}/`)).map((f) => f.key)).toEqual([stuck.key]);
+      const t1row = await prisma.lakeDeletion.findFirstOrThrow({ where: { tenantId: t1.id } });
+      expect(t1row).toMatchObject({ objectCount: 1, deletedCount: 0, failedCount: 1, verifiedEmpty: false });
+      expect(t1row.error).toMatch(/EACCES|permission/i);
+      expect(t1row.completedAt).not.toBeNull();
+    } finally {
+      await chmod(lockedDir, 0o755);
+    }
   });
 
   it("runs through the cron route", async () => {
