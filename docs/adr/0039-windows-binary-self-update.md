@@ -457,6 +457,29 @@ without change. It does not revisit any Linux decision.
       this restart actually happens (Context), so there is no window where
       the service is simultaneously "promoted" and "running neither
       version."
+      **`sc stop` is not a stop; the step waits for one.** `sc stop` returns
+      once the SCM has *sent* `SERVICE_CONTROL_STOP`, typically with the
+      service still `SERVICE_STOP_PENDING`, and an `sc start` issued then
+      fails (`ERROR_SERVICE_ALREADY_RUNNING`), which would otherwise be read
+      as "vN cannot start" and ban a healthy release. So the restart is a
+      shared `stop_and_wait` routine, also used by `cmd_uninstall` and
+      `cmd_install` below. It reads the service's process id from
+      `QueryServiceStatusEx` *before* sending the stop, then waits, bounded
+      (30 s, above the stop handler's own `wait_hint`), for **both**
+      `SERVICE_STOPPED` and that process's exit. `SERVICE_STOPPED` is reported
+      by the process before it exits, and only its exit releases the open
+      handles on `versions\vN-1\` files. The outcomes are kept apart, because
+      only one of them says anything about `vN`:
+      - **Stopped in time:** `sc start` vN as below.
+      - **Not stopped in time (a slow or hung *old* watchdog):** this proves
+        nothing about `vN`, which has not run. `apply-release` does **not**
+        ban `vN`. It reverts `binPath`/`current` to the prior target (steps
+        2 and 4 reversed, still inside the ACL bracket), leaves the old
+        service to finish stopping and come back through its normal restart
+        path, and exits with a distinct "previous version did not stop" error
+        so the operator or timer can retry the same release later.
+      - **Stopped, then `sc start` fails:** the case below, the only one that
+        is about `vN` itself.
       **The SCM reads the exit code from `SetServiceStatus`, not the
       process's own exit code** — `dwWin32ExitCode` (or
       `dwServiceSpecificExitCode` with `dwWin32ExitCode` set to
@@ -471,7 +494,7 @@ without change. It does not revisit any Linux decision.
       rollback (Decision 5) is the opposite case and must report non-zero on
       purpose — the two paths share the mechanism and must not share the
       exit code.
-      **If `sc start` itself returns an error** — the SCM could not even
+      **If `sc start` itself returns an error after a confirmed stop** — the SCM could not even
       launch `versions\vN\watchdog.exe`, despite step 1's pre-flight check
       having run it successfully moments earlier (a race, a transient I/O
       error, or a dependency only missing under the SCM's own launch
@@ -517,20 +540,40 @@ without change. It does not revisit any Linux decision.
    Files\Synthaea`, must already be stopped and its binaries' handles
    released before `cmd_install`'s wipe step ever runs — otherwise deleting
    `versions\` can hit `ERROR_SHARING_VIOLATION` against a file the running
-   process still has open. `Product.wxs` must schedule
-   `RemoveExistingProducts` (which carries the old product's own
-   `ServiceControl` stop) early in `InstallExecuteSequence` — before
-   `InstallFiles` and before `cmd_install`'s own custom action — the
-   WiX-recommended major-upgrade ordering, and already required independently
-   so the old product's files are not locked when the new product installs
-   its own copies into `Program Files\Synthaea`; this ADR relies on the same
-   ordering, not a new one, for `versions\` as well. Given that ordering,
-   whatever the old service was running from is already gone by the time
-   `cmd_install` runs, so the wipe does not need its own stop-and-wait
-   logic. It still needs defined behavior for the residual case — a stray
-   handle from something other than the service itself (a crash-dumped
-   debugger, an antivirus scanner) — rather than silently assuming the
-   happy path always holds: a sharing violation deleting `versions\vN\`
+   process still has open. An earlier draft said MSI sequencing alone
+   guaranteed this, because `RemoveExistingProducts` "carries the old
+   product's own `ServiceControl` stop". That was wrong (review of #1012):
+   `Product.wxs` has no `ServiceControl`/`ServiceInstall`. It manages the
+   service through custom actions, and the old product's uninstall runs its
+   `UninstallService` action, i.e. the *old* `watchdog.exe uninstall`, whose
+   `cmd_uninstall` on `main` runs `sc stop`, ignores the result, and goes
+   straight to `sc delete`, with nothing waiting for the process to exit.
+   `CleanupInstallFolder`'s three-second `ping` is a guess, not a wait. So
+   the stop has to be made real in two places, because the code that runs
+   during an upgrade is the old version's:
+   - **`cmd_uninstall` uses `stop_and_wait`** (Decision 4 step 5) before
+     `sc delete`. That fixes every upgrade *from* a version that has it.
+   - **`cmd_install` does not trust its predecessor.** Before the wipe, it
+     waits for any process whose image is under
+     `%ProgramData%\Synthaea\versions\` to exit (process snapshot plus
+     `QueryFullProcessImageNameW`, the same 30 s bound), and if the service
+     still exists in the SCM (a pending delete) it runs `stop_and_wait` on
+     it first. This covers upgrades from today's versions, whose
+     `cmd_uninstall` does not wait. If something is still running from
+     `versions\` after the bound, the install fails with that process named
+     rather than wiping around it. It does not kill it: terminating the
+     running watchdog on a timeout would be a stop that goes around the
+     hardened service ACL (#103), the one path this design otherwise never
+     opens.
+
+   `RemoveExistingProducts` is still scheduled early in
+   `InstallExecuteSequence` (before `InstallFiles` and `cmd_install`'s custom
+   action), the WiX-recommended major-upgrade ordering, so the old product's
+   removal, and with it the old service's stop, comes first. That ordering is
+   necessary; the two waits above are what make it sufficient. The wipe
+   still needs defined behavior for the residual case, a stray handle from
+   something other than the service (a crash-dump debugger, an antivirus
+   scanner): a sharing violation deleting `versions\vN\`
    subdirectories is logged and left for the next successful run to retry,
    the same non-fatal posture Decision 5's own pruning already takes for
    exactly this error, since that content is replaceable bookkeeping, not a
@@ -765,7 +808,13 @@ without change. It does not revisit any Linux decision.
   ownership/reparse-point check `cmd_install` and every `apply-release` now
   both run against it, and a lineage-bookkeeping wipe (never the ban list)
   `cmd_install` performs on every install path (Decision 4's "MSI upgrade
-  and uninstall").
+  and uninstall"), preceded by a bounded wait for anything still running
+  from `versions\`.
+- A shared `stop_and_wait` (stop, then wait for `SERVICE_STOPPED` *and* the
+  service process's exit, 30 s bound) replaces the bare `sc stop` in three
+  places: `apply-release`'s restart (Decision 4 step 5, where a timeout reverts
+  without banning), `cmd_uninstall` (which today ignores `sc stop`'s result),
+  and `cmd_install`'s pre-wipe check.
 - First cross-platform exercise of the ADR-0015 manifest format: the build-time
   path normalization in Decision 2 is a small, real change to `release-tool`,
   and needs a fixture proving a manifest built with it still verifies
