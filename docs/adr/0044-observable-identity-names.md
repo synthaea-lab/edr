@@ -1,4 +1,4 @@
-# ADR-0043: The agent's observable names live in one module, and sensors are handed theirs
+# ADR-0044: The agent's observable names live in one module, and sensors are handed theirs
 
 - **Status**: proposed
 - **Date**: 2026-10-29
