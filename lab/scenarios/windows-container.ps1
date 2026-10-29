@@ -188,7 +188,7 @@ function Get-SiloTraceRecords([string]$Dir) {
         $eid = [int]$e.System.EventID
         if ($eid -lt 22 -or $eid -gt 26) { continue }
         $data = @{}
-        foreach ($d in $e.EventData.Data) { $data[$d.Name] = $d.'#text' }
+        foreach ($d in $e.EventData.Data) { $data[$d.Name] = ([string]$d.'#text').Trim() }
         $records += [pscustomobject]@{ Eid = $eid; JobId = $data["Job ID"]; ContainerId = $data["Container ID"] }
     }
     Write-Host ""
