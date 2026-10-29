@@ -16,3 +16,7 @@ Shape (tech locked by ADR at implementation, not here): object storage as the
 ground truth (partitioned by tenant/day/event-type, columnar format), a query engine
 over it, and a hot recent window for interactive latency. Retention is per-tenant
 policy; deletion is provable (compliance is a feature).
+
+Proposed design: [ADR-0041](../../docs/adr/0041-telemetry-lake-format-and-query-engine.md) (Parquet
+on object storage, queried in process; status **proposed**, the engine and the object store wait on
+the owner). Nothing is built yet.
