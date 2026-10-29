@@ -54,7 +54,14 @@ expansions, aliases, caret escapes, and unknown tool-specific options are not
 decoded. Unknown positional values are kept except for documented `net` forms.
 Command text in `ReadlineInput`, `ScriptBlock`, `AmsiContent`, and `WmiActivity`
 is outside this ADR and needs a separate design. Best-effort matching may also
-redact benign values following a recognized secret option.
+redact benign values following a recognized secret option. The tool is chosen
+from the image's basename alone (no path, hash, or signature check); the
+recognized general wrappers (sudo/doas/nohup, env, timeout, nice, `cmd`, a shell
+or PowerShell `-Command` string) are followed so the real command underneath is
+still matched, but a tool invoked under a name this module does not recognize
+(a renamed binary, an unlisted wrapper, an interpreter calling a library
+function instead of spawning a new process image) is not. This is a known gap
+of basename matching generally, not specific to any one shape (#843 review).
 
 ## Consequences
 

@@ -2,6 +2,8 @@ import crypto from "crypto";
 import { readFile } from "fs/promises";
 import path from "path";
 import { ContentManifest, loadManifestBytes } from "@/lib/content-manifest";
+import { buildFeed, isValidFeedName } from "@/lib/ioc-feed";
+import { isPublicSuffix } from "@/lib/public-suffix";
 
 /**
  * Publish-time checks for a content release (#665, the review of #782): everything an agent
@@ -25,14 +27,62 @@ export function isSafeArtifactPath(entryPath: string): boolean {
 }
 
 /**
+ * The IOC feeds an agent loads are every `*.txt` under `<content_root>/ioc/` plus an optional
+ * `ioc/VERSION` (`agent/src/ioc.rs`), picked by path: the agent never looks at an entry's `type`.
+ * So the pairing is enforced here, in both directions: only an `ioc` entry may sit under `ioc/`
+ * (a `rule` entry named `ioc/x.txt` would otherwise be loaded as a feed), and an `ioc` entry may
+ * only be a feed or the version file. A feed must also be one the device would load whole: every
+ * line a `sha256:`, `ip:` or `domain:` indicator that passes the device's own rules and the
+ * public-suffix check (`buildFeed`), because a bad line is skipped on the device without anyone
+ * being told, and a listed `co.uk` would flag a whole country. Returns the reason, or `null`.
+ */
+export function iocEntryError(entry: { path: string; type: string }, stored: Buffer): string | null {
+  const underIoc = entry.path.startsWith("ioc/");
+  if (entry.type !== "ioc") {
+    return underIoc
+      ? `Entry ${entry.path} is under ioc/, which only an entry of type "ioc" may be (the agent loads it as a feed whatever its type)`
+      : null;
+  }
+  if (!underIoc) return `Entry ${entry.path} has type "ioc" but is not under ioc/`;
+  const file = entry.path.slice("ioc/".length);
+  const text = stored.toString("utf8");
+  if (file === "VERSION") {
+    return /^[\x21-\x7e]{1,64}\n?$/.test(text)
+      ? null
+      : `Entry ioc/VERSION must be one line of 1 to 64 printable characters`;
+  }
+  const stem = file.endsWith(".txt") ? file.slice(0, -".txt".length) : "";
+  if (!isValidFeedName(stem)) {
+    return `Entry ${entry.path} is not a feed: expected ioc/<name>.txt with a name of lowercase letters, digits, ".", "_" or "-" (1 to 64 characters)`;
+  }
+  let result;
+  try {
+    result = buildFeed({ feed: stem, text, isPublicSuffix });
+  } catch (error) {
+    if (error instanceof RangeError) return `Feed ${entry.path} is refused: ${error.message}`;
+    throw error;
+  }
+  if (result.rejectedTotal > 0) {
+    const first = result.rejected[0];
+    return (
+      `Feed ${entry.path} has ${result.rejectedTotal} line(s) the device would refuse; ` +
+      `the first is line ${first.line}: ${first.reason} (${JSON.stringify(first.value)})`
+    );
+  }
+  return null;
+}
+
+/**
  * The manifest must be the one it is published as (bytes, schema with at least one entry,
- * ring and number), and every artifact it lists must already be in the store and hash to the
- * value the manifest signs.
+ * ring and number), and every artifact it lists must already be in the store under its own
+ * hash.
  *
- * The store (`storage/artifacts/<path>`) is keyed by path and shared across releases, so a
+ * The store (`storage/artifacts/<sha256>`, #804) is keyed by content hash, not by path: a
  * release that lists content an earlier release later modified (a corrective release over a
- * changed path) needs those earlier bytes put back first: otherwise every agent that applies
- * it gets a 502 on that fetch and the bad content stays (ADR-0032).
+ * changed path, ADR-0032) needs nothing restored first, since the earlier bytes never moved —
+ * they are still sitting under their own hash, wherever they were first uploaded. The only way
+ * this still refuses (422) is an artifact that was genuinely never uploaded under the hash the
+ * manifest lists.
  */
 export async function validatePublishable(input: {
   ring: string;
@@ -79,29 +129,38 @@ export async function validatePublishable(input: {
     };
   }
   for (const entry of manifest.entries) {
+    // `path` no longer addresses the store (the store is keyed by `sha256`), but it is
+    // still what the agent queries `/api/content/artifact` with and still needs to be a
+    // sane relative path for that, display, and the diff tooling.
     if (!isSafeArtifactPath(entry.path)) {
       return { ok: false, error: `Entry path ${JSON.stringify(entry.path)} is not a path inside the artifact store` };
     }
     let stored: Buffer;
     try {
-      stored = await readFile(path.join(process.cwd(), "storage", "artifacts", entry.path));
+      stored = await readFile(path.join(process.cwd(), "storage", "artifacts", entry.sha256));
     } catch (error) {
       if ((error as { code?: string }).code === "ENOENT") {
-        return { ok: false, error: `Artifact ${entry.path} is not in the store` };
+        return {
+          ok: false,
+          error: `Artifact ${entry.sha256} for ${entry.path} is not in the store`,
+        };
       }
       throw error;
     }
+    // Belt and braces: the file is looked up by its own claimed hash, so this can only
+    // fail if the bytes on disk were corrupted or the upload was mislabeled — never
+    // because a later release changed what lives at `entry.path` (#804).
     const actual = crypto.createHash("sha256").update(stored).digest("hex");
     if (actual !== entry.sha256) {
       return {
         ok: false,
         error:
-          `Artifact ${entry.path} in the store hashes to ${actual}, but the manifest lists ` +
-          `${entry.sha256}. The store is keyed by path and shared across releases: put the bytes ` +
-          `this release lists back at ${entry.path} first (a corrective release that restores ` +
-          `content a later release modified needs the earlier bytes back in the store).`,
+          `The artifact stored under ${entry.sha256} (for ${entry.path}) actually hashes to ` +
+          `${actual} — corrupted on disk or uploaded under the wrong name`,
       };
     }
+    const iocError = iocEntryError(entry, stored);
+    if (iocError !== null) return { ok: false, error: iocError };
   }
   return { ok: true, manifest };
 }

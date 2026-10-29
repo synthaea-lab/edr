@@ -22,3 +22,5 @@ notes: >
   `http_port_t`; `Listen 8081` fails with `make_sock: could not bind`), so use a port the policy
   allows, such as 8008, and pass it: `web-custom-logformat.sh http://127.0.0.1:8008`. The log goes
   to /var/log/httpd/custom-format.log.
+  Validated 2026-10-15 on Rocky Linux 9.8 (kernel 5.14.0-687, glibc 2.34, SELinux Enforcing, 0 AVC denials over the session), httpd 2.4.62, agent built static (musl) from main: `LOG-SOURCE ... 21 of 21 lines in the last
+  minute do not match the declared kind` (vhost on 8008, same reason as on Fedora).

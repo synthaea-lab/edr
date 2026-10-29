@@ -31,12 +31,72 @@ Most of the pipeline already exists — this documents the contract and names th
 - **Ring deployment**: content ships via canary rings (`updater`/policy), with per-ring
   detection/FP telemetry and automatic halt: the same guardrails as models (gated on the
   #30 lab run).
-- **Hunt graduation** (#618, gated on #61): `server/hunt` promotes a repeatedly-matching
-  hunt into a draft rule PR, closing the analyst to content loop. Nothing exists on the
-  hunt side yet (`server/hunt` is a README), so nothing is built for this.
+- **Hunt graduation** (#618): the assisted draft is built (below): `POST /api/hunts/[id]/graduate`
+  turns a saved hunt into a draft rule and its samples for a person to review and open as a
+  PR; a hunt's page has the buttons. The IOC-set draft (#934, below) is built for hashes, addresses
+  and domains. Not built: opening the PR from the server, a draft from the raw event archive
+  (`server/datalake`, #77), a Sigma draft from a hunt that matches events other than process
+  starts, and a YARA draft.
 
-### What a graduated draft will have to satisfy
-Derived from what CI enforces today, so the hunt side can be built to it:
+### The IOC-set draft (#934)
+`POST /api/hunts/[id]/graduate` with `{ kind: "ioc" }` (no platform, no negative: a set has
+neither) answers one file, `rules/ioc/<slug>.txt`, in the line format `crates/intel` loads
+(`docs/detection/ioc-matching.md`), and a `todo` list, or `422` with `problems`
+(`lib/hunt-ioc-draft.ts`). It writes nothing. The lines are the indicators the matched
+detections carry: the `sha256` of an `exec` event (when the enrichment hashed the image) and
+the destination address of a `connect` or `network_flow` event, sorted and listed once. An
+IPv4-mapped address is listed as IPv4, and loopback, unspecified and zoned addresses are left
+out, as the engine refuses them; the `todo` counts them. A matched detection says something
+suspicious happened, not that each value it names is bad, so the `todo` asks a person to drop
+the benign ones. **Domains** come from the `query` of a `dns_query` event, as queried
+(lowercased, one trailing dot dropped), and only if they pass the feed builder's rules
+(`normalizeDomain`) and are not a public suffix (`isPublicSuffix`, the check of #1011): a listed
+domain matches every name beneath it and the device carries no public-suffix list (ADR-0038
+section 6). The `todo` counts the names left out and warns that a domain line is wide.
+Each hash and domain carries a `#` comment with the tenant's fleet prevalence (`seen on N of M hosts,
+first <date>`, or `never seen on this fleet before`), marked `widespread: likely benign` when 5 or
+more hosts and 5% of the reporting hosts have it; nothing is dropped, the person decides. Addresses
+carry none (prevalence does not track them), and the `todo` says so. The path
+`rules/ioc/` is this draft's proposal: the directory does not exist yet, but CI already checks
+every `*.txt` in it (`crates/intel/tests/content.rs`: the engine takes every line;
+`server/tests/unit/ioc-content.test.ts`: the feed builder accepts it, public-suffix check included,
+no duplicate, a valid feed name). Delivery to agents waits on #753. A fixture
+(`server/tests/fixtures/ioc-draft-golden.txt`) is compared to the exporter's output by
+`tests/unit/hunt-ioc-draft.test.ts` and loaded whole by `crates/intel/tests/draft_golden.rs`,
+so the draft is checked against the engine the way the Sigma draft is checked against the
+content suite.
+
+### The assisted draft (#618)
+`POST /api/hunts/[id]/graduate` with `{ platform, negative? }` reads the detections of the
+hunt's newest finished run (`lib/hunt-graduation.ts`) and answers the two files and a `todo`
+list, or `422` with `problems`. It writes nothing. The hunt's query is not compiled into a
+rule, because it runs over the detection store, not over normalised events; the draft reads
+what it needs off the matched detections instead:
+
+- **Metadata:** the title is the hunt's name; the ATT&CK tag is the commonest technique id
+  among the matches (within the hunt's `techniques` when it has some); `level` is the hunt's
+  single severity, else the commonest one among the matches.
+- **Selection:** `Image|endswith` the matching sample's file name, and `CommandLine|contains`
+  the hunt's `text` when it is in the sample's command line. A hunt with no `text` gets an
+  image-only selection and a `todo` saying it is broad.
+- **Matching sample:** the newest matched `exec` event (with the hunt's text when it has
+  one). A hunt that matched no process start gets `problems`, not a guess.
+- **Negative sample:** sent as `negative`, or, when the hunt has a `text`, derived by taking
+  the text out of the matching command line and flagged `DRAFT` in its `note`. With neither,
+  `problems`. A negative that the draft's own selection would fire on is refused. This is
+  the one part a person must really supply: a derived negative proves the pipeline, not the
+  boundary of the rule.
+- **Placeholders a person fills:** `falsepositives` (a `TODO(analyst)` line, which the lint
+  accepts, so the `todo` list and the `# DRAFT` header are what say it is unfinished), the
+  tactic and coverage tags.
+
+The exporter reproduces the engine's verdict (the sample fires, the negative does not;
+case-insensitive, as `crates/sigma/src/eval.rs`), and a draft was checked against the real
+suite: `cargo test -p sigma --test content` passes with it in `rules/sigma/linux/` and fails
+naming the file when its sample is broken.
+
+### What a graduated draft has to satisfy
+Derived from what CI enforces today:
 
 1. **A rule file that loads**: Sigma limited to the supported subset (an unsupported
    construct is a hard load error naming it), the metadata above, in the right platform
@@ -46,10 +106,9 @@ Derived from what CI enforces today, so the hunt side can be built to it:
    no samples file fails naming both files, so an exporter emits the pair and nothing else
    has to be edited. A hunt's own matches are a natural source of the matching sample, but
    the negative sample (a benign lookalike) has to come from an analyst or from benign
-   telemetry the hunt also touched. **Still open for #618:** a hunt today queries the
-   *detection* store (technique, severity, a substring of the stored alert), not
-   normalised events, so it cannot be turned into a Sigma `selection` mechanically; the
-   exporter can fill the metadata and the matching sample and leave the selection to the
-   analyst, or wait for the raw event archive (`server/datalake`, #77).
+   telemetry the hunt also touched. The assisted draft above does exactly
+   this; its `selection` is read off one matched event, so it is a starting point (a hunt
+   queries the *detection* store, not normalised events), until the raw event archive
+   (`server/datalake`, #77) exists.
 3. **A human in the loop**: the draft enters the normal PR and review path; graduation
    never merges or ships content by itself.

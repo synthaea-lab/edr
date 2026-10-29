@@ -11,6 +11,17 @@ import { getTenantId, getUserId } from "@/lib/tenant";
 const ADMIN_ROLES = new Set(["owner", "admin"]);
 
 /**
+ * Whether a stored `Member.role` makes its holder an owner or admin. better-auth stores several
+ * roles as one comma-separated string (`updateMemberRole` accepts an array; its own checks split
+ * on ","), so a member given two roles must not be locked out of both just because the whole
+ * string never equals "admin" or "owner". The one predicate for the routes (`requireTenantAdmin`)
+ * and for the pages that decide what to show, so the two cannot drift apart.
+ */
+export function isAdminRole(role: string | null | undefined): boolean {
+  return (role?.split(",").map((r) => r.trim()) ?? []).some((r) => ADMIN_ROLES.has(r));
+}
+
+/**
  * Requires the caller to be an `owner` or `admin` member of their tenant's organization
  * (#803): a route whose docstring says "admin only" but only checked that a session existed
  * let any member of the tenant publish or roll back content fleet-wide. Refuses a plain
@@ -43,12 +54,7 @@ export async function requireTenantAdmin(
     select: { role: true },
   });
 
-  // better-auth stores several roles as one comma-separated string (`updateMemberRole`
-  // accepts an array; its own checks split on ",") — a member given two roles through
-  // better-auth's own API must not be locked out of both just because the whole string
-  // never equals "admin" or "owner".
-  const roles = member?.role.split(",").map((r) => r.trim()) ?? [];
-  if (!roles.some((r) => ADMIN_ROLES.has(r))) {
+  if (!isAdminRole(member?.role)) {
     return {
       response: NextResponse.json({ error: "Admin role required" }, { status: 403 }),
     };
