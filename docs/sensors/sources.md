@@ -46,7 +46,7 @@ pending (the coverage packs #376–#381 — see
 | **Scripts & shells**<br><sub>TA0002 Execution</sub> | ✅ uprobes | ✅ ETW (PowerShell + AMSI) | 📋 #374 (evaluate) |
 | **Memory & injection**<br><sub>TA0005 Evasion · TA0004 Priv-Esc</sub> | 📋 #265 | 📋 driver #137 | 📋 #355 |
 | **Logons & sessions**<br><sub>TA0001 Valid Accounts · TA0008</sub> | ✅ journald | ✅ WEL + RDP sessions | ✅ ES + log |
-| **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · 📋 #266 setuid | 🟡* UAC content | ✅ sudo · 📋 #356 native |
+| **Privilege elevation**<br><sub>TA0004 Priv-Esc</sub> | 🟡* sudo via journald · ✅ setuid to uid 0 (#1041, Low) | 🟡* UAC content | ✅ sudo · 📋 #356 native |
 | **Credential-attack shadow**<br><sub>TA0006 Cred Access</sub> | 🟡* shadow-file reads | ✅ LDAP recon (roasting targets, sweeps) · NTLM leaks/downgrades | 🟡* keychain reads |
 | **Account management**<br><sub>TA0003 T1136</sub> | 🟡* useradd content | ✅ WEL 4720 | 📋 #356 OD events |
 | **Services & autostart**<br><sub>TA0003 T1543/T1547</sub> | ✅ journald + rules | ✅ WEL 7045 + ETW registry | ✅ ES BTM |
@@ -99,7 +99,7 @@ gap.
 | **Scripts & shells** | eBPF · uprobes | interactive shell input (readline) incl. builtins that never exec | ✅ used | T1059 | #90 |
 | **Memory & injection** | eBPF · tracepoints | ptrace ops, `process_vm_*`, `/proc/*/mem` writes, `memfd_create`+exec (fileless) | 📋 planned | T1055, T1620 | #265 |
 | **Identity & privilege** | journald | sshd accept/fail, PAM sessions, sudo/su → `Auth` | ✅ used | T1078 | #93 |
-| **Identity & privilege** | eBPF · tracepoints | `setuid`/`setresuid`/`capset`/`setns` | 📋 planned | T1548, container escape | #266 |
+| **Identity & privilege** | eBPF · tracepoints | `setuid`/`setresuid`/`capset`/`setns` | ✅ setuid/setresuid (SETUID-ROOT-REQUEST) · 📋 capset/setns have no rule | T1548.001, container escape | #266, #1041 |
 | **Persistence & autostart** | journald + rules | systemd unit first-start (flagged approximation, documented); rc/cron/systemd path writes via the file stream | ✅ used | T1543.002, T1053.003 | #93 |
 | **OS security verdicts** | netlink · audit | SELinux AVC denials → `Event::PolicyDenial` (`mechanism: "selinux"`), live-confirmed on a real Enforcing kernel | ✅ used (telemetry only — not yet consumed by a rule/correlator) | T1562-adjacent | #297 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | module loads/unloads, `bpf(2)` loads (eBPF-rootkit visibility) | 📋 planned | T1547.006, T1562 | #264 |
