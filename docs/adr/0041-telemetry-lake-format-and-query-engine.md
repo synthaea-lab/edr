@@ -118,11 +118,32 @@ agent keeps its contract (`2xx` drops the segment).
   management; not proposed for the first slice.
 - [ ] **ADR-0025 point 9** (ad-hoc search), which #933 also waits on through #910.
 
-## Measurements owed
+## Measurements (2026-10-29, one lab run) and what is still owed
 
-Run on the lab before the engine is considered decided, and write the numbers here:
+One agent (`agent capture-events`, Fedora 43 lab VM, kernel 7.2.9) for 601 s under a synthetic loop
+(execs, file writes, DNS, connects every 0.2 s; capture in `lab/captures/test-77-20261029/`), then
+the events written as Parquet (zstd) in this ADR's layout with DuckDB 2.0.0 on the host, local disk.
 
-- Rows and bytes per agent per day from the lab fleet, to size files and compaction.
-- A hunt-style query over N days (the "Done when" of #77) against compacted and uncompacted days:
-  latency by file count.
-- The writer's lag under a flush of a full agent spool after an outage.
+| What | Result |
+|---|---|
+| Events, raw JSON-Lines | 480 484 events, 134.9 MB, about 800 events/s, about 280 B per event |
+| Share of volume | `file_open` 431 800 events (90 %, 120 MB), then `file_write` 24 732, `exec` 12 368, `socket_create` 4 560, `connect` 3 130, `identity_change` 2 256 |
+| Parquet, one file per (tenant, day, type) | 9.1 MB in 11 files: about 15x smaller than the JSON |
+| Parquet, one file per type per 10 s flush | 10.9 MB in 539 files |
+| Queries, compacted | count by type 2.8 ms; `exec` with `comm='bash'` (1 020 rows) 2.2 ms; one type partition with a `daddr` filter 2.4 ms; scan of a field inside the JSON column (`fd`) 113 ms |
+| Queries, 539 small files | 42.7 ms, 28.1 ms, 7.7 ms, 98.2 ms |
+
+What this supports: Parquet with typed columns plus the event as JSON is small and fast enough for a
+hunt-style query on one agent's 10 minutes; typed columns and partition pruning are what keep it
+fast, and a field read from the JSON column costs a full scan; many small files cost about an order
+of magnitude on the typed queries even on a local disk.
+
+What it does **not** support, and is still owed:
+- **Per agent per day.** The loop is synthetic and a `file_open` flood drives the volume. A day on a
+  real host, and the fleet's shape, are not measured; do not size storage from 800 events/s.
+- **Object store.** Everything ran on a local disk. Over S3 each file is a round trip, so the
+  539-file case is the optimistic one; compaction cadence cannot be chosen from these numbers.
+- **N days over several tenants**, the "Done when" of #77.
+- **Writer lag** after an outage flush.
+- `file_open` being 90 % of the bytes is a decision to take (sample, filter at the agent, or
+  keep): not made here.
