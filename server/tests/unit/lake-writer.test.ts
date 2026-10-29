@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parquetReadObjects } from "hyparquet";
 import type { PrismaClient } from "@prisma/client";
-import { FsLakeStore, assertSafeKey, lakeStoreFromEnv, type LakeStore } from "@/lib/lake-store";
+import { FsLakeStore, assertSafeKey, type LakeStore } from "@/lib/lake-store";
+import { lakeStoreFromEnv } from "@/lib/lake-env";
 import {
   OTHER_TYPE,
   dayOf,

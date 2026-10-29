@@ -34,8 +34,23 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   `event` (the event as JSON, after ingest's `JSON.parse`). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
-- **Store.** A directory (`FsLakeStore`): a mounted volume, with `put`, `list` and `delete`. Writes go
-  to a temporary name and are renamed; `delete` removes the directories it leaves empty.
+- **Store.** A directory (`LAKE_DIR`, `FsLakeStore`: a mounted volume) or an S3-compatible bucket
+  (`LAKE_S3_BUCKET`, `S3LakeStore`), both with `put`, `list` and `delete`. The directory store writes
+  to a temporary name and renames, and `delete` removes the directories it empties; an S3 PUT is
+  atomic. Setting both is refused. The lake is on when either is set.
+
+  | Variable | Meaning |
+  |---|---|
+  | `LAKE_S3_BUCKET` | The bucket. Required to use S3. |
+  | `LAKE_S3_ENDPOINT` | A custom endpoint (MinIO-like servers); unset for AWS S3. |
+  | `LAKE_S3_REGION` | Default `us-east-1`. |
+  | `LAKE_S3_ACCESS_KEY_ID`, `LAKE_S3_SECRET_ACCESS_KEY` | Set both or neither; neither uses the SDK's default credential chain (instance role, environment). |
+  | `LAKE_S3_PREFIX` | A key prefix inside the bucket, to share it. |
+  | `LAKE_S3_FORCE_PATH_STYLE` | `true` or `false`; defaults to `true` when an endpoint is set. |
+
+  **The bucket must not be versioned** (or its old versions must be aged out): on a versioned bucket a
+  delete leaves a delete marker and the bytes, so a `lake_deletions` row would say "verified empty"
+  about a prefix whose objects still exist. The store does not check this.
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
   tenant's events (counted as `droppedNoRetention`).
 - **Retention job.** `GET /api/cron/prune-lake` (`CRON_SECRET` bearer; run it once a day) deletes every
@@ -51,8 +66,8 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 
 ## What is not built
 
-- The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
-  store exists.
+- An object store in `server/docker-compose.yml`: the compose still has only Postgres, the server and
+  nginx, so `LAKE_S3_*` points at a store you run yourself. See the ADR on which one.
 - Compaction: every drain writes new small files.
 - Skipping at write time an event already older than its tenant's retention: the writer files it, and
   the next `prune-lake` deletes it and records the deletion.

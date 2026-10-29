@@ -89,12 +89,10 @@ export class FsLakeStore implements LakeStore {
 }
 
 /**
- * The store the environment asks for, or null when the lake is off. `LAKE_DIR` is the only switch:
- * unset (the default) means ingest queues nothing and the writer has nothing to do, so a
- * deployment that has no lake does not grow a queue nobody drains.
+ * Whether the telemetry lake is on: a directory (`LAKE_DIR`) or an S3 bucket (`LAKE_S3_BUCKET`) is
+ * configured. Cheap and free of the S3 client, so the ingest route can ask it on every request.
+ * Which store, and whether the configuration is valid, is `lakeStoreFromEnv` (`lib/lake-env.ts`).
  */
-export function lakeStoreFromEnv(env: Record<string, string | undefined> = process.env): LakeStore | null {
-  const dir = env.LAKE_DIR;
-  if (dir === undefined || dir === "") return null;
-  return new FsLakeStore(dir);
+export function lakeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return (env.LAKE_DIR ?? "") !== "" || (env.LAKE_S3_BUCKET ?? "") !== "";
 }

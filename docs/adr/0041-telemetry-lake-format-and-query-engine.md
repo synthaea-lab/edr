@@ -157,9 +157,19 @@ this ADR did not say.
   above 2^53 (a nanosecond timestamp, a process generation) is stored as the nearest double. The file
   holds what ingest parsed, serialized again. Exactness would need ingest to keep the raw text.
 
+- **MinIO's container images could not be pulled on 2026-10-29.** `docker.io/minio/minio` and
+  `quay.io/minio/minio` both refused the pull from this machine, and `bitnami/minio` has no manifest.
+  The decision "MinIO runs in the self-hosted compose" therefore has no image to point at here; I did
+  not establish why (a registry change, or this machine). The S3 store (`lib/lake-s3-store.ts`) speaks
+  the S3 API only and was run against SeaweedFS 4.50 (`chrislusf/seaweedfs`, pulled and working),
+  which is what the integration tests used. Which store the compose ships is open again: the decision
+  stays "the S3 API is the interface", and the choice of server (SeaweedFS, Garage, RustFS, a hosted
+  one) is not made. RustFS (`rustfs/rustfs`) pulled but exited at start with the arguments I gave it,
+  and was not investigated; Garage pulled and was not run.
+
 The slice also fixes two choices this ADR left open: the queue is a table with one row per batch and
-the events as a JSON column, and the first store is a directory (`LAKE_DIR`), the S3 store being the
-next slice behind the same one-method interface.
+the events as a JSON column, and the stores are a directory (`LAKE_DIR`) and an S3 bucket (`LAKE_S3_BUCKET`)
+behind the same interface (`put`, `list`, `delete`).
 
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
