@@ -28,7 +28,7 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   page has a "Draft Sigma rule" button (`components/GraduateHuntButton.tsx`) that calls it and
   shows the files to copy or download, and what a person still has to do. `{ kind: "ioc" }`
   (#934, `lib/hunt-ioc-draft.ts`, the "Draft IOC set" button) answers a draft feed file of the
-  hashes, addresses and (public-suffix-checked) domains the matches carry, in the `crates/intel` line format.
+  hashes, addresses and (public-suffix-checked) domains the matches carry, in the `crates/intel` line format, each hash and domain commented with its fleet prevalence.
 - **Console** (`/console/hunts`): the list (with a Delete button per hunt: it asks first, and
   the run history goes with the hunt), a hunt's run history with Run now, and a create
   and edit form (`/console/hunts/new`, `/console/hunts/[id]/edit`). The form turns its fields

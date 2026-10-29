@@ -2,6 +2,7 @@ import { isIP } from "net";
 import { HuntValidationError } from "@/lib/hunt";
 import { normalizeDomain } from "@/lib/ioc-feed";
 import { isPublicSuffix } from "@/lib/public-suffix";
+import { observationsOfDetections, prevalenceKey, type Observation, type Prevalence } from "@/lib/prevalence";
 import { ruleSlug, type GraduationDetection, type GraduationHunt, type GraduationResult } from "@/lib/hunt-graduation";
 
 /**
@@ -43,6 +44,27 @@ export function parseIocGraduationRequest(body: unknown): void {
   }
 }
 
+/**
+ * What the fleet says about the hashes and domains of a draft (never addresses: prevalence does not
+ * track them). `hosts` is how many hosts of the tenant have reported anything; `found` and
+ * `lookedUp` are what `getPrevalenceBatch` returned and the keys it checked, so a value it did not
+ * check is not described as unseen.
+ */
+export interface IocPrevalence {
+  hosts: number;
+  found: Map<string, Prevalence>;
+  lookedUp: Set<string>;
+}
+
+/** A value on at least this many hosts and this share of the fleet is marked widespread. */
+const WIDESPREAD_MIN_HOSTS = 5;
+const WIDESPREAD_SHARE = 0.05;
+
+/** The hash and domain observations of `detections`: what the route has prevalence looked up for. */
+export function iocObservations(detections: GraduationDetection[]): Observation[] {
+  return observationsOfDetections(detections).filter((o) => o.kind === "sha256" || o.kind === "domain");
+}
+
 type Skipped = { loopback: number; suffixes: number; malformed: number };
 
 /**
@@ -67,7 +89,11 @@ function addressLine(raw: unknown): { ok: true; address: string } | { ok: false;
  * Builds the draft for `hunt` from `detections` (the sample of its newest run, newest first).
  * Pure: it reads nothing and writes nothing.
  */
-export function draftIocSetFromHunt(hunt: GraduationHunt, detections: GraduationDetection[]): GraduationResult {
+export function draftIocSetFromHunt(
+  hunt: GraduationHunt,
+  detections: GraduationDetection[],
+  prevalence?: IocPrevalence
+): GraduationResult {
   const hashes = new Set<string>();
   const addresses = new Set<string>();
   const domains = new Set<string>();
@@ -108,21 +134,47 @@ export function draftIocSetFromHunt(hunt: GraduationHunt, detections: Graduation
 
   const slug = ruleSlug(hunt.name);
   const sorted = (values: Set<string>) => Array.from(values).sort();
+  let widespread = 0;
+  let unchecked = 0;
+  /** The comment line above an indicator that says how the fleet has seen it, if it was checked. */
+  const withPrevalence = (kind: "sha256" | "domain") => (key: string): string[] => {
+    const line = `${kind}:${key}`;
+    if (!prevalence || prevalence.hosts === 0) return [line];
+    const id = prevalenceKey(kind, key);
+    if (!prevalence.lookedUp.has(id)) {
+      unchecked++;
+      return [line];
+    }
+    const seen = prevalence.found.get(id) ?? null;
+    const common = seen !== null && seen.hostCount >= WIDESPREAD_MIN_HOSTS && seen.hostCount / prevalence.hosts >= WIDESPREAD_SHARE;
+    if (common) widespread++;
+    const text = seen
+      ? `seen on ${seen.hostCount} of ${prevalence.hosts} hosts, first ${seen.firstSeen.toISOString().slice(0, 10)}`
+      : "never seen on this fleet before";
+    return [`# ${text}${common ? " (widespread: likely benign)" : ""}`, line];
+  };
   const text = [
     `# DRAFT graduated from hunt ${hunt.id} (query version ${hunt.version}). A person reviews it; it enters the normal PR and CI path.`,
     "# One line per indicator. The matched detections name these values; that does not make each one bad.",
-    ...sorted(hashes).map((h) => `sha256:${h}`),
+    ...sorted(hashes).flatMap(withPrevalence("sha256")),
     ...sorted(addresses).map((a) => `ip:${a}`),
-    ...sorted(domains).map((d) => `domain:${d}`),
+    ...sorted(domains).flatMap(withPrevalence("domain")),
     "",
   ].join("\n");
 
   const todo = [
     "Every indicator is a value a matched detection carried, not a verdict: drop the benign ones (a shared CDN address, a system binary's hash) before this ships.",
     `The file name is the feed's name in every finding (\`${slug}\`); rename it to say where the indicators came from.`,
-    `The path \`${IOC_DRAFT_DIR}/\` is where this draft proposes IOC sets live in the content repo; no directory or CI check exists for one yet.`,
+    `The path \`${IOC_DRAFT_DIR}/\` is where this draft proposes IOC sets live in the content repo; CI checks every \`*.txt\` there (the engine loads each line, the feed builder applies the public-suffix check), but no feed exists yet.`,
     "Nothing delivers a set to the agents yet: signed delivery through the content manifest waits on the production signing keys (#753).",
   ];
+  if (widespread > 0) {
+    todo.push(`${widespread} hashes or domains are on at least ${WIDESPREAD_SHARE * 100}% of this fleet's hosts (and ${WIDESPREAD_MIN_HOSTS}+): their comment says widespread. They are kept, since a hunt may be about a common value, but they are probably benign.`);
+  }
+  if (unchecked > 0) todo.push(`${unchecked} hashes or domains were not checked against the fleet's prevalence (too many to look up at once).`);
+  if (prevalence && prevalence.hosts > 0) {
+    todo.push("Addresses carry no fleet prevalence: check a shared address (CDN, cloud provider) by hand.");
+  }
   if (domains.size > 0) {
     todo.push("A domain line matches the name and every name beneath it: widen a name to its parent only on purpose, and drop a shared service (a CDN, a cloud API) the detection merely reached.");
   }
