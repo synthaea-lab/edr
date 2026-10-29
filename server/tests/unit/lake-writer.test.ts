@@ -1,0 +1,297 @@
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parquetReadObjects } from "hyparquet";
+import type { PrismaClient } from "@prisma/client";
+import { FsLakeStore, assertSafeKey, lakeStoreFromEnv, type LakeStore } from "@/lib/lake-store";
+import {
+  OTHER_TYPE,
+  dayOf,
+  drainLakeQueue,
+  encodeParquet,
+  enqueueLakeBatch,
+  lakeKey,
+  lakeRow,
+  typeSegment,
+} from "@/lib/lake-writer";
+
+const SHA = "a".repeat(64);
+const RECEIVED = new Date(Date.UTC(2026, 9, 29, 10, 0, 0));
+const NS = (d: Date) => d.getTime() * 1_000_000;
+
+const exec = (over: Record<string, unknown> = {}) => ({
+  type: "exec",
+  meta: { pid: 10, comm: "bash", timestamp_ns: NS(RECEIVED) },
+  image_path: "/usr/bin/curl",
+  sha256: SHA,
+  ...over,
+});
+
+/** Reads a Parquet file the writer produced, the way a lake consumer would. */
+async function readParquet(bytes: Uint8Array): Promise<Record<string, unknown>[]> {
+  const file = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return (await parquetReadObjects({ file })) as Record<string, unknown>[];
+}
+
+describe("typeSegment", () => {
+  it("keeps a plain event type", () => {
+    expect(typeSegment("file_open")).toBe("file_open");
+  });
+
+  it("sends anything that could shape a path to 'other'", () => {
+    for (const bad of ["../etc", "a/b", "Exec", "", "x".repeat(65), "exec ", "e\u0000x", 7, null, undefined, "-x", "9x"]) {
+      expect(typeSegment(bad)).toBe(OTHER_TYPE);
+    }
+  });
+});
+
+describe("dayOf and lakeKey", () => {
+  it("cuts the day in UTC", () => {
+    expect(dayOf(new Date("2026-10-29T23:59:59.999Z"))).toBe("2026-10-29");
+    expect(dayOf(new Date("2026-10-30T00:00:00.000Z"))).toBe("2026-10-30");
+  });
+
+  it("lays out tenant, date, type and file", () => {
+    expect(lakeKey("t1", "2026-10-29", "exec", "abc")).toBe("tenant=t1/date=2026-10-29/type=exec/abc.parquet");
+  });
+});
+
+describe("lakeRow", () => {
+  it("takes the typed columns and keeps the whole event", () => {
+    const row = lakeRow("agent-1", exec(), RECEIVED);
+    expect(row).toMatchObject({ agentId: "agent-1", comm: "bash", imagePath: "/usr/bin/curl", sha256: SHA, path: null, daddr: null, query: null });
+    expect(row.at).toEqual(RECEIVED);
+    expect(JSON.parse(row.event)).toEqual(exec());
+  });
+
+  it("dates a far-future or missing stamp at the time of receipt", () => {
+    const future = lakeRow("a", exec({ meta: { timestamp_ns: NS(RECEIVED) + 3 * 86_400_000 * 1_000_000 } }), RECEIVED);
+    const missing = lakeRow("a", { type: "exec" }, RECEIVED);
+    expect(future.at).toEqual(RECEIVED);
+    expect(missing.at).toEqual(RECEIVED);
+  });
+
+  it("drops a value that is not a hash from the hash column and bounds a long path", () => {
+    expect(lakeRow("a", exec({ sha256: "not-a-hash" }), RECEIVED).sha256).toBeNull();
+    expect(lakeRow("a", exec({ path: "/x".repeat(2000) }), RECEIVED).path).toHaveLength(1024);
+  });
+});
+
+describe("encodeParquet", () => {
+  it("writes a file a reader gets the rows back from, nulls included", async () => {
+    const rows = [lakeRow("agent-1", exec(), RECEIVED), lakeRow("agent-1", { type: "dns_query", query: "example.com", meta: { comm: "curl", timestamp_ns: NS(RECEIVED) } }, RECEIVED)];
+    const back = await readParquet(encodeParquet(rows));
+    expect(back).toHaveLength(2);
+    expect(back[0]).toMatchObject({ agent_id: "agent-1", comm: "bash", image_path: "/usr/bin/curl", sha256: SHA, query: null });
+    expect(back[1]).toMatchObject({ comm: "curl", query: "example.com", sha256: null });
+    expect(JSON.parse(back[0].event as string).type).toBe("exec");
+    expect(new Date(back[0].ts as Date)).toEqual(RECEIVED);
+  });
+});
+
+describe("FsLakeStore", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "lake-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("creates the directories and writes the bytes", async () => {
+    await new FsLakeStore(dir).put("tenant=t/date=2026-10-29/type=exec/f.parquet", new Uint8Array([1, 2, 3]));
+    expect(Array.from(await readFile(path.join(dir, "tenant=t/date=2026-10-29/type=exec/f.parquet")))).toEqual([1, 2, 3]);
+  });
+
+  it("replaces a file written twice and leaves no temporary file", async () => {
+    const store = new FsLakeStore(dir);
+    await store.put("t/f.parquet", new Uint8Array([1]));
+    await store.put("t/f.parquet", new Uint8Array([2]));
+    expect(Array.from(await readFile(path.join(dir, "t/f.parquet")))).toEqual([2]);
+    expect(await readdir(path.join(dir, "t"))).toEqual(["f.parquet"]);
+  });
+
+  it("refuses a key that could leave the root", async () => {
+    const store = new FsLakeStore(dir);
+    for (const bad of ["../x", "a/../../x", "/abs", "a//b", "a/./b", "", "a b", "a\\b", "a\u0000b"]) {
+      await expect(store.put(bad, new Uint8Array([1]))).rejects.toThrow(/Unsafe lake key/);
+      expect(() => assertSafeKey(bad)).toThrow();
+    }
+  });
+});
+
+describe("lakeStoreFromEnv", () => {
+  it("is off unless LAKE_DIR is set and non-empty", () => {
+    expect(lakeStoreFromEnv({})).toBeNull();
+    expect(lakeStoreFromEnv({ LAKE_DIR: "" })).toBeNull();
+    expect(lakeStoreFromEnv({ LAKE_DIR: "/data/lake" })).toBeInstanceOf(FsLakeStore);
+  });
+});
+
+describe("enqueueLakeBatch", () => {
+  it("stores the batch with its size, and nothing for an empty one", async () => {
+    const create = vi.fn().mockResolvedValue({});
+    const db = { lakeBatch: { create } } as unknown as Pick<PrismaClient, "lakeBatch">;
+    await enqueueLakeBatch(db, { tenantId: "t", agentId: "a", events: [exec(), exec()], receivedAt: RECEIVED });
+    expect(create).toHaveBeenCalledWith({ data: { tenantId: "t", agentId: "a", receivedAt: RECEIVED, events: [exec(), exec()], eventCount: 2 } });
+    create.mockClear();
+    await enqueueLakeBatch(db, { tenantId: "t", agentId: "a", events: [], receivedAt: RECEIVED });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("lets an insert failure reach the caller, so ingest answers 5xx", async () => {
+    const db = { lakeBatch: { create: vi.fn().mockRejectedValue(new Error("db down")) } } as unknown as Pick<PrismaClient, "lakeBatch">;
+    await expect(enqueueLakeBatch(db, { tenantId: "t", agentId: "a", events: [exec()], receivedAt: RECEIVED })).rejects.toThrow("db down");
+  });
+});
+
+type Batch = { id: string; tenantId: string; agentId: string; receivedAt: Date; events: unknown };
+
+/** The slice of Prisma `drainLakeQueue` uses, backed by arrays. */
+function fakePrisma(batches: Batch[], tenants: { id: string; lakeRetentionDays: number }[]) {
+  const state = { batches: [...batches], committed: true };
+  const tx = {
+    $queryRaw: vi.fn(async () => state.batches.map((b) => ({ id: b.id }))),
+    lakeBatch: {
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => state.batches.filter((b) => where.id.in.includes(b.id))),
+      deleteMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
+        state.batches = state.batches.filter((b) => !where.id.in.includes(b.id));
+      }),
+      count: vi.fn(async () => state.batches.length),
+    },
+    tenant: { findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => tenants.filter((t) => where.id.in.includes(t.id))) },
+  };
+  const prisma = {
+    // A real transaction rolls back when the callback throws; the fake restores the rows.
+    $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => {
+      const before = [...state.batches];
+      try {
+        return await fn(tx);
+      } catch (e) {
+        state.batches = before;
+        throw e;
+      }
+    }),
+  } as unknown as PrismaClient;
+  return { prisma, state, tx };
+}
+
+class MemoryStore implements LakeStore {
+  files = new Map<string, Uint8Array>();
+  async put(key: string, body: Uint8Array) {
+    this.files.set(key, body);
+  }
+}
+
+describe("drainLakeQueue", () => {
+  it("does nothing on an empty queue", async () => {
+    const { prisma } = fakePrisma([], []);
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toEqual({ batches: 0, events: 0, files: 0, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(store.files.size).toBe(0);
+  });
+
+  it("writes one file per tenant, day and type, and empties the queue", async () => {
+    const nextDay = new Date(RECEIVED.getTime() + 86_400_000);
+    const { prisma, state } = fakePrisma(
+      [
+        { id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), { type: "dns_query", query: "x.test", meta: { timestamp_ns: NS(RECEIVED) } }] },
+        { id: "b2", tenantId: "t1", agentId: "a2", receivedAt: nextDay, events: [exec({ meta: { comm: "sh", timestamp_ns: NS(nextDay) } })] },
+        { id: "b3", tenantId: "t2", agentId: "a3", receivedAt: RECEIVED, events: [exec()] },
+      ],
+      [{ id: "t1", lakeRetentionDays: 90 }, { id: "t2", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    const result = await drainLakeQueue(prisma, store);
+    expect(result).toEqual({ batches: 3, events: 4, files: 4, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(state.batches).toHaveLength(0);
+    const keys = Array.from(store.files.keys()).map((k) => k.replace(/\/[0-9a-f]{32}\.parquet$/, ""));
+    expect(keys.sort()).toEqual([
+      "tenant=t1/date=2026-10-29/type=dns_query",
+      "tenant=t1/date=2026-10-29/type=exec",
+      "tenant=t1/date=2026-10-30/type=exec",
+      "tenant=t2/date=2026-10-29/type=exec",
+    ]);
+  });
+
+  it("keeps a tenant's events out of another tenant's files", async () => {
+    const { prisma } = fakePrisma(
+      [
+        { id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec({ image_path: "/only/t1" })] },
+        { id: "b2", tenantId: "t2", agentId: "a2", receivedAt: RECEIVED, events: [exec({ image_path: "/only/t2" })] },
+      ],
+      [{ id: "t1", lakeRetentionDays: 90 }, { id: "t2", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    await drainLakeQueue(prisma, store);
+    for (const [key, bytes] of Array.from(store.files)) {
+      const rows = await readParquet(bytes);
+      const owner = key.startsWith("tenant=t1/") ? "/only/t1" : "/only/t2";
+      expect(rows.map((r) => r.image_path)).toEqual([owner]);
+    }
+  });
+
+  it("routes an event type that is not a safe path segment to 'other' and keeps the real type in the event", async () => {
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [{ type: "../../etc/passwd", meta: { timestamp_ns: NS(RECEIVED) } }] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    await drainLakeQueue(prisma, store);
+    const [[key, bytes]] = Array.from(store.files);
+    expect(key).toMatch(/^tenant=t1\/date=2026-10-29\/type=other\/[0-9a-f]{32}\.parquet$/);
+    expect(JSON.parse((await readParquet(bytes))[0].event as string).type).toBe("../../etc/passwd");
+  });
+
+  it("drops what a tenant with no retention would keep, and says how many", async () => {
+    const { prisma, state } = fakePrisma(
+      [
+        { id: "b1", tenantId: "none", agentId: "a1", receivedAt: RECEIVED, events: [exec(), exec()] },
+        { id: "b2", tenantId: "t1", agentId: "a2", receivedAt: RECEIVED, events: [exec()] },
+      ],
+      [{ id: "none", lakeRetentionDays: 0 }, { id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    const result = await drainLakeQueue(prisma, store);
+    expect(result).toMatchObject({ events: 1, files: 1, droppedNoRetention: 2, remaining: 0 });
+    expect(Array.from(store.files.keys()).every((k) => k.startsWith("tenant=t1/"))).toBe(true);
+    expect(state.batches).toHaveLength(0);
+  });
+
+  it("skips a malformed queued event without losing the good ones", async () => {
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), 7, null, [], { nope: true }] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, skippedMalformed: 4 });
+  });
+
+  it("leaves the rows queued when a file cannot be written, so the next drain retries them", async () => {
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const failing: LakeStore = { put: vi.fn().mockRejectedValue(new Error("disk full")) };
+    await expect(drainLakeQueue(prisma, failing)).rejects.toThrow("disk full");
+    expect(state.batches).toHaveLength(1);
+  });
+
+  it("names a file after the batches it holds, so a retry over the same batches rewrites the same file", async () => {
+    const make = () =>
+      fakePrisma([{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()] }], [{ id: "t1", lakeRetentionDays: 90 }]);
+    const first = new MemoryStore();
+    const second = new MemoryStore();
+    await drainLakeQueue(make().prisma, first);
+    await drainLakeQueue(make().prisma, second);
+    expect(Array.from(first.files.keys())).toEqual(Array.from(second.files.keys()));
+  });
+
+  it("takes at most the requested number of batches", async () => {
+    const { prisma, tx } = fakePrisma([], []);
+    await drainLakeQueue(prisma, new MemoryStore(), { maxBatches: 7 });
+    const call = tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray, ...unknown[]];
+    expect(call.slice(1)).toContain(7);
+  });
+});
