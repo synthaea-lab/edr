@@ -11,167 +11,173 @@ attacker persistence removable, scoped to the case's damage, policy-gated and au
 exactly like response itself. That premise needs checking against what already exists,
 because the three actions are not equally unowned:
 
-- **Quarantine restore already exists, fully wired.** `unquarantine(quarantine_dir,
-  sha256_hex)` (`crates/response/src/quarantine.rs:902`) restores a quarantined file to
-  its original path, verifies the hash before returning it, restores the original Unix
-  mode from the `.origin` sidecar, and never overwrites an occupied destination.
-  `agent quarantine restore` (`agent/src/quarantine_cmd.rs`) wires it end to end, audited
-  as `RESPONSE-UNQUARANTINE` into `alerts.ndjson` on both success and failure, with tests
-  for the half-done-cleanup cases. The one real gap: unlike `quarantine_file` itself
-  (gated on `ResponsePolicy.quarantine_enabled`), `unquarantine`'s CLI path is gated on
-  nothing but host access — restoring a file is not "policy-gated... exactly like
-  response," today it is operator-trusted and ungated.
-- **Isolation lift is library-complete, with zero wiring.** `lift_isolation(firewall,
-  intent_path, trigger, now_ns)` (`crates/response/src/isolation.rs:386`) exists, is
-  fully tested, and is deliberately never policy-gated (ADR-0037 §4: lifting is the safe
-  direction). But nothing outside `crates/response` calls it — no CLI command, no
-  `HOST-UNISOLATE` audit line. This isn't a bug to fix; ADR-0037 is itself still
-  **Status: proposed**, and its own text defers the binary-side wiring ("the firewall
-  itself is injected by the binary", `crates/response/src/lib.rs:17`). Applying
-  isolation isn't live in the shipped agent yet, so neither is lifting it.
+- **Quarantine restore already exists, fully wired.** `unquarantine` (`crates/response/
+  src/quarantine.rs`) restores a quarantined file to its original path, verifies the hash
+  before returning it, restores the original Unix mode from the `.origin` sidecar, and
+  never overwrites an occupied destination. `agent quarantine restore`
+  (`agent/src/quarantine_cmd.rs`, `cmd_quarantine_restore`) wires it end to end, audited as
+  `RESPONSE-UNQUARANTINE` into `alerts.ndjson` on both success and failure, with tests for
+  the half-done-cleanup cases. It is not policy-gated: only host access is needed.
+- **Isolation lift is library-complete, with zero wiring.** `lift_isolation`
+  (`crates/response/src/isolation.rs`) exists, is fully tested, and is deliberately never
+  policy-gated (ADR-0037 §4: lifting is the safe direction). Its result type is documented
+  as feeding a `HOST-UNISOLATE` audit line, the counterpart of `HOST-ISOLATE`, but nothing
+  outside `crates/response` calls it and no binary emits either line. ADR-0037 is itself
+  still **proposed**, and its own text defers the binary-side wiring ("the firewall itself
+  is injected by the binary", `crates/response/src/lib.rs`). Applying isolation isn't
+  live in the shipped agent yet, so neither is lifting it.
 - **Kill has, and needs, no undo.** Not a gap; out of scope by the issue's own framing.
 - **Persistence removal has detection, not removal.** `crates/rules/src/stateless.rs`
-  already names and detects scheduled tasks (T1053.005, `check_scheduled_task_persistence`,
-  line 224), services (T1543.003, `check_service_install_persistence`, line 337), account
-  creation (T1136.001, line 371), systemd units (line 405), macOS launch items (line 442),
-  and the generic shell-profile/cron/LaunchAgents path family (T1546.004/T1053.003/
-  T1543.002/T1037.004, line 126). Three of these rules' own doc comments state the alert
-  exists so an analyst can act on it, and name the exact command: `schtasks /Delete /TN
-  <name> /F` (line 221), `sc.exe delete <name>` (line 334), `net user <name> /delete`
-  (line 368). Today that action is **entirely manual** — the project has already written
-  down, in its own detection code, exactly what automated removal would need to run.
-- **VSS/snapshot rollback is greenfield.** Every VSS reference in the repo
-  (`stateless.rs:757`, `agent/src/sink.rs:4619`) detects an *attacker* deleting shadow
-  copies (the anti-recovery technique); none restores anything.
-  `docs/detection/ransomware.md:19` states plainly: "VSS/snapshot integration is a later
-  Windows item." Restoring via VSS would be Windows-specific business logic, and per
-  CLAUDE.md's platform-code rule, that fits none of the three existing exceptions
-  (`crates/sensors/*`, `crates/updater`, quarantine's narrow ACL/descriptor boundary) —
-  where it would even live is unresolved, not just unimplemented.
-- **The damage manifest (#82) is real, durable, and ransomware-only.** The agent tracks
-  `touched_files` per pid (64 pids × 100 events, counted shedding) and attaches it to the
-  triggering `Detection`; the server derives a durable `damageManifest` (files,
-  renamed/deleted, capped at 1000) from stored case events, exposed at
-  `GET /api/cases/[id]`. But it exists **only for T1486 (ransomware) cases** — a kill or
-  quarantine fired from any other verdict has no damage manifest to scope cleanup by.
-  Issue #133's "scope every cleanup by the case's damage manifest" is true today only for
-  that one case type.
-- **There is no server-to-agent command channel.** Every response action that exists —
-  kill, quarantine, isolate-apply — fires either from the agent's own in-process verdict
-  engine, or from an operator with direct CLI/host access. `crates/transport::Client`
-  exposes `get_json`/`get_bytes` and nothing that pushes a command the other way; no
-  server route issues isolate/quarantine/remediate instructions to an agent. Issue #133's
-  framing — "restore a file when a verdict is overturned" — implicitly assumes a path
-  from a server-side case decision (#135, not yet built) back to the one agent that
-  fired the original action. That path does not exist. The verdict model itself (#131,
-  merged, `crates/verdict/src/lib.rs`) reinforces this: `VerdictEngine` is agent-local and
-  ephemeral (a 16,384-entry `BoundedMap`, no case id, no durability), and its only
-  reversal primitive, `suppress`/`unsuppress` (line 322), silences *future* technique
-  recordings for an entity — it does not undo a past action. There is nothing to key a
-  remote "the case was overturned, restore it" trigger on yet.
+  already detects scheduled tasks (T1053.005, `check_scheduled_task_persistence`),
+  services (T1543.003, `check_service_install_persistence`), account creation
+  (T1136.001), systemd units, macOS launch items, and the shell-profile/cron/LaunchAgents
+  path family. Several of these rules' doc comments name the manual command an analyst
+  runs today (`schtasks /Delete /TN <name> /F`, `sc.exe delete <name>`,
+  `net user <name> /delete`). That action is **entirely manual**.
+- **VSS/snapshot rollback is greenfield.** Every VSS reference in the repo detects an
+  *attacker* deleting shadow copies (the anti-recovery technique); none restores
+  anything. `docs/detection/ransomware.md` says so: "VSS/snapshot integration is a later
+  Windows item."
+- **The damage manifest (#82) is server-side and ransomware-only.** The agent tracks
+  `touched_files` per pid and attaches it to the triggering `Detection`; the server
+  derives a durable `damageManifest` (files renamed or deleted, capped at 1000) from
+  stored case events, exposed at `GET /api/cases/[id]`. It exists only for T1486 cases,
+  it lives on the server, and it lists files the ransomware renamed or deleted — not
+  files the agent quarantined, so nothing in it maps to a quarantine `sha256`.
+- **There is no server-to-agent command channel.** Every response action fires either
+  from the agent's own in-process verdict engine or from an operator with host access.
+  `crates/transport`'s client exposes `get_json`/`get_bytes` and nothing that pushes a
+  command the other way. The verdict model (#131, `crates/verdict`) is agent-local and
+  ephemeral, and its only reversal primitive, `suppress`/`unsuppress`, silences *future*
+  recordings; it does not undo a past action.
 
 ## Decision
 
-Scope this ADR to **host-local remediation**: actions an operator with CLI/host access,
-or the agent's own policy, can trigger on the agent itself — exactly the trust model
-response already uses for kill/quarantine/isolate-apply. A console-driven remote trigger
-needs a server-to-agent command channel that doesn't exist; building one is its own
-cross-cutting decision (and likely depends on #314/ADR-0040's agent-identity work for
-authenticating which agent gets to act on which host) and is explicitly not attempted
-here.
+Scope this ADR to **host-local, reversible remediation**: actions an operator with host
+access triggers on the agent itself, the trust model response already uses. Two earlier
+pieces of this ADR are taken out rather than half-designed (review of #133's ADR): the
+damage-manifest batch restore and macOS launch-item remediation. Deleting persistence
+artifacts is also out: v1 *disables* them, reversibly.
 
-1. **Quarantine restore**: close the one real gap rather than redesign. Add
-   `ResponsePolicy.remediate_enabled: bool` (default `false`, same observe-only posture
-   as `kill_enabled`/`quarantine_enabled`/`isolate_enabled`) and gate `agent quarantine
-   restore` on it. `unquarantine` itself, its audit line (`RESPONSE-UNQUARANTINE`), and
-   its tests are unchanged — this is a one-field, one-call-site addition.
+1. **Quarantine restore stays as it is: ungated.** An earlier draft gated it on a new
+   policy flag. That was wrong: restoring a quarantined file is the same safe direction
+   as lifting isolation, which ADR-0037 leaves ungated, and gating it would silently take
+   the restore path away from every existing deployment on upgrade (default `false`).
+   `agent quarantine restore` and `RESPONSE-UNQUARANTINE` are unchanged.
 
-2. **Isolation lift**: wire `lift_isolation` the way kill and quarantine are already
-   wired — a new `agent isolation lift` subcommand (same shape as `agent quarantine
-   restore`), emitting a new `HOST-UNISOLATE` audit line into `alerts.ndjson` (same shape
-   as the existing `RESPONSE-ISOLATE`). Per ADR-0037 §4, this stays **ungated** —
-   `remediate_enabled` does not cover it, matching "lifting is the safe direction."
-   This piece ships once ADR-0037 itself (still proposed) is accepted and isolate-apply
-   is actually wired into the binary; until then there's nothing live to lift.
+2. **Isolation lift**: a new `agent isolation lift` subcommand (same shape as `agent
+   quarantine restore`) wires `lift_isolation` and emits `HOST-UNISOLATE`, the existing
+   counterpart of `HOST-ISOLATE` in `crates/response/src/isolation.rs`. Ungated, per
+   ADR-0037 §4. Ships once ADR-0037 is accepted and isolate-apply is wired into the
+   binary; until then there is nothing live to lift.
 
-3. **Persistence removal** — the new work this issue actually asks for. One `agent
-   remediate <technique> <artifact>` subcommand family, operator-invoked like quarantine
-   restore, each verb a thin wrapper around the platform command the existing detection
-   rules' own doc comments already name:
-   - `remediate scheduled-task <name>` → `schtasks /Delete /TN <name> /F` (Windows)
-   - `remediate service <name>` → `sc.exe delete <name>` (Windows)
-   - `remediate cron <path>` → remove the matched `/etc/cron.d/*` entry (Linux)
-   - `remediate systemd-unit <name>` → `systemctl disable --now <name>` + unlink the unit
-     file (Linux)
-   - `remediate launch-item <path>` → `launchctl bootout` + unlink the plist (macOS)
+3. **Persistence remediation: disable, never delete, and always undoable.**
+   - **Its own policy flag.** `ResponsePolicy.persistence_remediation_enabled` (default
+     `false`), separate from every other flag. It is the only destructive action this
+     ADR adds, so it is the only one gated, and it does not share a switch with a
+     restoring action.
+   - **Bound to a detection.** `agent remediate <verb> <artifact> --alert <timestamp_ns>`
+     names the `alerts.ndjson` line the operator is acting on (the same file `quarantine
+     restore` already reads). It is refused unless that line exists, its technique is the
+     verb's technique, and its message names this exact artifact: the rules already write
+     `task=<name>` (T1053.005) and `service=<name>` (T1543.003), and the systemd and cron
+     rules write the artifact's path. The command removes what a detection flagged, not an
+     arbitrary name an operator typed.
+   - **Strict input, no shell.** Every external command is spawned with an argv vector
+     (`std::process::Command`), never through a shell. Names are validated against the
+     platform's own grammar before use: a Windows service name against the SCM's rules
+     (no `/` or `\`, at most 256 characters), a task name as a `\`-separated path with no
+     `..` component, a systemd unit name with a known unit suffix. A path is canonicalized,
+     must be a regular file directly inside an allowed root (below), and is opened without
+     following symlinks (`O_NOFOLLOW`; on Windows, a reparse point is refused) so a link
+     cannot redirect the action to another file.
+   - **The verbs**, each with the OS step the earlier draft left out:
+     - `scheduled-task <name>` (Windows, T1053.005): export the task's XML
+       (`schtasks /Query /TN <name> /XML`) into the remediation archive, then
+       `schtasks /Change /TN <name> /DISABLE`.
+     - `service <name>` (Windows, T1543.003): record the start type, stop the service and
+       **wait** for `SERVICE_STOPPED` and the process's exit (bounded, the same
+       stop-and-wait ADR-0039 defines), then `sc config <name> start= disabled`. A stop
+       that times out leaves the start type unchanged and reports failure.
+     - `systemd-unit <name>` (Linux): `systemctl disable --now <name>`, then `systemctl
+       daemon-reload`. The unit file stays where it is; the enablement symlinks are what
+       `disable` removes, and the archive records which ones existed.
+     - `cron <path>` (Linux, T1053.003): whole files directly in `/etc/cron.d/` only. The
+       file is **moved** into the remediation archive, which both disables it and keeps
+       it for undo. User crontabs (`/var/spool/cron`), single lines inside a file, and
+       shell profiles are not covered (Deferred).
+   - **Undo.** Every remediation writes a record into a remediation archive under the
+     agent's state directory, created with the quarantine directory's own permissions
+     (ADR-0021): an id, the verb, the artifact, what was there before (task XML, start
+     type, enablement symlinks, the moved file), and the alert it acted on.
+     `agent remediate undo <id>` puts it back: re-enable the task, restore the start type,
+     `systemctl enable` the recorded symlinks then `daemon-reload`, move the cron file
+     back (refusing to overwrite a file that has reappeared there). Undo is ungated, like
+     every restoring action here.
+   - **Audit.** One family, `RESPONSE-REMEDIATE` and `RESPONSE-REMEDIATE-UNDO`, in
+     `alerts.ndjson` alongside the other `RESPONSE-*` lines, on success and failure
+     alike. Fields: the verb's technique, the artifact, the archive id, the alert
+     `timestamp_ns` it was bound to, the invoking user (uid or SID of the process token),
+     and the outcome. A consumer filtering on `RESPONSE-` sees every response action;
+     isolation keeps its own `HOST-*` family as ADR-0037 defined it.
+   - **Where the code lives.** In the agent binary, `agent/src/remediate/{mod,windows,
+     linux}.rs`, next to `agent/src/commands/{windows,linux,macos}.rs`, which already
+     hold the binary's platform branches. Not in `crates/response`: that would need a
+     second platform-code exception in a library crate, plus CLAUDE.md and
+     `tools/check-deps.py` changes, for code only the binary calls. No dependency rule
+     changes.
 
-   Gated on the same `ResponsePolicy.remediate_enabled` as quarantine restore — one flag
-   for "I trust this agent to clean up," not a flag per technique. Audited as
-   `RESPONSE-REMEDIATE-<TECHNIQUE>`, same actor/target/outcome shape as the existing
-   `RESPONSE-*` lines. Each wrapper lands in new `crates/response` modules
-   (`response::persistence::{scheduled_task,service,cron,systemd,launch_item}`),
-   `#[cfg(target_os = ...)]`-gated per CLAUDE.md's platform-code rule. This is a second
-   narrow platform exception inside `crates/response`, alongside quarantine's existing
-   ACL/descriptor one (ADR-0021) — `tools/check-deps.py`'s comment and CLAUDE.md's
-   platform-code section should say so explicitly rather than let it read as scope creep
-   on the existing exception.
-
-   Explicitly **not** attempted here: inferring *which* artifact to remove from a
-   verdict automatically. The operator names the exact artifact (service name, task
-   name, unit, path) from the alert they're looking at — mirroring how quarantine
-   restore takes an exact sha256, not "restore whatever looked suspicious."
-
-4. **Damage-manifest-scoped cleanup**: consumed only where a manifest exists. For a
-   ransomware (T1486) case, `agent remediate` gains a batch form that reads the case's
-   damage manifest and offers it as a restore candidate list (restore-by-manifest is a
-   loop over the existing single-file `unquarantine`, not new restore logic). For every
-   other case type, there is no manifest to scope by, and remediation stays one artifact
-   at a time by operator choice. Generalizing #82's manifest to non-ransomware cases is
-   not part of this decision.
-
-5. **VSS/snapshot rollback**: deferred outright, same posture ADR-0015 took with macOS
-   self-update. No placement decision is made here, because none can be made honestly
-   yet — a future ADR scopes the actual restore design and, with it, decides where
-   Windows-only restore code can live, since it fits none of today's three platform-code
-   exceptions.
+4. **VSS/snapshot rollback**: deferred outright. No placement decision is made here; a
+   future ADR scopes the restore design and, with it, where Windows-only restore code
+   can live.
 
 ## Consequences
 
-**New**: `ResponsePolicy.remediate_enabled`; `agent quarantine restore`'s policy gate;
-`agent isolation lift`; `agent remediate <technique> <artifact>` and its manifest-batch
-form; new `crates/response::persistence::*` platform-gated modules; `HOST-UNISOLATE` and
-`RESPONSE-REMEDIATE-<TECHNIQUE>` audit events; a one-line addendum to
-`tools/check-deps.py`/CLAUDE.md naming the second platform-code exception.
+**New**: `agent isolation lift` and `HOST-UNISOLATE` (once ADR-0037 lands);
+`ResponsePolicy.persistence_remediation_enabled`; `agent remediate {scheduled-task,
+service, systemd-unit, cron} <artifact> --alert <timestamp_ns>` and `agent remediate
+undo <id>`; the remediation archive; `RESPONSE-REMEDIATE`/`RESPONSE-REMEDIATE-UNDO`;
+`agent/src/remediate/`. ADR-0039's stop-and-wait routine gains a second caller.
 
-**Unblocked**: issue #133's three bullets — file restore (already built, now
-policy-gated), isolation lift (wired, pending ADR-0037), persistence removal (new,
-designed here).
+**Unchanged**: `agent quarantine restore`, ungated as today.
 
-**Still not possible after this ships**: remediation triggered remotely from a console
-case decision (#135's triage UI can *display* the data this produces, but "click to
-remediate" has no channel to travel on); VSS/snapshot rollback; damage-manifest scoping
-for non-ransomware cases; any form of automatic (non-operator-chosen) remediation.
+**Unblocked**: issue #133's three bullets, as far as host-local action goes: file
+restore (already built), isolation lift (wired, pending ADR-0037), persistence (disabled
+reversibly, on Windows and Linux).
 
-**Depends on**: ADR-0037 (proposed) for isolation lift to have anything live to act on.
+**Still not possible after this ships**: deleting a persistence artifact outright (the
+operator still does that by hand, now with the artifact already disabled); macOS
+launch-item remediation; remediation triggered from a console case decision; restoring
+files a ransomware case's damage manifest lists; VSS rollback; automatic remediation.
+
+**Depends on**: ADR-0037 (proposed) for isolation lift; ADR-0039 (proposed) for the
+shared stop-and-wait, or the routine lands with whichever of the two ships first.
 
 ## Deferred
 
-- A server-to-agent command channel — without it, every remediation action in this ADR
-  stays local-operator-triggered, never console-triggered. Likely depends on #314/
-  ADR-0040 for agent identity.
+- **Deleting** persistence artifacts, rather than disabling them, once the archive has
+  proven itself as an undo path.
+- **macOS launch items** (`launchctl bootout`/`disable` need the right domain target:
+  `system` for `/Library/LaunchDaemons`, `gui/<uid>` per user for LaunchAgents). That
+  design belongs with the macOS sensor's owner.
+- **Account removal** (T1136.001), user crontabs, single cron lines, and shell profiles.
+- **Damage-manifest-scoped restore**: needs a server-to-agent channel to reach the
+  manifest, and provenance from manifest entries to something restorable; neither
+  exists.
+- A server-to-agent command channel. Likely depends on #314/ADR-0040 for agent identity.
 - VSS/Windows snapshot rollback, including where the platform-specific code would live.
-- Generalizing the #82 damage manifest beyond ransomware (T1486) cases.
 - Automatic remediation triggered by a verdict rather than chosen by an operator.
 
 ## References
 
 - #133 (this issue), #25 (response), #82 (ransomware pack / damage manifest), #131
-  (verdict fusion, merged), #135 (console triage, not yet built)
-- ADR-0021 (quarantine permissions, accepted) — the existing platform-code exception this
-  extends
-- ADR-0037 (host isolation, proposed) — `lift_isolation`'s existing design
+  (verdict fusion, merged), #135 (console triage)
+- ADR-0021 (quarantine permissions, accepted) — the archive reuses its directory posture
+- ADR-0037 (host isolation, proposed) — `lift_isolation` and the `HOST-*` audit family
+- ADR-0039 (Windows self-update, proposed) — the stop-and-wait routine the `service` verb
+  reuses
 - ADR-0040 (agent enrollment and mTLS, proposed) — the identity work a future command
   channel would likely need
 - `docs/detection/ransomware.md`, `crates/rules/src/stateless.rs`,
   `crates/response/src/{quarantine,isolation}.rs`, `crates/policy/src/lib.rs`,
-  `crates/verdict/src/lib.rs`
+  `crates/verdict/src/lib.rs`, `agent/src/quarantine_cmd.rs`
