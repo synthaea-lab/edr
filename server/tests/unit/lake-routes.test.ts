@@ -9,7 +9,7 @@ const db = vi.hoisted(() => ({
   agentHealth: { findUnique: vi.fn(), upsert: vi.fn() },
   lakeBatch: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
   tenant: { findMany: vi.fn() },
-  lakeDeletion: { create: vi.fn() },
+  lakeDeletion: { create: vi.fn(), update: vi.fn() },
   $executeRaw: vi.fn(),
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
@@ -166,12 +166,26 @@ describe("GET /api/cron/prune-lake", () => {
     process.env.LAKE_DIR = lakeDir;
     await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(6));
     db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
-    db.lakeDeletion.create.mockResolvedValue({});
+    db.lakeDeletion.create.mockResolvedValue({ id: "r1" });
+    db.lakeDeletion.update.mockResolvedValue({});
     const res = await call();
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ partitionsDeleted: 1, filesDeleted: 1, bytesDeleted: 6, notEmpty: 0, orphanTenantPrefixes: 0 });
+    expect(await res.json()).toMatchObject({ partitionsDeleted: 1, filesDeleted: 1, bytesDeleted: 6, notEmpty: 0, failedPartitions: 0, orphanTenantPrefixes: 0 });
     expect(db.lakeDeletion.create).toHaveBeenCalledTimes(1);
+    expect(db.lakeDeletion.update).toHaveBeenCalledWith({ where: { id: "r1" }, data: expect.objectContaining({ deletedCount: 1, failedCount: 0, verifiedEmpty: true, error: null }) });
     expect(await readdir(lakeDir)).toEqual([]);
+  });
+
+  it("answers 500 with the errors when a partition could not be recorded, and says what it did instead", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
+    db.lakeDeletion.create.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await call();
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ partitionsDeleted: 0, failedPartitions: 1 });
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]); // nothing was deleted without a record
   });
 
   it("answers 500 when the database fails", async () => {

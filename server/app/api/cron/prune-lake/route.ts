@@ -11,8 +11,9 @@ import { pruneLake } from "@/lib/lake-retention";
  * section 5). Run it once a day; running it more often only repeats nothing.
  *
  * Authentication: CRON_SECRET bearer (`verifyCronRequest`).
- * 503 when the lake is off (`LAKE_DIR` unset). 500, with the counts, when a deleted partition still
- * lists files: the audit row says so, and a schedule that alerts on a 500 sees it.
+ * 503 when the lake is off (`LAKE_DIR` unset). 500, with the counts and the first errors, when a
+ * partition could not be fully deleted or recorded: the audit row says so, the other partitions were
+ * still done, and a schedule that alerts on a 500 sees it.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
     }
 
     const result = await pruneLake(prisma, store, new Date());
-    return NextResponse.json(result, { status: result.notEmpty > 0 ? 500 : 200 });
+    return NextResponse.json(result, { status: result.notEmpty > 0 || result.failedPartitions > 0 ? 500 : 200 });
   } catch (error) {
     console.error("Lake retention error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
