@@ -63,22 +63,32 @@ What Windows actually has today, from `packaging/windows/` and `watchdog/src/ser
   updater's own state (`versions\`, `current`, `banned_versions.json`), not
   a pre-existing convention it merely adopts. Decision 3 below is explicit
   about who creates it, with what DACL, and when.
-- **NTFS directory symlinks are available and transparently followed.** The
-  service runs as `LocalSystem`, which holds every privilege including
+- **NTFS directory symlinks do not swap atomically — this is why `current`
+  (Decision 3) is a plain marker file, not one.** The service runs as
+  `LocalSystem`, which holds every privilege including
   `SeCreateSymbolicLinkPrivilege` — unlike an unprivileged user, who needs
-  Developer Mode enabled to create one. Swapping what a *directory* symlink
-  points at is **not** a single atomic rename the way Linux's `rename(2)`
-  replaces a symlink (ADR-0015 Decision 5's guarantee): `MoveFileExW(...,
-  MOVEFILE_REPLACE_EXISTING)` fails with `ACCESS_DENIED` when the destination
-  is an existing directory, reparse point or not — confirmed against Wine's
-  own test suite and Git for Windows's `mingw_rename`, which special-cases
-  exactly this error; Decision 4 below has the actual two-step mechanism
-  this requires. What *is* still true and still
-  load-bearing: a running process keeps its own image mapped by handle, not
-  by path — Windows allows renaming (not overwriting) a file a process has
-  open from it, so the old target's `watchdog.exe` stays safely runnable
-  throughout the swap, the same property Linux's design already relies on;
-  only the swap of the *symlink itself* needs the two-step mechanism.
+  Developer Mode enabled to create one — so creating a directory reparse
+  point is not the obstacle. Swapping what one *points at* is:
+  `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` fails with `ACCESS_DENIED`
+  when the destination is an existing directory, reparse point or not —
+  confirmed against Wine's own test suite and Git for Windows's
+  `mingw_rename`, which special-cases exactly this error — so a
+  directory-symlink `current` could only be swapped with a two-step
+  remove-then-recreate, leaving a real window where `current` names nothing
+  at all, and nothing in that window is privileged enough to clean up after
+  a crash mid-swap. A plain **file** does not have this problem:
+  file-over-file `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` *is* a single
+  atomic rename on NTFS — the same guarantee ADR-0015 Decision 5 relies on
+  for Linux's symlink swap, just applied to an ordinary file instead of a
+  reparse point. Decision 3 makes `current` a small marker file (its
+  contents are the active `versions\vN\` path, or absent for day 0) for
+  exactly this reason, sidestepping the directory-reparse-point limitation
+  rather than working around it with a two-step dance. What *is* still true
+  and still load-bearing either way: a running process keeps its own image
+  mapped by handle, not by path — Windows allows renaming (not overwriting)
+  a file a process has open from it, so the old target's `watchdog.exe`
+  stays safely runnable throughout any swap, the same property Linux's
+  design already relies on.
 - **Linux's `ExecStart=` launches *through* the `current` symlink**
   (`packaging/linux`'s unit file:
   `ExecStart=/var/lib/synthaea/current/watchdog run --agent-bin
@@ -133,32 +143,52 @@ without change. It does not revisit any Linux decision.
    (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`) or ends in a
    trailing dot or space (both are silently stripped by Windows's own path
    normalization, so `agent.exe.` and `agent.exe` name the same file on NTFS
-   even though they differ as manifest keys). `release-tool` also rejects the
-   whole manifest if any two entries collide case-insensitively (`Agent.exe`
-   and `agent.exe`): the manifest is signed once on a case-sensitive build
-   host, but Windows's `Layout` looks entries up case-insensitively (NTFS's
-   own default collation) — the two verify as distinct entries on Linux and
-   collapse onto one file on NTFS, so the hash actually checked may not be
-   the hash of the file actually executed. What survives is stored as a
+   even though they differ as manifest keys). `release-tool` also rejects
+   the whole manifest if any two entries collide case-insensitively
+   (`Agent.exe` and `agent.exe`): the manifest is signed once on a
+   case-sensitive build host, but Windows's `Layout` looks entries up
+   case-insensitively, and NTFS folds names through its own `$UpCase`
+   table, not simple ASCII case-folding — so this check only means what it
+   claims if every manifest entry stays in the range where ASCII
+   case-folding and NTFS's folding agree. Rather than reimplementing
+   `$UpCase`, or reasoning about Unicode normalization forms (two
+   byte-distinct names that render identically can still collide on NTFS,
+   independent of case), **every manifest entry must be ASCII** — any
+   non-ASCII byte anywhere in a path is rejected outright, the same "reject
+   rather than carefully replicate OS behavior" posture as the 8.3 check
+   below. Within that restriction, simple ASCII case-insensitive comparison
+   and NTFS's actual folding behavior agree exactly, closing the gap by
+   construction instead of by reimplementation; release binaries and model
+   files have no legitimate reason to carry a non-ASCII path component, so
+   this costs nothing in practice. What survives is stored as a
    forward-slash string, exactly as ADR-0015 Decision 2 already did.
-   **8.3 short names are a related, narrower residual risk the checks above
-   do not close**: two long names that differ (`Agent-v2.exe`,
-   `Agent-v3.exe`) can still generate the same legacy 8.3 short name
-   (`AGENT~1.EXE`) if short-name generation is enabled on the volume, and
-   either one could then be opened through the other's short name. Closing
-   this at the manifest level would mean reimplementing Windows's 8.3
-   generation algorithm in `release-tool` just to reject collisions against
-   it; cheaper and more certain is for `cmd_install` to disable short-name
-   generation on `%ProgramData%\Synthaea\versions\` itself (`fsutil
-   8dot3name set <path> 1`, supported per-directory since Windows
-   8/Server 2012) before `apply-release` ever stages a file under it, as a
-   hard install failure if it cannot be disabled — the same "hard-fail, do
-   not silently proceed" posture Decision 3's squatting defense already
-   takes.
-   This check has a real, already-shipped bug to fix before it means
-   anything: `release-tool/src/manifest_dir.rs`'s `walk()` joins each
-   directory entry into a relative path (`relative.join(name)`) and then
-   unconditionally rewrites every backslash to a forward slash (`:54`,
+   **8.3 short names are a related, narrower residual risk**: two long
+   names that differ (`Agent-v2.exe`, `Agent-v3.exe`) can still generate the
+   same legacy 8.3 short name (`AGENT~1.EXE`) if short-name generation is
+   enabled on the volume, and either one could then be opened through the
+   other's short name. The install-time mitigation this ADR first
+   considered — disabling short-name generation on
+   `%ProgramData%\Synthaea\versions\` itself before staging anything there —
+   does not exist at that granularity: `fsutil 8dot3name` controls
+   short-name generation per **volume** (the `NtfsDisable8dot3NameCreation`
+   registry value), not per directory, so using it here would mean
+   disabling 8.3 names for the entire system volume as a side effect of
+   installing this service — a far broader change than `cmd_install` has
+   any business making unilaterally, affecting every other directory and
+   application on the host. Closed at build time instead, alongside the
+   checks above: `release-tool` computes each manifest entry's
+   NTFS-generated 8.3 short name using the documented generation algorithm
+   (uppercase, first six characters of the sanitized basename plus `~1`
+   through `~4` disambiguating a numbered tail, first three characters of
+   the extension) and rejects the manifest if any two entries collide under
+   it — the same "reject at the one place the manifest is assembled"
+   posture as the checks above, and it requires no runtime change to the
+   host at all.
+   This check, and the case-insensitive check above, share a real,
+   already-shipped bug to fix before either means anything:
+   `release-tool/src/manifest_dir.rs`'s `walk()` joins each directory entry
+   into a relative path (`relative.join(name)`) and then unconditionally
+   rewrites every backslash to a forward slash (`:54`,
    `p.replace('\\', "/")`) *before* `validate_entry_paths()` ever sees the
    string (`build()` calls it last, on the already-rewritten map) — so the
    backslash rule above can never fire: a literal backslash inside one
@@ -171,9 +201,11 @@ without change. It does not revisit any Linux decision.
    rejected.
 
 3. **Layout**: `updater::layout` grows a Windows-native sibling, not a
-   `cfg`-abstracted trait with two bodies — the two platforms' primitives
-   (symlink + `rename(2)` vs. `CreateSymbolicLinkW` + `MoveFileExW`, plus the
-   `sc config` step Decision 4 below adds) differ enough that one shared
+   `cfg`-abstracted trait with two bodies — Linux's primitive is a symlink
+   swapped by `rename(2)`; Windows's is a plain marker **file** swapped by
+   `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` (see Context), plus the
+   `sc config`/`sc stop`/`sc start` calls Decision 4 below adds, which Linux
+   has no equivalent of at all — different enough primitives that one shared
    abstraction would hide more than it clarifies, matching this crate's existing
    `#[cfg(target_os = "linux")]`-gated-module convention (ADR-0015 Consequences)
    rather than inventing a cross-platform API surface that would misleadingly
@@ -188,7 +220,11 @@ without change. It does not revisit any Linux decision.
      DACL is **protected and non-inherited** (`SetSecurityInfo` with
      `PROTECTED_DACL_SECURITY_INFORMATION`, or the SDDL equivalent), owner
      set explicitly to `BUILTIN\Administrators`, granting write access only
-     to `SYSTEM` and `BUILTIN\Administrators` — never inherited from
+     to `SYSTEM` and `BUILTIN\Administrators`, and read access to `Everyone`
+     — needed so `current` (below) is legible to an unprivileged reader
+     such as the self-integrity monitor or the agent process itself, as an
+     ordinary filesystem read, without going through the service's own
+     security descriptor at all — never inherited from
      `%ProgramData%`'s own default ACL, which grants `BUILTIN\Users`
      create-subfolder rights on a stock install, and never left to whatever
      owner a pre-existing directory happens to have (see squatting defense
@@ -222,35 +258,54 @@ without change. It does not revisit any Linux decision.
      Decision 7.
    - **`versions\vN\`**, under the `%ProgramData%\Synthaea\` base: staged,
      verified, promoted releases — directly analogous to Linux's `versions/`.
-   - **`current`**: an NTFS directory symlink under the base directory, pointed
-     either at a `versions\vN\` directory or absent (meaning "day 0, running from
-     `Program Files\Synthaea`" — the Windows reading of ADR-0015 Decision 7, since
+   - **`current`**: a plain **marker file** (not a directory symlink or
+     reparse point — see Context) directly under the base directory,
+     holding the absolute path of the active `versions\vN\` directory as
+     its entire contents, or absent (meaning "day 0, running from `Program
+     Files\Synthaea`" — the Windows reading of ADR-0015 Decision 7, since
      there is no single `bootstrap`-named directory to point at across the
      `Program Files`/`ProgramData` split). Kept for the same reason
-     `resolve_active_dir()` exists on Linux: a single place for the self-integrity
-     monitor, `apply-release`, and an operator to ask "what's active" without
-     parsing `binPath`. **Not** what the SCM launches through (Decision 4) —
-     Windows is not re-deriving Linux's "launch through the symlink" trick, per
-     the canonicalization finding in Context. `current` is briefly absent
-     during the swap itself (Decision 4's symlink-replacement mechanism cannot
-     be a single atomic rename on Windows); a reader that finds it absent
-     must not assume day-0 on that basis alone — it must fall back to reading
-     the service's actual `binPath` (`sc qc`) to tell "day 0, never promoted"
-     apart from "mid-promotion, check again."
+     `resolve_active_dir()` exists on Linux: a single place for the
+     self-integrity monitor, `apply-release`, and an operator to ask "what's
+     active" without parsing `binPath`. **Not** what the SCM launches
+     through (Decision 4) — Windows is not re-deriving Linux's "launch
+     through the symlink" trick, per the canonicalization finding in
+     Context. Replaced by a single atomic file-rename (Decision 4), so a
+     reader never observes a half-written or missing value mid-promotion —
+     unlike a directory-symlink swap, file-over-file `MoveFileExW(...,
+     MOVEFILE_REPLACE_EXISTING)` has no window where `current` names
+     nothing. This also makes `current` readable without ever calling `sc
+     qc`: reading it is an ordinary filesystem read governed by the base
+     directory's own DACL (above), not by the service's security
+     descriptor — the hardened SDDL (Context, Decision 4 step 3) denies
+     `BA` several service-control rights, and whether an unprivileged
+     reader such as the self-integrity monitor or the agent itself even
+     holds `SERVICE_QUERY_CONFIG` on this service is not something to
+     assume; a plain file read sidesteps the question entirely instead of
+     depending on it. A reader that finds `current` absent takes that at
+     face value as "day 0, never promoted" — there is no mid-promotion
+     window in which it could be absent-but-misleading, so no `binPath`
+     fallback is needed here at all.
 
 4. **Promotion mechanics**: `apply-release` (the same one-shot, operator/timer/
    scheduler-invoked command ADR-0015's amendment describes, extended to dispatch
    on `cfg(windows)`) does, after staging and verifying `versions\vN\` the same
    way as Linux (Decision 2's shared manifest/verification code path):
    1. **Pre-flight launch check**: runs the staged `versions\vN\watchdog.exe`
-      with a dedicated, side-effect-free self-check subcommand (exits 0 and
-      prints nothing that needs parsing — existence of the exit code is the
-      whole check) before touching `binPath` or `current` at all. A release
-      that fails this — corrupted binary, missing dependency, wrong
-      architecture — is rejected the same way a bad signature is (Decision 5's
-      `Failed` outcome, `versions\vN\` left on disk for inspection, nothing
-      live touched). This is the actual fix for "a broken release reaches
-      `binPath`": it is cheaper and more
+      *and* `versions\vN\agent.exe`, each with its own dedicated,
+      side-effect-free self-check subcommand (exits 0 and prints nothing
+      that needs parsing — existence of the exit code is the whole check),
+      before touching `binPath` or `current` at all. Neither subcommand
+      exists today; this ADR adds both — checking only `watchdog.exe` would
+      leave open exactly the failure mode this step exists to close, just
+      one layer down: a broken or wrong-architecture `agent.exe` behind a
+      good `watchdog.exe` would still reach `binPath`, caught only by the
+      120s probation after the service is already live, not before. A
+      release that fails either check — corrupted binary, missing
+      dependency, wrong architecture — is rejected the same way a bad
+      signature is (Decision 5's `Failed` outcome, `versions\vN\` left on
+      disk for inspection, nothing live touched). This is the actual fix
+      for "a broken release reaches `binPath`": it is cheaper and more
       certain to never promote an unlaunchable binary than to depend on
       exactly how the SCM's failure actions treat a launch failure versus a
       post-launch crash, which (Decision 6) is not fully settled.
@@ -268,26 +323,36 @@ without change. It does not revisit any Linux decision.
       `sc config` succeeds would leave exactly that lie live if `sc config`
       is then denied or power is lost before it runs, so `sc config` must
       run first.
-   3. **ACL reset/reharden is unconditional**, not best-effort, and brackets
-      both step 2 and step 5 below in one continuous window — not two
-      separate brackets: `reset_service_acl_best_effort()` runs once, before
-      step 2; `harden_service_acl()` runs once, after step 5, via a small
-      RAII guard (or equivalent) that calls it on drop regardless of how
-      steps 2-5 returned, so an early `?` anywhere in between can never
-      leave the service on the permissive SDDL — `cmd_install`'s existing
-      bracket has exactly this gap today and needs the same fix, not just
-      this ADR's new call site. Extending the
-      bracket over the restart (step 5) is itself required, not cosmetic —
-      see step 5's own note below.
-      Rehardening's own failure is itself a hard failure, logged and
-      surfaced, never swallowed — losing the #71 self-protection ACL
-      silently is worse than a failed promotion. **This is a real behavior
-      change, not just a relocation**: `harden_service_acl()` as it exists today
-      (`watchdog/src/service/windows.rs:163`) only logs a warning and
-      continues on failure; every call site, including `cmd_install`'s
-      existing two, now hard-fails instead. That is the intended fix, not an
-      accident of the move, and is called out here so it is not mistaken
-      for implementation detail.
+   3. **ACL reset/reharden brackets both step 2 and step 5 below in one
+      continuous window**, not two separate brackets:
+      `reset_service_acl_best_effort()` runs once, before step 2. On the
+      normal path, once step 5 succeeds, promotion explicitly calls
+      `harden_service_acl()` as its own fallible step and returns that
+      `Result` as part of `apply-release`'s own outcome — a reharden
+      failure here is a hard failure, surfaced to the caller exactly the
+      way a `sc config` failure is (Decision 5's `Failed` outcome). A small
+      RAII guard also wraps steps 2-5, armed from the moment
+      `reset_service_acl_best_effort()` runs; its `Drop` only reharden-s if
+      the explicit call above was never reached — the early-return path,
+      where some step's own `?` exits the function before step 5's
+      explicit `harden_service_acl()` call runs. A destructor cannot return
+      a `Result`, so on *that* path a reharden failure can only be logged
+      at error level, not surfaced to whatever caller triggered the early
+      return — a strictly weaker guarantee than the normal path's, stated
+      as such here rather than claimed as equivalent: the guard's job on
+      that path is "never silently leave the permissive SDDL in place,"
+      not "always report the outcome." `cmd_install`'s existing bracket has
+      exactly this gap today (a bare best-effort call, no guard at all) and
+      needs the same two-tier fix, not just this ADR's new call site.
+      Extending the bracket over the restart (step 5) is itself required,
+      not cosmetic — see step 5's own note below.
+      **This is a real behavior change, not just a relocation**: `harden_service_acl()`
+      as it exists today (`watchdog/src/service/windows.rs:163`) only logs
+      a warning and continues on failure; every call site, including
+      `cmd_install`'s existing two, now hard-fails on the normal path (and
+      logs at error level on the early-return path, per above) instead.
+      That is the intended fix, not an accident of the move, and is called
+      out here so it is not mistaken for implementation detail.
       Both ACL functions move from `watchdog/src/service/windows.rs` into
       `updater`'s own Windows layout module: `updater` is a leaf crate
       (`tools/check-deps.py`'s LEAF tier, base-tier dependencies only), so it
@@ -302,20 +367,23 @@ without change. It does not revisit any Linux decision.
       `UpdaterError` gains a variant for an `sc` invocation that fails to
       launch or returns non-zero, and these functions return that instead of
       `anyhow::Result` once they live in `updater`.
-   4. Only now flips `current` to `versions\vN\`: `RemoveDirectoryW` on the
-      existing `current` reparse point (removes the link itself, never
-      recurses into whatever it points at — ordinary NTFS reparse-point
-      semantics, not special-cased here) followed by `MoveFileExW` (no
-      `MOVEFILE_REPLACE_EXISTING` needed or wanted — the name is now free) of a
-      freshly built `current.tmp` symlink into `current`. This is **not** the
-      single atomic `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` rename
-      ADR-0015 Decision 5 relies on for Linux: that call fails with
-      `ACCESS_DENIED` when the destination is an existing directory, reparse
-      point or not — a plain file-over-file rename it is not. The gap between the two calls is real but small and
-      already accounted for: Decision 3 has `current`'s readers fall back to
-      `binPath` when it is absent, precisely for this window; `binPath` itself
-      (step 2) already points at vN before this step runs, so nothing is
-      misreported in between, only momentarily unavailable from `current`.
+   4. Only now flips `current` to the new target: writes the active path
+      into a fresh `current.tmp` file, then `MoveFileExW(current.tmp,
+      current, MOVEFILE_REPLACE_EXISTING)` — an ordinary file-over-file
+      rename, which *is* the single atomic swap ADR-0015 Decision 5 relies
+      on for Linux (Context's finding about directory reparse points does
+      not apply here: `current` is a plain file, Decision 3, not a
+      reparse point). There is no window where `current` is absent or
+      half-written. **If this step fails** — disk full writing
+      `current.tmp`, an unexpected permissions change on the base directory
+      between step 1 and here — `apply-release` reverts step 2 (`sc
+      config` back to the previous target's resolved paths, the same
+      ACL-bracketed call) before returning `Failed`: nothing has restarted
+      yet (step 5 below), so the currently-running old watchdog process is
+      untouched by this, and reverting `binPath` restores "`binPath` and
+      `current` both still agree, both still say the old version" rather
+      than leaving `binPath` pointed at `vN` while `current` still names
+      the old target.
    5. **Restarts the service with `sc stop` then `sc start`, explicitly —
       not `ControlService` plus the existing `sc failure` auto-restart.**
       They are not equivalent: a deliberate stop is not a service *failure*,
@@ -349,6 +417,19 @@ without change. It does not revisit any Linux decision.
       rollback (Decision 5) is the opposite case and must report non-zero on
       purpose — the two paths share the mechanism and must not share the
       exit code.
+      **If `sc start` itself returns an error** — the SCM could not even
+      launch `versions\vN\watchdog.exe`, despite step 1's pre-flight check
+      having run it successfully moments earlier (a race, a transient I/O
+      error, or a dependency only missing under the SCM's own launch
+      context) — `apply-release` does not leave the service simply stopped
+      with `binPath`/`current` already pointing at an unstarted `vN` and no
+      probation window ever entered to catch it. It instead runs the same
+      rollback routine Decision 5's health-check failure uses, immediately
+      and synchronously: ban `vN` in `banned_versions.json`, flip
+      `binPath`/`current` back to the prior target (steps 2 and 4,
+      reversed), and `sc start` that target. This converges "fails to even
+      start" with "starts but never reports healthy" onto the one rollback
+      path instead of leaving the former undefined.
 
    **MSI upgrade and uninstall:** `Product.wxs`'s own custom action runs `rd
    /s /q` on the install folder because, on this platform, "uninstall must
@@ -365,20 +446,37 @@ without change. It does not revisit any Linux decision.
    back" forward into the very release the reinstall was trying to escape,
    while the integrity monitor hashes a `current` target that is not what
    `binPath` on the freshly-reinstalled MSI actually runs.
-   **Decided here: `cmd_install` clears the updater's own state on every
-   install path it runs on** — true first install, major upgrade, and a
+   **Decided here: `cmd_install` clears the updater's binary-lineage
+   bookkeeping on every install path it runs on, but never touches the ban
+   list.** `versions\`, `current`, and `.healthy` markers under
+   `%ProgramData%\Synthaea\` are removed before recreating the directory
+   and its DACL (Decision 3), on true first install, major upgrade, and a
    fresh install over a previous uninstall alike (it already runs fresh on
-   all three, per Context) — removing `versions\`, `current`, `.healthy`
-   markers, and `banned_versions.json` under `%ProgramData%\Synthaea\`
-   before recreating the directory and its DACL (Decision 3). This keeps the
-   invariant simple and checkable (every `cmd_install` run starts from
-   exactly "day 0, running from `Program Files\Synthaea`, no staged
-   versions") instead of asking every reader of that state to separately
-   reason about how stale it might be. A plain uninstall by itself still
-   leaves `%ProgramData%\Synthaea\` behind (Windows's uninstaller has no
-   custom action targeting it, same as today), but the next `cmd_install` —
-   whether from a reinstall of the same MSI or a different one — resets it,
-   so leftover state never outlives the service's own next install.
+   all three, per Context) — this keeps that part of the invariant simple
+   and checkable (every `cmd_install` run starts from exactly "day 0,
+   running from `Program Files\Synthaea`, no staged versions") instead of
+   asking every reader of that state to separately reason about how stale
+   it might be.
+   `banned_versions.json` is deliberately excluded from this wipe, on every
+   install path including a major upgrade: a ban records a security
+   decision about a specific `release_version` number, not bookkeeping
+   about which binaries happen to be on disk, and nothing about
+   uninstalling, reinstalling, or upgrading the MSI should make a
+   previously-banned release promotable again — an operator (or `recover`,
+   Decision 6) who banned a known-bad release expects that ban, and any
+   anti-rollback floor derived from it, to survive the next upgrade, not
+   reset with it. Retaining it does not reopen the stale-state problem the
+   wipe above exists to fix: that problem was a stale `versions\v9\`
+   wrongly marked `.healthy` being misread by `recover`/health-check as
+   still current, and `versions\`/`.healthy` are still wiped
+   unconditionally; the ban list surviving never by itself produces a
+   wrong rollback target, since `rollback_target` only ever chooses among
+   staged `versions\vN\` directories, which this wipe has already emptied.
+   A plain uninstall by itself still leaves `%ProgramData%\Synthaea\`
+   behind (Windows's uninstaller has no custom action targeting it, same
+   as today), but the next `cmd_install` — whether from a reinstall of the
+   same MSI or a different one — resets the lineage bookkeeping (never the
+   ban list) the same way.
 
 5. **Rollback and health check: same model as ADR-0015 Decision 6/the
    watchdog-probation amendment, Windows primitives substituted.** A watchdog
@@ -393,8 +491,8 @@ without change. It does not revisit any Linux decision.
    Linux-specific in it), bans the failed `release_version` in the same
    `banned_versions.json` shape and location convention
    (`%ProgramData%\Synthaea\banned_versions.json`), flips `current` back
-   (Decision 4's `RemoveDirectoryW`-then-`MoveFileExW` pair, same as a
-   promotion), and reports `SERVICE_STOPPED` with a non-zero
+   (Decision 4's atomic marker-file rewrite, same as a promotion), and
+   reports `SERVICE_STOPPED` with a non-zero
    `dwWin32ExitCode` via `SetServiceStatus` (Decision 4 step 5's exit-code
    note) so `sc failure`'s configured restart action relaunches from the
    rolled-back `binPath` — this depends on `cmd_install` also calling `sc
@@ -494,6 +592,25 @@ without change. It does not revisit any Linux decision.
    `Program Files\Synthaea` if none qualifies; rewrites `binPath` to that
    target (the same `sc config`-bracketed-by-ACL pair as a promotion); and
    starts the service.
+   **Loop guard**: `sc failure`'s action list repeats its last entry
+   (`run/5000`) for every failure after the list is exhausted, within the
+   same `reset=` window (Decision 6's `reset= 60`) — so a transient
+   condition unrelated to any specific release (a brief disk-full spell,
+   say) that causes several failures in a row would otherwise have
+   `recover` ban-and-roll-back once per failure, potentially burning
+   through every staged healthy version in one bad stretch regardless of
+   whether any of them were actually broken. `recover` writes a small
+   marker (the version number it just banned, plus a timestamp) under the
+   base directory each time it bans-and-rolls-back; on a later invocation
+   within `reset=` seconds of that marker, it does **not** ban or roll back
+   again — it logs this as a terminal condition for the current failure
+   cycle ("already recovered once this window; not cascading a second
+   automatic rollback") and re-attempts starting whatever `binPath`
+   already names, the same posture as the no-older-target terminal case
+   below. Once `reset=` seconds pass with the service reporting no further
+   failures, the SCM's own failure count resets and `recover` treats its
+   marker as stale, so a genuinely new problem later still gets one fresh
+   recovery attempt.
    **When `binPath` already points at `Program Files\Synthaea` itself** —
    the install-directory copy is the one crashing, from antivirus
    quarantine or on-disk corruption, say — there is no older target:
@@ -560,8 +677,9 @@ without change. It does not revisit any Linux decision.
   — the first piece of Windows-side code in this project to set one
   explicitly rather than rely on inherited defaults — plus an
   ownership/reparse-point check `cmd_install` and every `apply-release` now
-  both run against it, and a state wipe `cmd_install` performs on every
-  install path (Decision 4's "MSI upgrade and uninstall").
+  both run against it, and a lineage-bookkeeping wipe (never the ban list)
+  `cmd_install` performs on every install path (Decision 4's "MSI upgrade
+  and uninstall").
 - First cross-platform exercise of the ADR-0015 manifest format: the build-time
   path normalization in Decision 2 is a small, real change to `release-tool`,
   and needs a fixture proving a manifest built with it still verifies
