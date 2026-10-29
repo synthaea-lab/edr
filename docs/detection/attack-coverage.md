@@ -10,7 +10,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1078 | 3 | `rules:crates/rules/src/state.rs` |
-| T1189 | 3 | `sigma:rules/sigma/windows/browser_spawned_interpreter.yml` |
+| T1189 | 3 | `sigma:rules/sigma/linux/browser_spawned_shell.yml`, `sigma:rules/sigma/windows/browser_spawned_interpreter.yml` |
 | T1190 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml`, `sigma:rules/sigma/windows/iis_worker_spawned_interpreter.yml`, `sigma:rules/sigma/windows/web_server_spawned_interpreter.yml` |
 
 ## Execution
@@ -20,7 +20,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1047 | 3 | `sigma:rules/sigma/windows/wmic_remote_process_inline_password.yml` |
 | T1059 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/linux/susp_tmp_exec.yml`, `sigma:rules/sigma/windows/susp_appdata_exec.yml`, `sigma:rules/sigma/windows/web_server_spawned_interpreter.yml` |
 | T1059.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/browser_spawned_interpreter.yml`, `sigma:rules/sigma/windows/iis_worker_spawned_interpreter.yml`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml`, `sigma:rules/sigma/windows/powershell_encoded.yml` |
-| T1059.004 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/reverse_shell.yml`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml` |
+| T1059.004 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/linux/browser_spawned_shell.yml`, `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/reverse_shell.yml`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml` |
 | T1204 | 3 | `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml` |
 
 ## Persistence
