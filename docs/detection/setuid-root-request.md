@@ -51,6 +51,10 @@ What the telemetry is: the call at syscall **entry**, `meta.user` the caller's r
   **Their real operation was not exercised**, so `pkexec`, the polkit helper, `newuidmap` and
   container tooling may alert: the reason for Low and a provisional list.
 
+A child that forked and never exec'd takes its **parent's** image (`reader_image`), so the forked winner
+of a race-window exploit alerts as the exploit and `sshd`'s privilege-separated children resolve to
+`sshd-session`; only one level of fork is followed.
+
 Not covered: an exploit inside a listed binary (same request as the real one); a pid whose exec the
-agent did not see (no image, silent); `setreuid`, which `IdentityChangeKind` does not carry; group
+agent did not see, or a grandchild forked twice without an exec (no image, silent); `setreuid`, which `IdentityChangeKind` does not carry; group
 ids and `setfsuid`. Tests: `crates/rules/src/tests/privesc.rs`.
