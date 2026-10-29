@@ -250,7 +250,9 @@ Invoke-Native logman @("start", $TraceName, "-p", "Microsoft-Windows-Kernel-Proc
 try {
     if ($AgentExe) { $agent = Start-ScenarioAgent $dir }
     $run = Invoke-ContainerScenario
-    $siloIds = Show-SiloDiagnostics $dir
+    # @(): a function's one-element array comes back unrolled to a bare string, and
+    # Test-Scenario's $SiloIds[0] then reads its first character ("2" of "220").
+    $siloIds = @(Show-SiloDiagnostics $dir)
     if ($agent) { Start-Sleep -Seconds 8 }
 }
 finally {
