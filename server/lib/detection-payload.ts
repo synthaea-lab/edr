@@ -23,6 +23,20 @@ const SourceSchema = z.discriminatedUnion("engine", [
   }),
 ]);
 
+// The technique fields are agent-supplied, so they are bounded here (#1058): before this, only
+// nginx's 8 MiB body limit capped them, and a buggy or compromised agent could store
+// megabyte-long tags that every case-grouping pass, case title and hunt query then processes.
+// Every value emitted on 2026-10-29 fits with a wide margin: MITRE ids (`T1059.001`), the
+// engine and marker tags (`BAYES`, `IOC`, `LOG-SOURCE`, `RESPONSE-*`), and at most 23
+// characters for a joined compound. YARA and Sigma only ever yield `T\d{4}(\.\d{3})?`.
+// One element of the structured `techniques` list: the agent splits `/`-joined compound
+// tags before upload (`techniques_from`, agent/src/sink.rs), so an element has no `/`.
+const TechniqueIdSchema = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
+// The legacy single `technique` string is the rule's tag as-is, compound `/` included.
+const LegacyTechniqueSchema = z.string().regex(/^[A-Za-z0-9._/-]{1,128}$/);
+// The longest compound joins three ids; 16 leaves room without being unbounded.
+const MAX_TECHNIQUES = 16;
+
 // Mirrors schema::Detection's JSON shape. The Rust schema owns the wire format;
 // keep this validation in step with its golden fixtures when the schema changes.
 const StructuredDetectionSchema = z.object({
@@ -36,14 +50,14 @@ const StructuredDetectionSchema = z.object({
     value: z.number().finite(),
     contribution: z.number().finite(),
   })).default([]),
-  techniques: z.array(z.string().min(1)).default([]),
+  techniques: z.array(TechniqueIdSchema).max(MAX_TECHNIQUES).default([]),
   events: z.array(z.record(z.any())),
 });
 
 // Keep the original API contract for enrolled agents that have not upgraded.
 const LegacyDetectionSchema = z.object({
   timestamp_ns: z.number().finite().positive(),
-  technique: z.string().min(1),
+  technique: LegacyTechniqueSchema,
   severity: SeveritySchema,
   event: z.record(z.any()),
   meta: z.record(z.any()),
