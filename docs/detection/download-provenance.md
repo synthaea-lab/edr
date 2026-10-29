@@ -69,6 +69,12 @@ identity: the verdict decides as before. Different identity, or none on either
 side: the alert is raised `[signature not verified: file differs from the image
 that ran]`.
 
+No identity is captured for an image on a network or device path (UNC, `\\?\`,
+`\Device\...`): the open would be a round trip on the thread that delivers every
+kernel-process event. The gate then fails closed for those images, as it does when
+nothing could be captured. A mapped network drive letter looks local and is still
+opened.
+
 Residual: the identity is taken in the ETW callback, so a swap between the
 process starting and that callback is not seen. Closing it needs a kernel
 process-creation callback giving the image's file object (the minifilter has
