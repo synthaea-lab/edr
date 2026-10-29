@@ -65,6 +65,10 @@ not to hope.
   `tools/check-deps.py` in CI — a new crate is classified in the same change.
 - Platform-specific code lives in `crates/sensors/*` and the narrow exceptions
   documented in `CLAUDE.md`, target-gated.
+- A name the agent shows the host or the network (service, unit, label, ETW session,
+  temp file, socket, `User-Agent`) is a constant in `config::identity`, never a literal at
+  its call site. A sensor crate does not hold such a name: the agent passes it in when it
+  constructs the sensor (ADR-0043, #596).
 - `pub(crate)` by default. A crate's `pub` surface is its contract: minimal,
   deliberate, documented. `#[must_use]` on value-returning methods
   (`must_use_candidate` enforces it).
