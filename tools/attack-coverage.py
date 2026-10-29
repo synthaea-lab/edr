@@ -207,12 +207,14 @@ def discover() -> dict[str, dict[str, set]]:
 # Coverage a tag does not yet claim, rendered after the matrix so a reader of the
 # T1566.001 row does not assume a mail client the rule never saw.
 UNVERIFIED_NOTES = [
-    "T1566.001 (mail attachment) is tagged only for a mark written by Apple Mail "
-    "(quarantine agent `Mail`). Outlook is **not verified**. Hypothesis: the "
-    "opened attachment is copied under the `Content.Outlook` folder; whether it "
-    "carries a mark, and which process writes it, is still to be observed. "
-    "Thunderbird is not verified either. Neither is in the rule until a lab "
-    "capture shows the mark and its writer (#376).",
+    "T1566.001 (mail attachment) is tagged only for a mark whose quarantine agent is "
+    "`Mail` (Apple Mail). That string is the **expected** one and is **not yet "
+    "captured**: no `com.apple.quarantine` value from a saved Mail attachment is in "
+    "the repo, and if a Mac shows another string the tag does not fire. Outlook is "
+    "**not verified** either. Hypothesis: the opened attachment is copied under the "
+    "`Content.Outlook` folder; whether it carries a mark, and which process writes "
+    "it, is still to be observed. Thunderbird is not verified. Neither is in the "
+    "rule until a lab capture shows the mark and its writer (#376).",
 ]
 
 

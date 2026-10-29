@@ -21,8 +21,11 @@ ADR-0018). Two rules consume it:
 The mail-client tag (`MAIL_CLIENT_QUARANTINE_AGENTS`) is a label on the same
 alert, not a second rule: same window, same signature gate, same one alert per
 mark. It says "marked by Mail", not "phishing": a person who saved an
-attachment on purpose and ran it matches too. **Outlook and Thunderbird are
-not in the list**: that the opened attachment carries a mark, which process
+attachment on purpose and ran it matches too. **Apple Mail is listed on its
+expected string, not on a capture**: no `com.apple.quarantine` value from a
+saved Mail attachment is in the repo yet, and if a Mac shows another agent
+string the tag does not fire (a missed label, not a false one). **Outlook and
+Thunderbird are not in the list**: that the opened attachment carries a mark, which process
 writes it, and where (hypothesis: a `Content.Outlook` folder) are not
 observed. They stay plain T1204.002 until a lab capture shows them.
 

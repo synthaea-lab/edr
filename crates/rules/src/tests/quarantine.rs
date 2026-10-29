@@ -213,7 +213,7 @@ fn on_exec_alone_no_longer_raises_the_download_join() {
     assert!(state.on_exec(&run(DOWNLOAD, 1)).is_empty());
 }
 
-// T1566.001 (#376): the mark's writer is a mail client whose mark was observed.
+// T1566.001 (#376): the mark's writer is Apple Mail, on its expected quarantine string (not captured).
 
 const MAC_ATTACHMENT: &str =
     "/Users/u/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/invoice";
