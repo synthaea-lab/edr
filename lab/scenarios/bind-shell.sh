@@ -24,7 +24,7 @@
 #      rule alerts on listeners not seen at startup)
 #   2) terminal B: ./lab/scenarios/bind-shell.sh
 #   3) expected in terminal A, within ~10s of the listener opening:
-#      T1571 — pid=... comm=nc new listener on 127.0.0.1:4445 — not seen at agent startup
+#      T1571 — pid=... comm=nc new tcp listener on 127.0.0.1:4445 — not seen at agent startup
 
 set -euo pipefail
 
