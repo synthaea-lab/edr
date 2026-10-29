@@ -175,15 +175,27 @@ without change. It does not revisit any Linux decision.
    disabling 8.3 names for the entire system volume as a side effect of
    installing this service — a far broader change than `cmd_install` has
    any business making unilaterally, affecting every other directory and
-   application on the host. Closed at build time instead, alongside the
-   checks above: `release-tool` computes each manifest entry's
-   NTFS-generated 8.3 short name using the documented generation algorithm
-   (uppercase, first six characters of the sanitized basename plus `~1`
-   through `~4` disambiguating a numbered tail, first three characters of
-   the extension) and rejects the manifest if any two entries collide under
-   it — the same "reject at the one place the manifest is assembled"
-   posture as the checks above, and it requires no runtime change to the
-   host at all.
+   application on the host.
+   Closed at build time instead, alongside the checks above — but not by
+   simulating NTFS's real generation algorithm. The exact short name NTFS
+   assigns depends on directory and volume state at creation time (how
+   many prior colliding names already exist there, the numeric-tail
+   assignment that follows from that), not on the long name alone, so a
+   fixed formula in `release-tool` (a cross-platform build tool, not
+   necessarily ever run against a live NTFS volume) cannot be trusted to
+   match what a real install actually generates — a check that looks like
+   it closes this but is computed against the wrong model is worse than
+   an acknowledged gap. Instead, `release-tool` rejects the manifest if any
+   two entries' sanitized basenames share the same first six ASCII
+   characters *and* the same first three characters of the extension, both
+   case-folded. This is deliberately a stricter rule than real NTFS
+   collision, not an equivalent one: it rejects some pairs that would not
+   actually collide under the real algorithm's numeric-tail behavior, in
+   exchange for never depending on reproducing that behavior exactly — the
+   same "a conservative reject beats a precise simulation of OS internals"
+   trade this ADR already makes for the ASCII-only and case-insensitive
+   checks above, just applied to a case where the real algorithm is
+   state-dependent rather than purely a function of the name.
    This check, and the case-insensitive check above, share a real,
    already-shipped bug to fix before either means anything:
    `release-tool/src/manifest_dir.rs`'s `walk()` joins each directory entry
@@ -282,10 +294,33 @@ without change. It does not revisit any Linux decision.
      reader such as the self-integrity monitor or the agent itself even
      holds `SERVICE_QUERY_CONFIG` on this service is not something to
      assume; a plain file read sidesteps the question entirely instead of
-     depending on it. A reader that finds `current` absent takes that at
-     face value as "day 0, never promoted" — there is no mid-promotion
-     window in which it could be absent-but-misleading, so no `binPath`
-     fallback is needed here at all.
+     depending on it.
+     **Reconciled from `binPath` on every watchdog startup, before anything
+     else runs — not only right after a promotion.** The atomic rewrite in
+     Decision 4 closes the window *within* a single promotion, but not a
+     crash *between* promotions: if the host stops after step 2 (`sc
+     config` already points `binPath` at `vN`) but before step 4 (`current`
+     has not moved yet), `current` still names the old target while
+     `binPath` already names `vN` — and the next boot starts the service
+     from `binPath`, i.e. from `vN`, not from whatever `current` says. A
+     reader that then took `current` at face value — including this ADR's
+     own earlier claim that an absent `current` always means "day 0" —
+     would be wrong in exactly this case. The fix is to never let that
+     claim depend on `current` surviving a crash uncorrected: on every
+     watchdog startup, before serving any request or starting probation,
+     the watchdog reads its own `binPath` (`sc qc` — privileged, since the
+     watchdog is querying its own service as `SYSTEM`, unlike an outside
+     reader) and treats it as the single source of truth, rewriting
+     `current` (the same atomic marker-file swap as Decision 4) to agree
+     with it whenever the two disagree. `binPath` is never derived from
+     `current`; only the reverse. This makes "day 0, never promoted" a
+     claim about `binPath`, not about `current`'s mere presence: a reader
+     for whom this matters reads `current` once it is known fresh (i.e.
+     after the watchdog has completed this startup step at least once)
+     rather than treating a surviving-a-crash `current` as authoritative
+     on its own — in practice the self-integrity monitor and the agent
+     only ever observe `current` once the watchdog they share a host with
+     is already up and has already run this reconciliation.
 
 4. **Promotion mechanics**: `apply-release` (the same one-shot, operator/timer/
    scheduler-invoked command ADR-0015's amendment describes, extended to dispatch
@@ -336,16 +371,28 @@ without change. It does not revisit any Linux decision.
       the explicit call above was never reached — the early-return path,
       where some step's own `?` exits the function before step 5's
       explicit `harden_service_acl()` call runs. A destructor cannot return
-      a `Result`, so on *that* path a reharden failure can only be logged
-      at error level, not surfaced to whatever caller triggered the early
-      return — a strictly weaker guarantee than the normal path's, stated
-      as such here rather than claimed as equivalent: the guard's job on
-      that path is "never silently leave the permissive SDDL in place,"
-      not "always report the outcome." `cmd_install`'s existing bracket has
-      exactly this gap today (a bare best-effort call, no guard at all) and
-      needs the same two-tier fix, not just this ADR's new call site.
-      Extending the bracket over the restart (step 5) is itself required,
-      not cosmetic — see step 5's own note below.
+      a `Result`, so a log line alone is not a security guarantee on that
+      path — a log is something an operator might read eventually, not a
+      state the service is actually in. So `Drop`, on a reharden failure,
+      does not stop at logging: it immediately attempts `sc stop` on the
+      service itself, synchronously (a destructor can still run blocking
+      code, it just cannot return its outcome to the original caller). A
+      service that is down cannot be reached through the permissive SDDL
+      it was left under, so this trades "promotion also failed" for "stayed
+      exploitable" — the fail-safe direction. Both outcomes are logged at
+      error level: the reharden failure itself, and separately whether the
+      follow-up `sc stop` succeeded. If `sc stop` *also* fails — the
+      genuinely worst case, a service both unhardened and unstoppable by
+      this path — that is logged at the highest severity this module has,
+      as a terminal, operator-actionable condition; there is nothing
+      further this code can safely do about it. None of this claims to be
+      as strong as the normal path's surfaced `Result` — it is the most
+      this code can do without one, stated as exactly that rather than
+      dressed up as equivalent. `cmd_install`'s existing bracket has
+      exactly this gap today (a bare best-effort call, no guard, no
+      stop-attempt at all) and needs the same two-tier fix, not just this
+      ADR's new call site. Extending the bracket over the restart (step 5)
+      is itself required, not cosmetic — see step 5's own note below.
       **This is a real behavior change, not just a relocation**: `harden_service_acl()`
       as it exists today (`watchdog/src/service/windows.rs:163`) only logs
       a warning and continues on failure; every call site, including
@@ -383,7 +430,14 @@ without change. It does not revisit any Linux decision.
       untouched by this, and reverting `binPath` restores "`binPath` and
       `current` both still agree, both still say the old version" rather
       than leaving `binPath` pointed at `vN` while `current` still names
-      the old target.
+      the old target. That revert is `apply-release` itself catching its
+      own failure and undoing step 2 — it assumes something is still
+      running to do the undoing. A genuine crash in the same window (the
+      host stops outright between steps 2 and 4, nothing left to revert
+      anything) is a different case, covered by Decision 3's startup
+      reconciliation instead: the next boot's watchdog startup rewrites
+      `current` from `binPath`, not the other way around, before this step
+      or anything else gets another chance to run.
    5. **Restarts the service with `sc stop` then `sc start`, explicitly —
       not `ControlService` plus the existing `sc failure` auto-restart.**
       They are not equivalent: a deliberate stop is not a service *failure*,
@@ -457,6 +511,36 @@ without change. It does not revisit any Linux decision.
    running from `Program Files\Synthaea`, no staged versions") instead of
    asking every reader of that state to separately reason about how stale
    it might be.
+   **Sequencing, so this wipe never races a running image inside
+   `versions\`:** a major upgrade's old service, if it is currently running
+   from a staged `versions\vN\watchdog.exe` rather than from `Program
+   Files\Synthaea`, must already be stopped and its binaries' handles
+   released before `cmd_install`'s wipe step ever runs — otherwise deleting
+   `versions\` can hit `ERROR_SHARING_VIOLATION` against a file the running
+   process still has open. `Product.wxs` must schedule
+   `RemoveExistingProducts` (which carries the old product's own
+   `ServiceControl` stop) early in `InstallExecuteSequence` — before
+   `InstallFiles` and before `cmd_install`'s own custom action — the
+   WiX-recommended major-upgrade ordering, and already required independently
+   so the old product's files are not locked when the new product installs
+   its own copies into `Program Files\Synthaea`; this ADR relies on the same
+   ordering, not a new one, for `versions\` as well. Given that ordering,
+   whatever the old service was running from is already gone by the time
+   `cmd_install` runs, so the wipe does not need its own stop-and-wait
+   logic. It still needs defined behavior for the residual case — a stray
+   handle from something other than the service itself (a crash-dumped
+   debugger, an antivirus scanner) — rather than silently assuming the
+   happy path always holds: a sharing violation deleting `versions\vN\`
+   subdirectories is logged and left for the next successful run to retry,
+   the same non-fatal posture Decision 5's own pruning already takes for
+   exactly this error, since that content is replaceable bookkeeping, not a
+   small fixed set of files the rest of this design depends on existing.
+   A sharing violation on `current`, a `.healthy` marker, or
+   `banned_versions.json` itself is different: nothing legitimate should
+   ever hold one of these three open across an install, so a failure to
+   remove any of them is a hard install failure, not logged-and-retried —
+   a quiet partial wipe there is exactly the stale-state problem this
+   decision exists to close, just reintroduced through a different file.
    `banned_versions.json` is deliberately excluded from this wipe, on every
    install path including a major upgrade: a ban records a security
    decision about a specific `release_version` number, not bookkeeping
@@ -671,8 +755,10 @@ without change. It does not revisit any Linux decision.
   `tools/check-deps.py`'s LEAF tier allows, since `updater` cannot depend on
   a binary. `cmd_install` itself also changes behaviorally, not just by
   relocation: `reset= 60` instead of `0`, a new `sc failureflag SynthaEDR 1`
-  call (Decision 6), and rehardening failure becomes a hard error instead of
-  a logged warning (Decision 4).
+  call (Decision 6), and rehardening failure becomes a hard error on the
+  normal path, and a logged `sc stop` fail-safe attempt (never just a logged
+  warning) on the early-return path, instead of today's bare best-effort
+  log-and-continue (Decision 4).
 - `%ProgramData%\Synthaea\` gains a DACL it did not have before (Decision 3)
   — the first piece of Windows-side code in this project to set one
   explicitly rather than rely on inherited defaults — plus an
