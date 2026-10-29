@@ -185,10 +185,19 @@ without change. It does not revisit any Linux decision.
    necessarily ever run against a live NTFS volume) cannot be trusted to
    match what a real install actually generates — a check that looks like
    it closes this but is computed against the wrong model is worse than
-   an acknowledged gap. Instead, `release-tool` rejects the manifest if any
-   two entries' sanitized basenames share the same first six ASCII
-   characters *and* the same first three characters of the extension, both
-   case-folded. This is deliberately a stricter rule than real NTFS
+   an acknowledged gap. Instead, `release-tool` rejects the manifest if two
+   **siblings** — names created in the same directory — share the same first
+   six ASCII characters *and* the same first three characters of the
+   extension, both case-folded. Short names only collide between entries of
+   one directory, so the comparison is per parent directory, not across the
+   whole manifest: `models/config.json` and `plugins/config.json` never
+   collide and are accepted (an earlier draft compared basenames globally and
+   would have rejected that layout, review of #1012). It applies at every
+   level of the tree, to directory names as well as file names, since a
+   directory gets a short name the same way a file does: the manifest's paths
+   are grouped by parent, and each group's child names (the leaf files plus
+   the next path component of anything deeper) are checked pairwise. This is
+   deliberately a stricter rule than real NTFS
    collision, not an equivalent one: it rejects some pairs that would not
    actually collide under the real algorithm's numeric-tail behavior, in
    exchange for never depending on reproducing that behavior exactly — the
@@ -335,9 +344,15 @@ without change. It does not revisit any Linux decision.
       leave open exactly the failure mode this step exists to close, just
       one layer down: a broken or wrong-architecture `agent.exe` behind a
       good `watchdog.exe` would still reach `binPath`, caught only by the
-      120s probation after the service is already live, not before. A
-      release that fails either check — corrupted binary, missing
-      dependency, wrong architecture — is rejected the same way a bad
+      120s probation after the service is already live, not before. Each
+      self-check runs with a **10-second bound**. A self-check that has not
+      exited by then is terminated (it is a child `apply-release` itself
+      spawned from the staged, not-yet-live directory; killing it touches
+      nothing running) and counts as a failed check, so a binary that hangs
+      instead of crashing cannot block the operator or the timer
+      indefinitely. A release that fails either check — non-zero exit,
+      timeout, corrupted binary, missing dependency, wrong architecture — is
+      rejected the same way a bad
       signature is (Decision 5's `Failed` outcome, `versions\vN\` left on
       disk for inspection, nothing live touched). This is the actual fix
       for "a broken release reaches `binPath`": it is cheaper and more
