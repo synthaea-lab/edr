@@ -131,7 +131,7 @@ export type DrainResult = {
 
 export async function drainLakeQueue(
   prisma: PrismaClient,
-  store: LakeStore,
+  store: Pick<LakeStore, "put">,
   opts: { maxBatches?: number } = {}
 ): Promise<DrainResult> {
   const max = opts.maxBatches ?? DEFAULT_MAX_BATCHES;

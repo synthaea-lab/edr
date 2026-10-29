@@ -739,3 +739,26 @@ model LakeBatch {
   @@index([receivedAt])
   @@map("lake_batches")
 }
+
+// Telemetry lake deletions (issue #77, ADR-0041 section 5, lib/lake-retention.ts): one row per
+// `date=` prefix the retention job removed, so that "provable deletion" has a record: what, how
+// much, when, and whether the prefix listed empty afterwards. Deliberately no relation to Tenant:
+// the record must outlive the tenant it is about.
+model LakeDeletion {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  // The deleted partition, `YYYY-MM-DD` (UTC).
+  date           String
+  objectCount    Int      @map("object_count")
+  bytes          BigInt
+  // sha256 over the sorted `key:size` lines of the listing that was deleted.
+  manifestSha256 String   @map("manifest_sha256")
+  // The same prefix listed empty after the deletion.
+  verifiedEmpty  Boolean  @map("verified_empty")
+  runId          String   @map("run_id")
+  deletedAt      DateTime @map("deleted_at")
+
+  @@index([tenantId, date])
+  @@map("lake_deletions")
+}
+
