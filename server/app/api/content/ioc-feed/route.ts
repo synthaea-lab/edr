@@ -15,6 +15,8 @@ const StageSchema = z.object({
   allowEmpty: z.boolean().optional(),
   source: z.discriminatedUnion("format", [
     z.object({ format: z.literal("plain"), text: z.string(), defaultKind: Kind.optional() }),
+    z.object({ format: z.literal("stix"), json: z.string() }),
+    z.object({ format: z.literal("misp"), json: z.string() }),
     z.object({
       format: z.literal("csv"),
       csv: z.string(),
@@ -47,7 +49,9 @@ async function stage(artifactsDir: string, { entry, bytes }: StagedArtifact): Pr
  * Authentication: better-auth session, `owner` or `admin` member of the tenant (#803)
  * Body: at most MAX_STAGE_BODY_BYTES (32 MiB; 413 above), the cap nginx applies to this route too
  * Request body: { feed, version?, allowEmpty?, source } where `source` is
- *   { format: "plain", text, defaultKind? } or
+ *   { format: "plain", text, defaultKind? },
+ *   { format: "misp", json } (a MISP export: `to_ids` attributes of type sha256, ip-src/dst, domain, hostname),
+ *   { format: "stix", json } (a STIX 2.1 bundle: single-comparison indicator patterns, lifetimes judged now) or
  *   { format: "csv", csv, valueColumn, typeColumn?, defaultKind?, hasHeader? }
  * Response: { status: "staged", entries, report }
  *
