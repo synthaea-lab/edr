@@ -31,7 +31,9 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   returns `remaining`, so a schedule that does not keep up shows as a number that grows. Schedule it
   like the other crons.
 - **File.** Columns `agent_id`, `ts`, `comm`, `path`, `image_path`, `daddr`, `query`, `sha256`, and
-  `event` (the event as JSON, after ingest's `JSON.parse`). Tenant, date and type are in the path, not
+  `event` (the event's source text as the agent sent it: the queue holds the text of each element of
+  the body's `events`, so integers above 2^53 such as `meta.timestamp_ns` are not rounded; a queue row
+  written before this holds a parsed object and is serialised, with the rounding). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
 - **Store.** A directory (`FsLakeStore`): a mounted volume. Writes go to a temporary name and are

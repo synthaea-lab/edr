@@ -61,7 +61,89 @@ export type LakeRow = {
   event: string;
 };
 
-export function lakeRow(agentId: string, event: Record<string, unknown>, receivedAt: Date): LakeRow {
+/**
+ * The source text of each element of the body's top-level `events` array, in order, or null when the
+ * body has none. The `event` column is the event "byte for byte as received" (ADR-0041, decision 1):
+ * `JSON.parse` then `JSON.stringify` rounds every integer above 2^53, and `meta.timestamp_ns` (about
+ * 1.8e18) always is, so the lake keeps the text the agent sent. The body must already be valid JSON
+ * (the route parsed it); like `JSON.parse`, the last `events` key wins.
+ */
+export function eventSources(raw: string): string[] | null {
+  let found: string[] | null = null;
+  let depth = 0;
+  let i = 0;
+  const n = raw.length;
+  const skipString = () => {
+    // raw[i] is the opening quote
+    i += 1;
+    while (i < n && raw[i] !== '"') i += raw[i] === "\\" ? 2 : 1;
+    i += 1;
+  };
+  const skipWs = () => {
+    while (i < n && /\s/.test(raw[i])) i += 1;
+  };
+  while (i < n) {
+    const c = raw[i];
+    if (c === '"') {
+      const start = i;
+      skipString();
+      if (depth === 1) {
+        const key = raw.slice(start, i);
+        const after = i;
+        skipWs();
+        if (raw[i] === ":" && key === '"events"') {
+          i += 1;
+          skipWs();
+          if (raw[i] === "[") {
+            const list: string[] = [];
+            i += 1;
+            let elementStart = -1;
+            let d = 0;
+            while (i < n) {
+              const ch = raw[i];
+              if (ch === '"') {
+                if (d === 0 && elementStart < 0) elementStart = i;
+                skipString();
+                continue;
+              }
+              if (ch === "{" || ch === "[") {
+                if (d === 0 && elementStart < 0) elementStart = i;
+                d += 1;
+              } else if (ch === "}" || ch === "]") {
+                if (d === 0) break; // the closing bracket of the events array
+                d -= 1;
+              } else if (ch === ",") {
+                if (d === 0 && elementStart >= 0) {
+                  list.push(raw.slice(elementStart, i).trimEnd());
+                  elementStart = -1;
+                }
+              } else if (d === 0 && elementStart < 0 && !/\s/.test(ch)) {
+                elementStart = i; // a number, true, false or null
+              }
+              i += 1;
+            }
+            if (elementStart >= 0) list.push(raw.slice(elementStart, i).trimEnd());
+            found = list;
+            i += 1;
+            continue;
+          }
+        }
+        i = after;
+      }
+      continue;
+    }
+    if (c === "{" || c === "[") depth += 1;
+    else if (c === "}" || c === "]") depth -= 1;
+    i += 1;
+  }
+  return found;
+}
+
+/**
+ * `source` is the event's text as received; without it (a queue row written before the text was
+ * kept) the event is serialised from the parsed object, which rounds integers above 2^53.
+ */
+export function lakeRow(agentId: string, event: Record<string, unknown>, receivedAt: Date, source?: string): LakeRow {
   const meta = event.meta;
   const comm = typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>).comm : undefined;
   const sha = typeof event.sha256 === "string" ? event.sha256.toLowerCase() : "";
@@ -74,7 +156,7 @@ export function lakeRow(agentId: string, event: Record<string, unknown>, receive
     daddr: column(event.daddr),
     query: column(event.query),
     sha256: SHA256.test(sha) ? sha : null,
-    event: JSON.stringify(event),
+    event: source ?? JSON.stringify(event),
   };
 }
 
@@ -111,7 +193,8 @@ export async function enqueueLakeBatch(
       tenantId: batch.tenantId,
       agentId: batch.agentId,
       receivedAt: batch.receivedAt,
-      events: batch.events as object[],
+      // Strings of source text (see `eventSources`) or, for a caller without it, parsed objects.
+      events: batch.events as (string | object)[],
       eventCount: batch.events.length,
     },
   });
@@ -160,7 +243,17 @@ export async function drainLakeQueue(
       for (const batch of batches) {
         if (!known.has(batch.tenantId)) continue;
         const list = Array.isArray(batch.events) ? batch.events : [];
-        for (const raw of list) {
+        for (const queued of list) {
+          let source: string | undefined;
+          let raw: unknown = queued;
+          if (typeof queued === "string") {
+            source = queued;
+            try {
+              raw = JSON.parse(queued);
+            } catch {
+              raw = null;
+            }
+          }
           if (typeof raw !== "object" || raw === null || Array.isArray(raw) || typeof (raw as { type?: unknown }).type !== "string") {
             skippedMalformed += 1;
             continue;
@@ -170,7 +263,7 @@ export async function drainLakeQueue(
             continue;
           }
           const event = raw as Record<string, unknown>;
-          const row = lakeRow(batch.agentId, event, batch.receivedAt);
+          const row = lakeRow(batch.agentId, event, batch.receivedAt, source);
           const type = typeSegment(event.type);
           const day = dayOf(row.at);
           const gk = `${batch.tenantId}\u0000${day}\u0000${type}`;

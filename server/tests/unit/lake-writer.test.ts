@@ -11,6 +11,7 @@ import {
   drainLakeQueue,
   encodeParquet,
   enqueueLakeBatch,
+  eventSources,
   lakeKey,
   lakeRow,
   typeSegment,
@@ -75,6 +76,39 @@ describe("lakeRow", () => {
   it("drops a value that is not a hash from the hash column and bounds a long path", () => {
     expect(lakeRow("a", exec({ sha256: "not-a-hash" }), RECEIVED).sha256).toBeNull();
     expect(lakeRow("a", exec({ path: "/x".repeat(2000) }), RECEIVED).path).toHaveLength(1024);
+  });
+});
+
+describe("eventSources", () => {
+  it("returns each event's text exactly, whitespace between events aside", () => {
+    expect(eventSources('{"events":[ {"a":1} , {"b":[1,2]},"s", 3 ]}')).toEqual(['{"a":1}', '{"b":[1,2]}', '"s"', "3"]);
+  });
+
+  it("keeps an integer above 2^53 that JSON.parse would round", () => {
+    const text = '{"type":"exec","meta":{"timestamp_ns":1793287944852336852}}';
+    expect(JSON.stringify(JSON.parse(text))).not.toBe(text);
+    expect(eventSources(`{"events":[${text}]}`)).toEqual([text]);
+  });
+
+  it("is not fooled by brackets, commas, quotes and escapes inside strings", () => {
+    const text = '{"type":"x","query":"a]},[{\\"\\\\"}';
+    expect(eventSources(`{"events":[${text},{"type":"y"}]}`)).toEqual([text, '{"type":"y"}']);
+  });
+
+  it("ignores an events key that is nested, and takes the last top-level one like JSON.parse", () => {
+    expect(eventSources('{"meta":{"events":[1]},"events":[{"a":1}]}')).toEqual(['{"a":1}']);
+    expect(eventSources('{"events":[1],"events":[2,3]}')).toEqual(["2", "3"]);
+  });
+
+  it("is null without a top-level events array, and empty for an empty one", () => {
+    expect(eventSources('{"other":[1]}')).toBeNull();
+    expect(eventSources('{"events":{}}')).toBeNull();
+    expect(eventSources('{"events":[]}')).toEqual([]);
+  });
+
+  it("agrees with JSON.parse on the number and order of the elements", () => {
+    const body = JSON.stringify({ x: "[", events: [{ type: "a", n: [1, { m: "}," }] }, "q\"", 5, null, [], {}], z: { events: 1 } });
+    expect(eventSources(body)!.map((t) => JSON.parse(t))).toEqual(JSON.parse(body).events);
   });
 });
 
@@ -257,6 +291,28 @@ describe("drainLakeQueue", () => {
     expect(result).toMatchObject({ events: 1, files: 1, droppedNoRetention: 2, remaining: 0 });
     expect(Array.from(store.files.keys()).every((k) => k.startsWith("tenant=t1/"))).toBe(true);
     expect(state.batches).toHaveLength(0);
+  });
+
+  it("writes a queued event's source text into the file, so a timestamp above 2^53 is not rounded", async () => {
+    const text = `{"type":"exec","meta":{"comm":"bash","timestamp_ns":${NS(RECEIVED)}852}}`;
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [text] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, skippedMalformed: 0 });
+    const rows = await readParquet(Array.from(store.files.values())[0]);
+    expect(rows[0].event).toBe(text);
+    expect(rows[0]).toMatchObject({ comm: "bash" });
+    expect(new Date(rows[0].ts as Date)).toEqual(RECEIVED);
+  });
+
+  it("still reads a row queued as parsed objects, and skips a source text that is not JSON", async () => {
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), "{not json", '"just a string"'] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    expect(await drainLakeQueue(prisma, new MemoryStore())).toMatchObject({ events: 1, skippedMalformed: 2 });
   });
 
   it("skips a malformed queued event without losing the good ones", async () => {
