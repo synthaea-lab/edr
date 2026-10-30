@@ -35,6 +35,20 @@ export function typeSegment(type: unknown): string {
   return typeof type === "string" && TYPE_SEGMENT.test(type) ? type : OTHER_TYPE;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the UTC day `day` (`YYYY-MM-DD`) is `retentionDays` or more old at `now`: the retention
+ * job deletes such a partition whole, and the writer must not put a file into it (ADR-0041,
+ * decision 2). An unparseable day is never expired.
+ */
+export function isPastRetention(day: string, retentionDays: number, now: Date): boolean {
+  const at = Date.parse(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(at)) return false;
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((today - at) / DAY_MS) >= retentionDays;
+}
+
 /** The UTC day, as the `date=` segment. */
 export function dayOf(at: Date): string {
   return at.toISOString().slice(0, 10);
@@ -206,6 +220,12 @@ export type DrainResult = {
   files: number;
   /** Events dropped because their tenant keeps nothing (`lakeRetentionDays` = 0). */
   droppedNoRetention: number;
+  /**
+   * Events dated at or past their tenant's retention: ingest keeps a past timestamp, and a file in
+   * such a day would be deleted at the next retention run, or refill a prefix already recorded as
+   * deleted. Dropped here, counted, not written.
+   */
+  droppedPastRetention: number;
   /** Queued events that were not objects with a string `type`. */
   skippedMalformed: number;
   /** Batches still queued after this drain. */
@@ -215,15 +235,16 @@ export type DrainResult = {
 export async function drainLakeQueue(
   prisma: PrismaClient,
   store: LakeStore,
-  opts: { maxBatches?: number } = {}
+  opts: { maxBatches?: number; now?: Date } = {}
 ): Promise<DrainResult> {
   const max = opts.maxBatches ?? DEFAULT_MAX_BATCHES;
+  const now = opts.now ?? new Date();
   return prisma.$transaction(
     async (tx) => {
       // SKIP LOCKED: two drains at once take different rows instead of waiting on, or repeating, each other.
       const picked = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM lake_batches ORDER BY received_at, id LIMIT ${max} FOR UPDATE SKIP LOCKED`;
-      const empty: DrainResult = { batches: 0, events: 0, files: 0, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 };
+      const empty: DrainResult = { batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 };
       if (picked.length === 0) return empty;
 
       const ids = picked.map((r) => r.id);
@@ -232,6 +253,7 @@ export async function drainLakeQueue(
         where: { id: { in: Array.from(new Set(batches.map((b) => b.tenantId))) } },
         select: { id: true, lakeRetentionDays: true },
       });
+      const retentionOf = new Map(tenants.map((t) => [t.id, t.lakeRetentionDays]));
       const keepsNothing = new Set(tenants.filter((t) => t.lakeRetentionDays === 0).map((t) => t.id));
       // A tenant that no longer exists cascades its batches away; one that raced the delete has no row here.
       const known = new Set(tenants.map((t) => t.id));
@@ -239,6 +261,7 @@ export async function drainLakeQueue(
       const groups = new Map<string, { tenantId: string; day: string; type: string; rows: LakeRow[]; batchIds: Set<string> }>();
       let events = 0;
       let droppedNoRetention = 0;
+      let droppedPastRetention = 0;
       let skippedMalformed = 0;
       for (const batch of batches) {
         if (!known.has(batch.tenantId)) continue;
@@ -266,6 +289,10 @@ export async function drainLakeQueue(
           const row = lakeRow(batch.agentId, event, batch.receivedAt, source);
           const type = typeSegment(event.type);
           const day = dayOf(row.at);
+          if (isPastRetention(day, retentionOf.get(batch.tenantId) ?? 0, now)) {
+            droppedPastRetention += 1;
+            continue;
+          }
           const gk = `${batch.tenantId}\u0000${day}\u0000${type}`;
           let group = groups.get(gk);
           if (!group) {
@@ -285,7 +312,7 @@ export async function drainLakeQueue(
 
       await tx.lakeBatch.deleteMany({ where: { id: { in: ids } } });
       const remaining = await tx.lakeBatch.count();
-      return { batches: ids.length, events, files: groups.size, droppedNoRetention, skippedMalformed, remaining };
+      return { batches: ids.length, events, files: groups.size, droppedNoRetention, droppedPastRetention, skippedMalformed, remaining };
     },
     // The transaction holds the row locks while the files are written.
     { timeout: 120_000, maxWait: 10_000 }

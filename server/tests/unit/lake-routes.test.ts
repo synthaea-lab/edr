@@ -137,7 +137,7 @@ describe("GET /api/cron/write-lake", () => {
     db.$transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
     const res = await call();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ batches: 1, events: 1, files: 1, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0, maxBatches: 5 });
+    expect(await res.json()).toEqual({ batches: 1, events: 1, files: 1, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0, maxBatches: 5 });
     const files = await readdir(path.join(lakeDir, "tenant=t1/date=2026-10-29/type=exec"));
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^[0-9a-f]{32}\.parquet$/);

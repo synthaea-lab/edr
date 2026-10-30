@@ -39,7 +39,8 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 - **Store.** A directory (`FsLakeStore`): a mounted volume. Writes go to a temporary name and are
   renamed.
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
-  tenant's events (counted as `droppedNoRetention`). **Nothing deletes old files yet.**
+  tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention (ingest keeps past timestamps) is dropped
+  and counted as `droppedPastRetention`, so a prefix the retention job deleted never refills. **Nothing deletes old files yet.**
 
 ## What is not built
 

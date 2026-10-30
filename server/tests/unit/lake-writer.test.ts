@@ -12,6 +12,7 @@ import {
   encodeParquet,
   enqueueLakeBatch,
   eventSources,
+  isPastRetention,
   lakeKey,
   lakeRow,
   typeSegment,
@@ -218,11 +219,60 @@ class MemoryStore implements LakeStore {
   }
 }
 
+describe("isPastRetention", () => {
+  const now = new Date("2026-10-30T15:00:00Z");
+  it("is true from the day that is `retentionDays` old, as the retention job counts it", () => {
+    expect(isPastRetention("2026-07-31", 90, now)).toBe(true); // 91 days
+    expect(isPastRetention("2026-08-01", 90, now)).toBe(true); // 90 days: deleted at the next run
+    expect(isPastRetention("2026-08-02", 90, now)).toBe(false); // 89 days
+    expect(isPastRetention("2026-10-30", 0, now)).toBe(true);
+  });
+  it("is false for today, a future day and an unparseable day", () => {
+    expect(isPastRetention("2026-10-30", 1, now)).toBe(false);
+    expect(isPastRetention("2026-11-02", 90, now)).toBe(false);
+    expect(isPastRetention("not-a-day", 0, now)).toBe(false);
+  });
+});
+
 describe("drainLakeQueue", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(RECEIVED);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops, and counts, an event dated past its tenant's retention, and keeps the rest of the batch", async () => {
+    const old = RECEIVED.getTime() - 91 * 86_400_000;
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), exec({ meta: { comm: "old", timestamp_ns: NS(new Date(old)) } })] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, files: 1, droppedPastRetention: 1, remaining: 0 });
+    expect(Array.from(store.files.keys())).toEqual([expect.stringContaining("/date=2026-10-29/")]);
+    expect(state.batches).toHaveLength(0);
+  });
+
+  it("applies each tenant's own retention", async () => {
+    const tenDaysAgo = new Date(RECEIVED.getTime() - 10 * 86_400_000);
+    const event = exec({ meta: { comm: "x", timestamp_ns: NS(tenDaysAgo) } });
+    const { prisma } = fakePrisma(
+      [
+        { id: "b1", tenantId: "short", agentId: "a1", receivedAt: RECEIVED, events: [event] },
+        { id: "b2", tenantId: "long", agentId: "a2", receivedAt: RECEIVED, events: [event] },
+      ],
+      [{ id: "short", lakeRetentionDays: 7 }, { id: "long", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, droppedPastRetention: 1 });
+    expect(Array.from(store.files.keys()).every((k) => k.startsWith("tenant=long/"))).toBe(true);
+  });
   it("does nothing on an empty queue", async () => {
     const { prisma } = fakePrisma([], []);
     const store = new MemoryStore();
-    expect(await drainLakeQueue(prisma, store)).toEqual({ batches: 0, events: 0, files: 0, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(await drainLakeQueue(prisma, store)).toEqual({ batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 });
     expect(store.files.size).toBe(0);
   });
 
@@ -238,7 +288,7 @@ describe("drainLakeQueue", () => {
     );
     const store = new MemoryStore();
     const result = await drainLakeQueue(prisma, store);
-    expect(result).toEqual({ batches: 3, events: 4, files: 4, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(result).toEqual({ batches: 3, events: 4, files: 4, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 });
     expect(state.batches).toHaveLength(0);
     const keys = Array.from(store.files.keys()).map((k) => k.replace(/\/[0-9a-f]{32}\.parquet$/, ""));
     expect(keys.sort()).toEqual([
