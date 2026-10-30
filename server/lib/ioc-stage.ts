@@ -24,6 +24,15 @@ import { buildFeedFromMisp } from "@/lib/ioc-misp";
 import { iocEntryError } from "@/lib/content-publish";
 import { isPublicSuffix as realIsPublicSuffix } from "@/lib/public-suffix";
 
+/**
+ * The largest request body `POST /api/content/ioc-feed` reads, in bytes. `nginx.conf` sets
+ * `client_max_body_size` for that route to the same figure, so the proxy and the handler agree: a
+ * body between nginx's default (1 MiB) and this is a feed, not an error. It sits under the builder's
+ * own cap on the source text (`MAX_FEED_TEXT_BYTES`, 64 MiB) because a JSON body wraps the source in
+ * quotes and escapes.
+ */
+export const MAX_STAGE_BODY_BYTES = 32 * 1024 * 1024;
+
 export type StageSource =
   | { format: "plain"; text: string; defaultKind?: IocKind }
   | { format: "stix"; json: string }

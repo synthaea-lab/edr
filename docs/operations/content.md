@@ -127,7 +127,13 @@ To take a feed off agents, publish a corrective release that no longer lists it 
 removed and the set unloads at the next reload.
 
 Staging writes the artifact to the store and nothing else: it does not create a release, and a feed
-staged and never listed is unreferenced until retention (#834) prunes it.
+staged and never listed is unreferenced until retention (#834) prunes it. `prune-artifacts` keeps an
+unreferenced file for 24 hours after its last write (`DEFAULT_MIN_AGE_MS`, by mtime), so that is the time
+between staging and publishing the signed release; staging the same bytes again resets it.
+
+The request body is capped at 32 MiB (413 above), in the handler and in nginx (`location =
+/api/content/ioc-feed` in `server/nginx.conf`, `client_max_body_size 32m`; the default 1 MiB would refuse a
+feed of about 15,000 hashes). Raise both together (`MAX_STAGE_BODY_BYTES` in `server/lib/ioc-stage.ts`).
 
 ## Upgrading a server from the old, path-keyed store (#804)
 

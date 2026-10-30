@@ -4,7 +4,7 @@ import path from "path";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireTenantAdmin } from "@/lib/admin-auth";
-import { buildIocStage, type StagedArtifact } from "@/lib/ioc-stage";
+import { buildIocStage, MAX_STAGE_BODY_BYTES, type StagedArtifact } from "@/lib/ioc-stage";
 
 const Kind = z.enum(["sha256", "ip", "domain"]);
 const Column = z.union([z.string().min(1).max(128), z.number().int().nonnegative()]);
@@ -47,6 +47,7 @@ async function stage(artifactsDir: string, { entry, bytes }: StagedArtifact): Pr
  * Admin endpoint: build an IOC feed from a source and stage it in the artifact store.
  *
  * Authentication: better-auth session, `owner` or `admin` member of the tenant (#803)
+ * Body: at most MAX_STAGE_BODY_BYTES (32 MiB; 413 above), the cap nginx applies to this route too
  * Request body: { feed, version?, allowEmpty?, source } where `source` is
  *   { format: "plain", text, defaultKind? },
  *   { format: "misp", json } (a MISP export: `to_ids` attributes of type sha256, ip-src/dst, domain, hostname),
@@ -68,7 +69,19 @@ export async function POST(req: NextRequest) {
     if ("response" in authed) return authed.response;
     const { tenantId, userId } = authed;
 
-    const validation = StageSchema.safeParse(await req.json());
+    // The same figure as `client_max_body_size` for this route in nginx.conf.
+    const raw = await req.text();
+    if (Buffer.byteLength(raw) > MAX_STAGE_BODY_BYTES) {
+      return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return NextResponse.json({ error: "Body is not valid JSON" }, { status: 400 });
+    }
+
+    const validation = StageSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json({ error: "Invalid request", details: validation.error.errors }, { status: 400 });
     }
