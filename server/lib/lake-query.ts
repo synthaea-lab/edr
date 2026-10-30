@@ -2,19 +2,22 @@
  * Reads events back out of the telemetry lake (issue #77, ADR-0041, decision 4).
  *
  * A structured query, not SQL: a tenant, a range of UTC days, optionally event types and equality
- * filters on the typed columns, a row limit. It lists the tenant's prefix, keeps the files whose
- * `date=` and `type=` segments fit (partition pruning is the path), reads those with `hyparquet`
+ * filters on the typed columns, a row limit. It lists the partitions in range one day (and one type)
+ * at a time, so a tenant's history outside the range is never listed (partition pruning is the path),
+ * stops listing at {@link MAX_FILES} + 1 files, reads those with `hyparquet`
  * (pure JavaScript, so it runs in the server's Alpine image, where DuckDB's Node bindings have no
  * build, ADR-0041 "Findings") and filters the rows.
  *
- * **Tenant isolation is structural, in two layers that do not depend on each other.** The only
- * listing is `tenant=<id>/` for an id that passes a closed character set, and every key the listing
- * returns is parsed against the full layout and refused unless its tenant segment is that id, so a
- * store that answered a wider prefix, or a stray key, reads nothing. There is no query language for a
- * compiler bug to widen.
+ * **Tenant isolation is structural, in two layers that do not depend on each other.** Every listing
+ * is under `tenant=<id>/` for an id that passes a closed character set, and every key a listing
+ * returns is parsed against the full layout and refused unless its tenant and day segments are the
+ * ones asked for, so a store that answered a wider prefix, or a stray key, reads nothing. There is no
+ * query language for a compiler bug to widen.
  *
- * It is bounded the way a search must be: at most {@link MAX_RANGE_DAYS} days, {@link MAX_FILES}
- * files read, {@link MAX_ROWS} rows returned, and a result says when it was cut. The cost is a scan
+ * It is bounded the way a search must be, listing included: at most {@link MAX_RANGE_DAYS} days,
+ * {@link MAX_FILES} files listed and read, {@link MAX_ROWS} rows returned, and a result says when it
+ * was cut. The listing is bounded because the writer makes a file per flush, so a tenant's prefix has
+ * no ceiling: the reader is asked for at most the files still wanted (`list(prefix, { limit })`). The cost is a scan
  * of every file in range: this is the engine for a hunt over days on one tenant, not for the fleet's
  * volume. DuckDB stays the planned engine for that (not measured, ADR "Measurements owed"); the
  * result shape is what a hunt layer consumes, so the engine can change under it.
@@ -28,6 +31,8 @@ import type { LakeReader } from "@/lib/lake-store";
 
 export const MAX_RANGE_DAYS = 366;
 export const MAX_FILES = 2000;
+/** Event types one query may name: each is listed on its own, per day. */
+export const MAX_TYPES = 32;
 export const DEFAULT_ROWS = 100;
 export const MAX_ROWS = 1000;
 
@@ -75,11 +80,23 @@ export interface LakeResult {
   rows: LakeRow[];
   /** More rows matched than `limit`. */
   truncated: boolean;
-  /** Files in the tenant's prefix whose partition fits the query, and how many of them were read. */
+  /** Files whose partition fits the query, as far as the listing went (at most {@link MAX_FILES}), and how many of them were read. */
   filesMatched: number;
   filesRead: number;
-  /** Matching files left unread because of {@link MAX_FILES}; non-zero means the answer is incomplete. */
+  /**
+   * Matching files beyond {@link MAX_FILES}. The listing stops at the first one more than the cap, so
+   * this is 1 when `listingTruncated` and 0 otherwise: it says "at least one", not how many.
+   */
   filesSkipped: number;
+  /** The listing stopped at the cap: there are more matching files, and the answer is incomplete. */
+  listingTruncated: boolean;
+}
+
+/** A partition file, as listed. */
+export interface PartitionFile {
+  key: string;
+  date: string;
+  type: string;
 }
 
 const TENANT_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -95,6 +112,47 @@ function dayNumber(day: string): number {
 
 const COLUMNS = ["agent_id", "ts", "comm", "path", "image_path", "daddr", "query", "sha256", "event"];
 
+function dayString(dayNumber: number): string {
+  return new Date(dayNumber * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The partition files of one tenant from day number `first` to `last` (UTC, both included), listed
+ * one day (and, when `types` is given, one type) at a time and never past `maxFiles`: the reader is
+ * asked for at most the files still wanted plus one, so a tenant with a million files costs the
+ * same as one with `maxFiles`. `truncated` is set when there was at least one more.
+ *
+ * Every key returned is checked against the layout, the tenant and the day that was asked for
+ * (the second isolation layer), and a key that fails is ignored. Shared by {@link queryLake} and
+ * {@link scanLake}.
+ */
+export async function listPartitionFiles(
+  reader: LakeReader,
+  tenantId: string,
+  first: number,
+  last: number,
+  types: string[] | null,
+  maxFiles: number
+): Promise<{ files: PartitionFile[]; truncated: boolean }> {
+  const files: PartitionFile[] = [];
+  const wanted = types === null ? null : Array.from(new Set(types));
+  for (let day = first; day <= last; day++) {
+    const date = dayString(day);
+    const under = `tenant=${tenantId}/date=${date}/`;
+    for (const prefix of wanted === null ? [under] : wanted.map((type) => `${under}type=${type}/`)) {
+      for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length })) {
+        const m = KEY.exec(key);
+        // The second layer: whatever the store listed, only this tenant's well-formed keys of this day are read.
+        if (m === null || m[1] !== tenantId || m[2] !== date) continue;
+        if (wanted !== null && !wanted.includes(m[3])) continue;
+        files.push({ key, date, type: m[3] });
+      }
+      if (files.length > maxFiles) return { files: files.slice(0, maxFiles), truncated: true };
+    }
+  }
+  return { files, truncated: false };
+}
+
 /** The tenant, days and types every read of the lake is held to, a scan as much as a query. */
 function checkScope(q: { tenantId: string; from: string; to: string; types?: string[] }) {
   if (!TENANT_ID.test(q.tenantId)) throw new RangeError("invalid tenant id");
@@ -104,36 +162,12 @@ function checkScope(q: { tenantId: string; from: string; to: string; types?: str
   if (last < first) throw new RangeError("to is before from");
   if (last - first + 1 > MAX_RANGE_DAYS) throw new RangeError(`a query spans at most ${MAX_RANGE_DAYS} days`);
   for (const type of q.types ?? []) if (!TYPE.test(type)) throw new RangeError(`invalid event type: ${JSON.stringify(type)}`);
-  return { first, last, wantedTypes: q.types === undefined ? null : new Set(q.types) };
-}
-
-type Partition = { key: string; date: string; type: string };
-
-/** The tenant's files whose `date=` and `type=` fit, in day then key order. */
-async function listPartitions(reader: LakeReader, tenantId: string, first: number, last: number, wantedTypes: Set<string> | null): Promise<Partition[]> {
-  const prefix = `tenant=${tenantId}/`;
-  const files: Partition[] = [];
-  for (const { key } of await reader.list(prefix)) {
-    const m = KEY.exec(key);
-    // The second layer: whatever the store listed, only this tenant's well-formed keys are read.
-    if (m === null || m[1] !== tenantId) continue;
-    let day: number;
-    try {
-      day = dayNumber(m[2]);
-    } catch {
-      continue; // a `date=` segment that is not a day is not a partition
-    }
-    if (day < first || day > last) continue;
-    if (wantedTypes !== null && !wantedTypes.has(m[3])) continue;
-    files.push({ key, date: m[2], type: m[3] });
-  }
-  files.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.key < b.key ? -1 : 1));
-
-  return files;
+  if ((q.types ?? []).length > MAX_TYPES) throw new RangeError(`a query names at most ${MAX_TYPES} event types`);
+  return { first, last, types: q.types === undefined ? null : q.types };
 }
 
 /** One file's rows that pass `tests` (typed-column equality, ANDed). */
-async function readPartition(reader: LakeReader, file: Partition, tests: [string, string][]): Promise<LakeRow[]> {
+async function readPartition(reader: LakeReader, file: PartitionFile, tests: [string, string][]): Promise<LakeRow[]> {
   const bytes = await reader.get(file.key);
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const rows: LakeRow[] = [];
@@ -161,15 +195,17 @@ export interface LakeScan {
   from: string;
   to: string;
   types?: string[];
-  /** Files read at most; the rest are counted in `filesSkipped`. Default {@link MAX_SCAN_FILES}. */
+  /** Files listed and read at most; a scan that hits it says so in `listingTruncated`. Default {@link MAX_SCAN_FILES}. */
   maxFiles?: number;
 }
 
 export interface LakeScanResult {
   filesMatched: number;
   filesRead: number;
-  /** Matching files left unread because of `maxFiles`: non-zero means the scan saw only part of the range. */
+  /** Matching files beyond `maxFiles`: 1 when `listingTruncated` ("at least one", the listing stops there), else 0. */
   filesSkipped: number;
+  /** The listing stopped at `maxFiles`: the scan saw only part of the range. */
+  listingTruncated: boolean;
 }
 
 /** Files one {@link scanLake} reads by default. A query stops at {@link MAX_FILES}; a scan is a background job and reads more. */
@@ -178,9 +214,9 @@ export const MAX_SCAN_FILES = 50_000;
 /**
  * Reads every row of a tenant's files in range, one file at a time, in day then key order (not
  * `ts` order within a day), handing each file's rows to `onFile` and keeping none. The same scope
- * checks and the same two isolation layers as {@link queryLake}, but no row limit: the caller folds
- * the rows as they come, so memory is one file, not the range. This is what a rebuild reads with;
- * {@link queryLake}'s 1000 rows per call cannot, one host's day being far more than that.
+ * checks, the same bounded listing and the same two isolation layers as {@link queryLake}, but no row
+ * limit: the caller folds the rows as they come, so memory is one file, not the range. This is what
+ * a rebuild reads with; {@link queryLake}'s 1000 rows per call cannot, one host's day being far more.
  *
  * @throws RangeError for a tenant id, day, range or type the scan cannot take.
  */
@@ -189,13 +225,12 @@ export async function scanLake(
   q: LakeScan,
   onFile: (rows: LakeRow[], file: { date: string; type: string; key: string }) => void | Promise<void>
 ): Promise<LakeScanResult> {
-  const { first, last, wantedTypes } = checkScope(q);
+  const { first, last, types } = checkScope(q);
   const maxFiles = q.maxFiles ?? MAX_SCAN_FILES;
   if (!Number.isInteger(maxFiles) || maxFiles < 1) throw new RangeError("maxFiles must be a positive integer");
-  const files = await listPartitions(reader, q.tenantId, first, last, wantedTypes);
-  const toRead = files.slice(0, maxFiles);
-  for (const file of toRead) await onFile(await readPartition(reader, file, []), file);
-  return { filesMatched: files.length, filesRead: toRead.length, filesSkipped: files.length - toRead.length };
+  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, maxFiles);
+  for (const file of listed.files) await onFile(await readPartition(reader, file, []), file);
+  return { filesMatched: listed.files.length, filesRead: listed.files.length, filesSkipped: listed.truncated ? 1 : 0, listingTruncated: listed.truncated };
 }
 
 /**
@@ -204,7 +239,7 @@ export async function scanLake(
  * @throws RangeError for a tenant id, day, range, type, filter name or limit the query cannot take.
  */
 export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeResult> {
-  const { first, last, wantedTypes } = checkScope(q);
+  const { first, last, types } = checkScope(q);
   const limit = q.limit ?? DEFAULT_ROWS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_ROWS) throw new RangeError(`limit must be 1 to ${MAX_ROWS}`);
 
@@ -214,9 +249,10 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     if (typeof value !== "string") throw new RangeError(`filter ${name} must be a string`);
     tests.push([EQUALITY_COLUMNS[name as LakeFilterName], name === "sha256" ? value.toLowerCase() : value]);
   }
-  const files = await listPartitions(reader, q.tenantId, first, last, wantedTypes);
-
-  const toRead = files.slice(0, MAX_FILES);
+  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, MAX_FILES);
+  const files = listed.files;
+  files.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.key < b.key ? -1 : 1));
+  const toRead = files;
   const rows: LakeRow[] = [];
   let truncated = false;
   let filesRead = 0;
@@ -240,5 +276,5 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     }
   }
 
-  return { rows, truncated, filesMatched: files.length, filesRead, filesSkipped: files.length - toRead.length };
+  return { rows, truncated, filesMatched: files.length, filesRead, filesSkipped: listed.truncated ? 1 : 0, listingTruncated: listed.truncated };
 }

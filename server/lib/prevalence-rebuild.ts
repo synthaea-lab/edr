@@ -49,7 +49,12 @@ export interface RebuildResult {
   scan: LakeScanResult;
   /** More distinct triples than {@link MAX_REBUILT_SIGHTINGS}: the rest were not folded. */
   capped: boolean;
-  /** True only when every matching file was read and nothing was capped: the only result a comparison should trust. */
+  /**
+   * True only when every matching file was listed and read, nothing was capped **and no event was
+   * skipped** (`skipped === 0`): the only result a comparison should trust. A skipped event is one
+   * whose observations are missing from the rebuild, so a comparison over it would report a false
+   * difference (a review point on #1086).
+   */
   complete: boolean;
 }
 
@@ -106,7 +111,7 @@ export async function rebuildSightings(
     }
   });
 
-  return { sightings: sortSightings(Array.from(folded.values())), rows, skipped, scan, capped, complete: scan.filesSkipped === 0 && !capped };
+  return { sightings: sortSightings(Array.from(folded.values())), rows, skipped, scan, capped, complete: scan.filesSkipped === 0 && !capped && skipped === 0 };
 }
 
 /** A stable order, so two rebuilds of the same lake are equal as lists. */

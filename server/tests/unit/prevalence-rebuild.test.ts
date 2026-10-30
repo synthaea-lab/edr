@@ -127,7 +127,8 @@ describe("rebuildSightings", () => {
     const broken: WriterRow = { ...row("a1", good), event: "{not json" };
     await put(T1, "2026-10-29", "exec", "a", [row("a1", good), broken]);
     const r = await rebuildSightings(store, { tenantId: T1, ...RANGE });
-    expect(r).toMatchObject({ rows: 2, skipped: 1, complete: true });
+    // A skipped event is missing from the rebuild: not complete, so a comparison cannot trust it.
+    expect(r).toMatchObject({ rows: 2, skipped: 1, complete: false });
     expect(r.sightings.find((s) => s.kind === "sha256")?.count).toBe(1);
   });
 
@@ -136,7 +137,8 @@ describe("rebuildSightings", () => {
     await put(T1, "2026-10-29", "exec", "a", [row("a1", event(at("2026-10-29", "01:00:00")))]);
     const files = await rebuildSightings(store, { tenantId: T1, ...RANGE, maxFiles: 1 });
     expect(files).toMatchObject({ complete: false, capped: false });
-    expect(files.scan).toMatchObject({ filesMatched: 2, filesRead: 1, filesSkipped: 1 });
+    // The listing stops at maxFiles + 1: it says there is at least one more, not how many.
+    expect(files.scan).toMatchObject({ filesMatched: 1, filesRead: 1, filesSkipped: 1, listingTruncated: true });
     const cap = await rebuildSightings(store, { tenantId: T1, ...RANGE, maxSightings: 2 });
     expect(cap).toMatchObject({ complete: false, capped: true });
     expect(cap.sightings).toHaveLength(2);

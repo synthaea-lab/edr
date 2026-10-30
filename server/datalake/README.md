@@ -91,16 +91,21 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 `queryLake(reader, { tenantId, from, to, types?, where?, limit? })` reads events back: a tenant, a
 range of UTC days (both included, at most 366), optionally event types and exact matches on `agentId`,
 `comm`, `path`, `imagePath`, `daddr`, `query`, `sha256` (compared in lowercase), and a row limit
-(default 100, at most 1000). It lists `tenant=<id>/`, keeps the files whose `date=` and `type=` fit
-(partition pruning is the path: the files of a type that was not asked for are not read), reads them with
+(default 100, at most 1000). It lists the partitions in range **one day at a time** (and one type at a
+time when `types` is given, at most 32), so a tenant's history outside the range is never listed, and it
+asks the reader for at most the files still wanted plus one (`list(prefix, { limit })`): the writer makes a
+file per flush, so a tenant's prefix has no ceiling, and listing it whole to cut it afterwards would cost
+unbounded time and memory (a review point on #1084). At most 2000 files are listed and read; the partition
+path does the pruning (the files of a type that was not asked for are not read). It reads them with
 `hyparquet` and filters the rows. Rows come back oldest first, each with `event`, the event's source text
-as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`),
-`filesSkipped` (more than 2000 matching files: the answer is incomplete).
+as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`) and
+`listingTruncated` (more than 2000 matching files exist: the answer is incomplete; `filesSkipped` is then 1,
+"at least one", not a count).
 
-- **Tenant isolation is structural, in two layers.** The only listing is the tenant's own prefix, for an
-  id from a closed character set; and every key the store lists is parsed against the whole layout and
-  ignored unless its tenant segment is that id, so a store that answers a wider prefix reads nothing
-  of another tenant's. There is no query language for a compiler bug to widen.
+- **Tenant isolation is structural, in two layers.** Every listing is under the tenant's own prefix, for
+  an id from a closed character set; and every key the store lists is parsed against the whole layout and
+  ignored unless its tenant, day and type are the ones asked for, so a store that answers a wider prefix
+  reads nothing of another tenant's. There is no query language for a compiler bug to widen.
 - **Not DuckDB, for now.** ADR-0041 decision 4 plans DuckDB, but its Node bindings have no Alpine build
   (ADR, "Findings") and the image is Alpine. `hyparquet` is pure JavaScript, already a dependency, and
   runs in the image. The cost is a scan of every file in range: fine for a hunt over days on one tenant,
@@ -130,10 +135,11 @@ Whether a rebuild may replace, merge into or only be checked against the counter
   path): one `list` of the tenant's prefix plus one `get` and one Parquet decode per file, and with no
   compaction a day is as many files as the writer flushed. A range is at most 366 days per call; a longer
   history is several calls folded by `mergeSightings`. Not measured at fleet volume or on an object store
-  (there is no S3 reader yet). A scan reads at most 50,000 files; past that `complete` is false.
-- **`complete` is the only result to trust.** It is false when files were left unread (`scan.filesSkipped`)
-  or the sighting cap was reached; `skipped` counts events whose text was not JSON (their observations
-  are lost, not guessed).
+  (there is no S3 reader yet). A scan lists and reads at most 50,000 files (listed one day at a time, never the whole tenant prefix); past that `complete` is false.
+- **`complete` is the only result to trust.** It is false when files were left unlisted or unread
+  (`scan.listingTruncated`, `scan.filesSkipped`), the sighting cap was reached, or any event was skipped:
+  `skipped` counts events whose text was not JSON (their observations are lost, not guessed), and a
+  comparison over a rebuild missing them would report a difference that is not one.
 - **Where it cannot equal the table, by construction:** events the lake never held (the writer drops those
   past the tenant's retention and keeps nothing at retention 0; `prune-lake` deletes old days; the counters
   have their own 180-day retention); observations ingest counted from `POST /api/ingest/detection`, which
