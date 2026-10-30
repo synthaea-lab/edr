@@ -14,7 +14,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST as stageRoute } from "@/app/api/content/ioc-feed/route";
 import { POST as publish } from "@/app/api/content/release/route";
-import { buildIocStage } from "@/lib/ioc-stage";
+import { buildIocStage, MAX_STAGE_BODY_BYTES } from "@/lib/ioc-stage";
 import { iocEntryError } from "@/lib/content-publish";
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
@@ -184,6 +184,30 @@ describe("POST /api/content/ioc-feed, then POST /api/content/release", () => {
     expect((await res.json()).error).toContain("No indicator survived");
     expect(existsSync(artifacts())).toBe(false);
     expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body over the cap (413) before parsing it, and one that is not JSON (400)", async () => {
+    const big = JSON.stringify({ feed: "lab", source: { format: "plain", text: "x".repeat(MAX_STAGE_BODY_BYTES) } });
+    const raw = (body: string) =>
+      new NextRequest("http://localhost/api/content/ioc-feed", {
+        method: "POST",
+        headers: { "x-tenant-id": "t1", "x-user-id": "u1", "content-type": "application/json" },
+        body,
+      });
+    const res = await stageRoute(raw(big));
+    expect(res.status).toBe(413);
+    const garbage = await stageRoute(raw("{nope"));
+    expect(garbage.status).toBe(400);
+    expect(existsSync(artifacts())).toBe(false);
+  });
+
+  it("accepts a feed over nginx's old 1 MiB default", async () => {
+    const lines = Array.from({ length: 20_000 }, (_, i) => `ip:203.${(i >> 8) & 255}.${i & 255}.9`).join("\n");
+    expect(lines.length).toBeGreaterThan(1024 * 1024 * 0.25);
+    const text = `${lines}\n${"# padding ".repeat(110_000)}\n`;
+    expect(text.length).toBeGreaterThan(1024 * 1024);
+    const res = await stageRoute(stageReq({ feed: "lab", source: { format: "plain", text } }));
+    expect(res.status).toBe(200);
   });
 
   it("refuses a malformed request (400) and a plain member (403) before reading anything", async () => {
