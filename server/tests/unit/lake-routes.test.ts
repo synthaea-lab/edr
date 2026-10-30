@@ -9,6 +9,7 @@ const db = vi.hoisted(() => ({
   agentHealth: { findUnique: vi.fn(), upsert: vi.fn() },
   lakeBatch: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
   tenant: { findMany: vi.fn() },
+  lakeDeletion: { create: vi.fn(), update: vi.fn() },
   $executeRaw: vi.fn(),
   $queryRaw: vi.fn(),
   $transaction: vi.fn(),
@@ -17,6 +18,8 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST as ingestEvents } from "@/app/api/ingest/events/route";
 import { GET as writeLake } from "@/app/api/cron/write-lake/route";
+import { GET as pruneLake } from "@/app/api/cron/prune-lake/route";
+import { FsLakeStore } from "@/lib/lake-store";
 
 const SECRET = "test-proxy-secret";
 const NOW = Date.UTC(2026, 9, 29, 10, 0, 0);
@@ -157,5 +160,59 @@ describe("GET /api/cron/write-lake", () => {
     db.$transaction.mockRejectedValue(new Error("db down"));
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect((await call()).status).toBe(500);
+  });
+});
+
+describe("GET /api/cron/prune-lake", () => {
+  const call = (auth: string | null = "Bearer cron-secret") =>
+    pruneLake(new NextRequest("http://localhost/api/cron/prune-lake", { headers: auth ? { Authorization: auth } : {} }));
+  const OLD = "tenant=t1/date=2020-01-01/type=exec/f.parquet";
+
+  it("refuses a call without the cron secret and deletes nothing", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    expect((await call(null)).status).toBe(401);
+    expect((await call("Bearer nope")).status).toBe(401);
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]);
+  });
+
+  it("answers 503 while the lake is off", async () => {
+    expect((await call()).status).toBe(503);
+    expect(db.tenant.findMany).not.toHaveBeenCalled();
+  });
+
+  it("deletes an expired partition, records it, and reports the counts", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(6));
+    db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
+    db.lakeDeletion.create.mockResolvedValue({ id: "r1" });
+    db.lakeDeletion.update.mockResolvedValue({});
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ partitionsDeleted: 1, filesDeleted: 1, bytesDeleted: 6, notEmpty: 0, failedPartitions: 0, orphanTenantPrefixes: 0 });
+    expect(db.lakeDeletion.create).toHaveBeenCalledTimes(1);
+    expect(db.lakeDeletion.update).toHaveBeenCalledWith({ where: { id: "r1" }, data: expect.objectContaining({ deletedCount: 1, failedCount: 0, verifiedEmpty: true, error: null }) });
+    expect(await readdir(lakeDir)).toEqual([]);
+  });
+
+  it("answers 500 with the errors when a partition could not be recorded, and says what it did instead", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
+    db.lakeDeletion.create.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await call();
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ partitionsDeleted: 0, failedPartitions: 1 });
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]); // nothing was deleted without a record
+  });
+
+  it("answers 500 when the database fails", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    db.tenant.findMany.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await call()).status).toBe(500);
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]);
   });
 });

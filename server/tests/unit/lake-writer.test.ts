@@ -212,7 +212,7 @@ function fakePrisma(batches: Batch[], tenants: { id: string; lakeRetentionDays: 
   return { prisma, state, tx };
 }
 
-class MemoryStore implements LakeStore {
+class MemoryStore implements Pick<LakeStore, "put"> {
   files = new Map<string, Uint8Array>();
   async put(key: string, body: Uint8Array) {
     this.files.set(key, body);
@@ -379,7 +379,7 @@ describe("drainLakeQueue", () => {
       [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()] }],
       [{ id: "t1", lakeRetentionDays: 90 }]
     );
-    const failing: LakeStore = { put: vi.fn().mockRejectedValue(new Error("disk full")) };
+    const failing: Pick<LakeStore, "put"> = { put: vi.fn().mockRejectedValue(new Error("disk full")) };
     await expect(drainLakeQueue(prisma, failing)).rejects.toThrow("disk full");
     expect(state.batches).toHaveLength(1);
   });

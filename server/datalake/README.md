@@ -36,18 +36,43 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   written before this holds a parsed object and is serialised, with the rounding). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
-- **Store.** A directory (`FsLakeStore`): a mounted volume. Writes go to a temporary name and are
-  renamed.
+- **Store.** A directory (`FsLakeStore`): a mounted volume, with `put`, `list` and `delete`. Writes go
+  to a temporary name and are renamed; `delete` removes the directories it leaves empty.
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
-  tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention (ingest keeps past timestamps) is dropped
-  and counted as `droppedPastRetention`, so a prefix the retention job deleted never refills. **Nothing deletes old files yet.**
+  tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention
+  (ingest keeps past timestamps) is dropped and counted as `droppedPastRetention`, so a prefix the
+  retention job deleted never refills.
+- **Retention job.** `GET /api/cron/prune-lake` (`CRON_SECRET` bearer; run it once a day) deletes every
+  `date=` partition whose age in UTC days has reached its tenant's retention (`0` keeps nothing, today
+  included), one partition at a time, and keeps a `lake_deletions` row for each:
+  - **Written before the deletion**, from the listing: tenant, date, file count, bytes, a SHA-256 over
+    the sorted `key:size` lines, run id, start time. If that row cannot be written the partition is not
+    deleted and waits for the next run.
+  - **Completed after it**, from what the prefix lists afterwards, not from what the store claimed: how
+    many files really went (`deleted_count`), how many are still there (`failed_count`), the first error,
+    whether every file of the starting listing is gone (`verified_empty`), and `completed_at`. A file the
+    writer put under the prefix meanwhile is not in that listing: it is counted in `arrived_during_deletion`,
+    is not a failure, and is deleted by the next run. `bytesDeleted` adds the sizes of the files that went.
+  - A row with `completed_at` null is a deletion that started and was never recorded as finished (a crash,
+    or the database going away): the files may or may not be gone.
+  - A failure on one partition is recorded and the run goes on to the next, so one bad tenant does not
+    stop the others. The route answers `500` with the counts and the first errors when any partition was
+    not fully deleted or could not be recorded.
+  - A partition that keeps failing adds one row per daily run: that is the signal.
+  - The row has no foreign key to the tenant, so it outlives it.
+  A `tenant=` prefix whose tenant is not in Postgres is **not** deleted: it is counted as
+  `orphanTenantPrefixes` and left for a person. Keys that are not a `tenant=…/date=YYYY-MM-DD/…`
+  partition are never touched. "Provable" means the audit row; it does not reach a storage provider's
+  backups or versioning (ADR-0041). `LakeStore.delete` reports `{ deleted, failed }` per key instead of
+  throwing, because by the time a later key fails the earlier ones are already gone.
 
 ## What is not built
 
 - The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
   store exists.
 - Compaction: every drain writes new small files.
-- The retention job (prefix deletion with an audit row) and any use of `lake_retention_days` beyond `0`.
+- Skipping at write time an event already older than its tenant's retention: the writer files it, and
+  the next `prune-lake` deletes it and records the deletion.
 - The query side (#933): DuckDB reading these files, and a `HuntQuery` events source.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.

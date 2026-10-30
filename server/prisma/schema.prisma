@@ -739,3 +739,41 @@ model LakeBatch {
   @@index([receivedAt])
   @@map("lake_batches")
 }
+
+// Telemetry lake deletions (issue #77, ADR-0041 section 5, lib/lake-retention.ts): one row per
+// `date=` prefix the retention job deleted, so that "provable deletion" has a record. The row is
+// written BEFORE the deletion (what was listed and is about to go: count, bytes, listing hash) and
+// completed after it (what really went, what did not, whether the prefix listed empty). A row with
+// `completedAt` null is a deletion that started and was not recorded as finished (a crash, or the
+// database failing mid-run): the files may or may not be gone. Deliberately no relation to Tenant:
+// the record must outlive the tenant it is about.
+model LakeDeletion {
+  id             String    @id @default(uuid())
+  tenantId       String    @map("tenant_id")
+  // The deleted partition, `YYYY-MM-DD` (UTC).
+  date           String
+  // The listing the deletion started from.
+  objectCount    Int       @map("object_count")
+  bytes          BigInt
+  // sha256 over the sorted `key:size` lines of that listing.
+  manifestSha256 String    @map("manifest_sha256")
+  runId          String    @map("run_id")
+  // When the deletion started.
+  deletedAt      DateTime  @map("deleted_at")
+  // Filled in after: null until the deletion has been recorded as finished.
+  completedAt    DateTime? @map("completed_at")
+  // Files that were really removed; null when it could not be told (the listing afterwards failed).
+  deletedCount   Int?      @map("deleted_count")
+  failedCount    Int?      @map("failed_count")
+  // Files under the prefix after the deletion that were not in the listing it started from: the
+  // writer put them there meanwhile. Left for the next run, not counted in `failedCount`.
+  arrivedDuringDeletion Int? @map("arrived_during_deletion")
+  // The first failure, when there was one.
+  error          String?
+  // Every file of the listing the deletion started from is gone (files that arrived meanwhile are
+  // `arrivedDuringDeletion`, not a failure).
+  verifiedEmpty  Boolean   @default(false) @map("verified_empty")
+
+  @@index([tenantId, date])
+  @@map("lake_deletions")
+}
