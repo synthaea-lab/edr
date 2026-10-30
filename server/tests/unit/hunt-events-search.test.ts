@@ -126,7 +126,8 @@ describe("searchEventsWithinLimit", () => {
     const out = await searchEventsWithinLimit(prisma, wide, T1, query(), NOW);
     if (out.status !== "ok") throw new Error("expected ok");
     expect(out.page.rows.map((r) => r.agentId)).toEqual(["mine"]);
-    expect(asked).toEqual([`tenant=${T1}/`]);
+    // One listing per day of the window (3 days), newest first, each under the tenant's own prefix.
+    expect(asked).toEqual([`tenant=${T1}/date=2026-10-30/`, `tenant=${T1}/date=2026-10-29/`, `tenant=${T1}/date=2026-10-28/`]);
   });
 
   it("flags an incomplete answer when the archive had more files than one search reads", async () => {
@@ -162,6 +163,9 @@ describe("searchEventsWithinLimit", () => {
     tx.$queryRaw.mockImplementation(async () => (order.push("lock"), [{ ok: true }]));
     const reader: LakeReader = { list: (p) => (order.push("list"), store.list(p)), get: (k) => (order.push("get"), store.get(k)) };
     await searchEventsWithinLimit(prisma, reader, T1, query(), NOW);
-    expect(order).toEqual(["lock", "list", "get"]);
+    // The lock first, then the listing (one call per day of the window), then the file read.
+    expect(order.filter((step, i) => step !== "list" || order[i - 1] !== "list")).toEqual(["lock", "list", "get"]);
+    expect(order[0]).toBe("lock");
+    expect(order.indexOf("get")).toBeGreaterThan(order.lastIndexOf("list") - 1);
   });
 });

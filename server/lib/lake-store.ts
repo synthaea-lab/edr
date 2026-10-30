@@ -41,7 +41,12 @@ export class LakeNotDeletableError extends Error {
  * credentials are not the reader's: an S3 reader should be built on read-only credentials.
  */
 export interface LakeReader {
-  list(prefix: string): Promise<{ key: string; size: number }[]>;
+  /**
+   * The files under `prefix` in key order. With `limit`, at most that many, the first ones: the
+   * store stops listing there instead of materialising the whole prefix (an S3 reader asks for
+   * `MaxKeys`). Without it, every file.
+   */
+  list(prefix: string, opts?: { limit?: number }): Promise<{ key: string; size: number }[]>;
   /** The bytes at `key`. Throws for a key that is not safe, or that is not there. */
   get(key: string): Promise<Uint8Array>;
 }
@@ -77,9 +82,12 @@ export class FsLakeStore implements LakeStore, LakeReader {
     return new Uint8Array(await readFile(path.join(this.root, key)));
   }
 
-  async list(prefix: string): Promise<{ key: string; size: number }[]> {
+  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
+    const limit = opts.limit;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
     const out: { key: string; size: number }[] = [];
+    // Names are visited in order, so with a limit the walk stops at the first `limit` keys.
     const walk = async (rel: string): Promise<void> => {
       let entries;
       try {
@@ -88,7 +96,9 @@ export class FsLakeStore implements LakeStore, LakeReader {
         if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
         throw e;
       }
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const entry of entries) {
+        if (limit !== undefined && out.length >= limit) return;
         const key = rel === "" ? entry.name : `${rel}/${entry.name}`;
         if (entry.isDirectory()) {
           await walk(key);

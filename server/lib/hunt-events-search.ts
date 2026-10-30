@@ -97,7 +97,7 @@ export async function searchEventsWithinLimit(
       const page: EventPage = {
         source: "events",
         truncated: result.truncated,
-        incomplete: result.filesSkipped > 0,
+        incomplete: result.listingTruncated || result.filesSkipped > 0,
         from,
         to,
         rows: result.rows.map((r) => ({
