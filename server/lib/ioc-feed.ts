@@ -13,7 +13,7 @@
  * whole country. The suffix list is a dependency this module does not carry: the caller passes
  * `isPublicSuffix`, and without one every domain is refused rather than published unchecked.
  *
- * Pure: no I/O, no clock. Sources live in their own modules (`ioc-csv.ts`, `ioc-stix.ts`); fetching,
+ * Pure: no I/O, no clock. Sources live in their own modules (`ioc-csv.ts`, `ioc-stix.ts`, `ioc-misp.ts`); fetching,
  * MISP and per-tenant enablement are not built.
  */
 
@@ -39,7 +39,10 @@ export type RejectReason =
   | "unsupported_pattern"
   | "revoked"
   | "expired"
-  | "not_yet_valid";
+  | "not_yet_valid"
+  | "bad_misp"
+  | "not_for_detection"
+  | "deleted";
 
 export interface Rejection {
   /** 1-based line number in the source text. */

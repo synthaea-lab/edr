@@ -108,7 +108,8 @@ from a source and stages it in the store, so the `cp` step above is done for you
 
 `source` is `{ "format": "plain", "text": ... }` (`kind:value` lines, `defaultKind` for bare values) or
 `{ "format": "csv", "csv": ..., "valueColumn", "typeColumn"?, "defaultKind"?, "hasHeader"? }` (columns by
-header name, or by index with `hasHeader: false`) or `{ "format": "stix", "json": "<a STIX 2.1 bundle>" }`
+header name, or by index with `hasHeader: false`) or `{ "format": "misp", "json": "<a MISP export>" }` (attributes flagged `to_ids`, of type sha256, ip-src/dst, domain
+or hostname; context attributes are dropped and reported) or `{ "format": "stix", "json": "<a STIX 2.1 bundle>" }`
 (indicators with a single-comparison pattern on a SHA-256, an address or a domain; revoked, expired and
 not-yet-valid ones are dropped and reported, and the device has no expiry, so an indicator that expires after
 this build stays loaded until a later release: see `docs/detection/ioc-matching.md`). The feed is built with the device's own rules and the
