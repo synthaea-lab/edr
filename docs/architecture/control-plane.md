@@ -222,13 +222,16 @@ unparseable body is retried, other `4xx` count toward skipping the segment
 
 ### Server behavior today (interim)
 
-- **Events are counted into fleet prevalence and not retained.** Each event's hash,
-  image path, parent-to-child transition and DNS domain go into
+- **Events are counted into fleet prevalence, and kept only if the lake is on.** Each
+  event's hash, image path, parent-to-child transition and DNS domain go into
   `PrevalenceSighting` (issue #76), aggregated per batch into one multi-row upsert.
-  Raw telemetry belongs in the lake (`server/datalake`), which does not exist yet,
-  so **an accepted event is gone once its observations are counted**, and the agent
-  has already deleted its copy. Building the lake, and deciding whether to keep
-  events somewhere in the meantime, is open work.
+  With `LAKE_DIR` unset (the default) **an accepted event is gone once its
+  observations are counted**, and the agent has already deleted its copy. With
+  `LAKE_DIR` set, the batch is also queued in Postgres (`lake_batches`) before the
+  counters run, and a queue failure answers `500` so the agent keeps its segment; the
+  `write-lake` cron then writes the queue as Parquet under `LAKE_DIR` (issue #77,
+  ADR-0041, `server/datalake/README.md`). The agent's `2xx` then means "durably
+  queued", not "in the lake".
 - The event's own `meta.timestamp_ns` dates the sighting, so a spool flushed after
   an outage does not look new. A missing, non-positive or more-than-a-day-ahead
   timestamp becomes the server's `now`, so an enrolled agent with a bad clock

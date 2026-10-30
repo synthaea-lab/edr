@@ -66,7 +66,26 @@ the same files agree on which feed wins an overlap. Names and versions are trimm
 control characters and cut at 64 characters, because they travel in every detection.
 Delivery is a signed content release carrying `ioc/<feed>.txt` entries of type `ioc` (ADR-0038,
 "Delivery"); the agent needs nothing new for it. **Nothing builds and publishes such a release yet**, and
-signing it in production waits on the production keys (#753), so today a feed is a file somebody put there.
+signing it in production waits on the production keys (#753): a feed reaches a host through a release an
+operator signs by hand (test key in the lab), or is a file somebody put there.
+
+Verified in the lab on 2026-10-29 (Fedora 43, kernel 7.2.9, agent built from `main` `609cd1d8`, control
+plane run from the same tree, **public test key only**): release 1 of ring `prod` with `ioc/lab-feed.txt`
+(an exec hash, an address, a domain) and `ioc/VERSION` was staged under `storage/artifacts/<sha256>`, signed
+with `release-tool sign --kind content --test-key` and published with `POST /api/content/release`. A running
+agent ran `agent apply-content-manifest --allow-test-key`: `applied release 1 (2 entries fetched, 0 removed)`,
+`notified the running agent`, and its log shows `ioc: indicator set loaded` with the version
+`2026-10-29.signed`. Before the delivery the same exec, connections and lookups raised no IOC finding; after
+it the exec hash and the domain each raised one on the test traffic (a listed binary run twice, a lookup of
+a name under the listed domain), carrying that feed name and version, and the unlisted domain and address
+stayed silent. **The address case was exercised only through the agent's own connection:** the listed address
+was the control plane's, the finding came from the `apply-content-manifest` process connecting to it, and the
+test loop's connections then fell inside the cooldown. So the run shows that a delivered address indicator
+is loaded and matches, not that a listed address a test process connects to raises a finding; that needs
+another run with a listed address that is not the control plane. The same run showed the agent alerting on its
+own control-plane connection (#1061). The publish step refused, with 422, a `rule` entry under `ioc/`, an
+`ioc` entry outside `ioc/` and a feed with an invalid line. Not covered: a delivery to an agent that is not
+running, the production key path, and the file-write hash (above, still not wired).
 
 Loaded at startup and on `reload_content` (IPC `ReloadContent`): a present directory replaces the
 set, an absent one unloads it, an unreadable or over-budget one keeps the previous set (logged).

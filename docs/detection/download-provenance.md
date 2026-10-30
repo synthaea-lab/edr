@@ -67,3 +67,27 @@ downloads:
 
 The minifilter (#136) supersedes this path: it sees stream deletes, renames
 and overwrites at the file-system level, whichever API issued them.
+
+## The signature gate verifies the image that ran (#441, #688)
+
+T1204.002 stays silent when the executed image's Authenticode signature is
+`Valid`. The verdict is read on the enrichment worker, after the exec, from the
+file at the image's path, and a running image can be renamed on Windows. So the
+ETW sensor records the image file's identity at exec (`ExecEvent::image_file_id`,
+volume serial + file id) and the worker compares it with the identity of the
+file it verified, read from the same handle as the hash and the verdict. Same
+identity: the verdict decides as before. Different identity, or none on either
+side: the alert is raised `[signature not verified: file differs from the image
+that ran]`.
+
+No identity is captured for an image on a network or device path (UNC, `\\?\`,
+`\Device\...`): the open would be a round trip on the thread that delivers every
+kernel-process event. The gate then fails closed for those images, as it does when
+nothing could be captured. A mapped network drive letter looks local and is still
+opened.
+
+Residual: the identity is taken in the ETW callback, so a swap between the
+process starting and that callback is not seen. Closing it needs a kernel
+process-creation callback giving the image's file object (the minifilter has
+none today). Elsewhere nothing is captured and the gate is unchanged (`Valid`
+never silences off Windows anyway: no chain verification).

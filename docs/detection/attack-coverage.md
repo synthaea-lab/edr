@@ -43,6 +43,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1548 | 3 | `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/setcap_shell_uid.yml` |
+| T1548.001 | 3 | `rules:crates/rules/src/privesc.rs` |
 | T1611 | 3 | `rules:crates/rules/src/stateless.rs` |
 
 ## Defense Evasion

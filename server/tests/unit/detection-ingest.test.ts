@@ -147,6 +147,64 @@ describe("POST /api/ingest/detection", () => {
     }) });
   });
 
+  describe("bounded technique fields (#1058)", () => {
+    const structured = (techniques: unknown) => ({
+      timestamp_ns: 1_700_000_000_000_000_000,
+      severity: "low",
+      title: "Bounded technique",
+      source: { engine: "rule", rule_id: "r" },
+      techniques,
+      events: [],
+    });
+    const legacy = (technique: unknown) => ({
+      timestamp_ns: 1_700_000_000_000_000_000,
+      technique,
+      severity: "low",
+      event: { type: "exec" },
+      meta: {},
+    });
+
+    it("accepts every technique shape the agent emits today", async () => {
+      for (const techniques of [
+        ["T1059.001"],
+        ["T1566.001", "T1204.002"],
+        ["T1105", "T1059", "T1071"],
+        ["BAYES"],
+        ["IOC"],
+        ["LOG-SOURCE"],
+        ["RESPONSE-KILL"],
+        [],
+      ]) {
+        expect((await post(structured(techniques))).status, JSON.stringify(techniques)).toBe(200);
+      }
+      for (const technique of ["T1059", "T1566.001/T1204.002", "T1105/T1059/T1071", "BAYES"]) {
+        expect((await post(legacy(technique))).status, technique).toBe(200);
+      }
+    });
+
+    it("rejects an oversized technique id before storage", async () => {
+      expect((await post(structured(["T".repeat(65)]))).status).toBe(400);
+      expect((await post(legacy("T".repeat(129)))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects more technique ids than any rule emits", async () => {
+      const seventeen = Array.from({ length: 17 }, (_, i) => `T${1000 + i}`);
+      expect((await post(structured(seventeen))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("rejects characters no technique id carries", async () => {
+      for (const bad of ["T1059 ", "T1059\n", "<script>", "T1059;DROP", "T1566.001/T1204.002"]) {
+        expect((await post(structured([bad]))).status, JSON.stringify(bad)).toBe(400);
+      }
+      for (const bad of ["T1059 T1071", "T1059\u0000", ""]) {
+        expect((await post(legacy(bad))).status, JSON.stringify(bad)).toBe(400);
+      }
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+  });
+
   it("rejects malformed structured attributions before storage", async () => {
     const response = await post({
       timestamp_ns: 1_700_000_000_000_000_000,
