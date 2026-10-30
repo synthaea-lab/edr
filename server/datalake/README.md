@@ -27,7 +27,10 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 - **Writer.** `GET /api/cron/write-lake` (`CRON_SECRET` bearer) drains up to `LAKE_WRITER_MAX_BATCHES`
   batches (default 200) into
   `tenant=<id>/date=<YYYY-MM-DD>/type=<event_type>/<flush>.parquet`, one file per (tenant, day, type)
-  per call, then deletes the queue rows, in one transaction. It answers `503` while the lake is off and
+  per flush, then deletes the queue rows. A call first assigns the oldest unassigned batches to one
+  `flush_id` (committed before any file is written) and writes each assigned flush under names built from
+  it, so a flush that failed or whose process died is retried under the same names with the same events:
+  a retry replaces its files, it never adds a second copy (#1093). It answers `503` while the lake is off and
   returns `remaining`, so a schedule that does not keep up shows as a number that grows. Schedule it
   like the other crons.
 - **File.** Columns `agent_id`, `ts`, `comm`, `path`, `image_path`, `daddr`, `query`, `sha256`, and
@@ -96,7 +99,8 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 - The query side (#933): DuckDB reading these files, and a `HuntQuery` events source.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
-- Duplicates: a crash between the file writes and the commit can leave the events of that flush
-  twice (see `lib/lake-writer.ts`). Nothing removes a duplicate.
+- Duplicates of another kind: the same event sent twice by an agent (a lost `2xx`, then a resend) is
+  accepted twice by ingest and written twice; files a drain wrote before the `flush_id` assignment existed
+  (#1093) may hold a duplicate from a crash, and nothing removes them.
 - Exactness of large integers: ingest parses the body with `JSON.parse`, so a value above 2^53 (a
   nanosecond timestamp, a process generation) is stored as the nearest double.
