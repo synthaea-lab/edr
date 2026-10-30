@@ -35,6 +35,11 @@ model Tenant {
   decoyTokens         DecoyToken[]
   notificationChannels NotificationChannel[]
   notifications       Notification[]
+  lakeBatches         LakeBatch[]
+
+  // Telemetry lake retention in days (issue #77, ADR-0041): 0 means the writer keeps nothing for
+  // this tenant. Read by the lake writer; the retention job is a later slice.
+  lakeRetentionDays Int @default(90) @map("lake_retention_days")
 
   @@map("tenants")
 }
@@ -715,4 +720,22 @@ model CommonSetSnapshot {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("common_set_snapshots")
+}
+
+// Telemetry lake queue (issue #77, ADR-0041, lib/lake-writer.ts): one row per accepted ingest
+// batch, kept until the lake writer has written its events as Parquet and deleted the row. Only
+// filled when LAKE_DIR is set. The events are the batch as received, already checked to be
+// objects with a string `type`.
+model LakeBatch {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  agentId    String   @map("agent_id")
+  receivedAt DateTime @map("received_at")
+  events     Json
+  eventCount Int      @map("event_count")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([receivedAt])
+  @@map("lake_batches")
 }

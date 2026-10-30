@@ -4,30 +4,14 @@ import { prisma } from "@/lib/prisma";
 import { authenticateAgent, type AuthenticatedAgent } from "@/lib/agent-auth";
 import { acceptedOutcome, recordIngest, refusedOutcome, lagOf } from "@/lib/ingest-stats";
 import { aggregateSightings, extractObservations, recordSightings } from "@/lib/prevalence";
+import { eventTime } from "@/lib/event-time";
+import { lakeStoreFromEnv } from "@/lib/lake-store";
+import { enqueueLakeBatch, eventSources } from "@/lib/lake-writer";
 
 /** Body ceiling, checked on the bytes actually read (not the Content-Length header). */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 /** The agent sends batches of 100 (`transport::DEFAULT_BATCH_SIZE`); this is headroom, not a target. */
 const MAX_EVENTS_PER_BATCH = 1000;
-/** One day: an agent clock further ahead than this is treated as unset rather than believed. */
-const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
-
-/**
- * When an event happened, from its `meta.timestamp_ns`. A missing, non-numeric,
- * non-positive or far-future stamp becomes `now`: an enrolled agent with a bad
- * clock must not be able to backdate or postdate a sighting and so bend
- * "first seen on the fleet".
- */
-function eventTime(event: Record<string, unknown>, now: Date): Date {
-  const meta = event.meta;
-  const ns =
-    typeof meta === "object" && meta !== null
-      ? (meta as Record<string, unknown>).timestamp_ns
-      : undefined;
-  if (typeof ns !== "number" || !Number.isFinite(ns) || ns <= 0) return now;
-  const at = new Date(Math.floor(ns / 1_000_000));
-  return at.getTime() > now.getTime() + MAX_CLOCK_SKEW_MS ? now : at;
-}
 
 /**
  * POST /api/ingest/events (also served at /api/v1/ingest/events, the path
@@ -39,10 +23,10 @@ function eventTime(event: Record<string, unknown>, now: Date): Date {
  * trusted; identity is the certificate).
  * Response: `{ accepted, batch_id }`, the shape `transport::UploadResponse` reads.
  *
- * INTERIM: events are counted into fleet prevalence (issue #76) and nothing
- * else. Raw telemetry belongs in the lake (`server/datalake`), which does not
- * exist yet, so an accepted event is not retained. The agent drops a spooled
- * segment once it gets a 2xx.
+ * Events are counted into fleet prevalence (issue #76). With `LAKE_DIR` set they are also queued
+ * for the telemetry lake (issue #77, ADR-0041, `lib/lake-writer.ts`); without it an accepted event
+ * is not retained. The agent drops a spooled segment once it gets a 2xx, which with the lake on
+ * means "durably queued", not "written to the lake".
  */
 export async function POST(req: NextRequest) {
   // Known once the certificate is checked: a refusal or failure after that is counted for it (#899).
@@ -81,14 +65,25 @@ export async function POST(req: NextRequest) {
     // gives up and discards the good ones with it.
     const now = new Date();
     const items: { at: Date; observations: ReturnType<typeof extractObservations> }[] = [];
+    const lakeEvents: unknown[] = [];
+    // The lake keeps each event's text as received; the parsed value rounds integers above 2^53.
+    const sources = eventSources(raw);
     let accepted = 0;
-    for (const event of events) {
+    for (let index = 0; index < events.length; index += 1) {
+      const event: unknown = events[index];
       if (typeof event !== "object" || event === null || typeof (event as { type?: unknown }).type !== "string") {
         continue;
       }
       accepted += 1;
+      lakeEvents.push(sources !== null && sources.length === events.length ? sources[index] : event);
       const e = event as Record<string, unknown>;
       items.push({ at: eventTime(e, now), observations: extractObservations(e) });
+    }
+
+    // Not best effort: a batch that cannot be queued answers 5xx so the agent keeps its segment and
+    // retries, instead of dropping events the lake was meant to keep. Off unless LAKE_DIR is set.
+    if (lakeStoreFromEnv() !== null) {
+      await enqueueLakeBatch(prisma, { tenantId: agent.tenantId, agentId: agent.id, events: lakeEvents, receivedAt: now });
     }
 
     // Best effort, like the detection route: the agent must not retry a batch
@@ -99,7 +94,12 @@ export async function POST(req: NextRequest) {
       console.error("Prevalence update failed:", error);
     }
 
-    await prisma.agent.update({ where: { id: agent.id }, data: { lastSeen: now } });
+    // Best effort as well: past the enqueue a 500 would make the agent resend a batch already queued.
+    try {
+      await prisma.agent.update({ where: { id: agent.id }, data: { lastSeen: now } });
+    } catch (error) {
+      console.error("lastSeen update failed:", error);
+    }
 
     // Best effort too (`recordIngest` never throws). Counted last so that a 500 above is
     // counted as a refusal, not as an accepted batch.

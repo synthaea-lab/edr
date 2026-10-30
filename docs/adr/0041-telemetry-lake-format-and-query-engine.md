@@ -172,6 +172,30 @@ before code exists; the ones that stop being reversible once data is written say
   one measurement on a real host over a day, since `file_open` was 90 % of the bytes in the lab run
   below, and the writer may then drop or sample it behind a per-type setting.
 
+## Findings from building the write path (2026-10-29)
+
+Building the first slice (`server/lib/lake-writer.ts`, PR stacked on this one) showed three things
+this ADR did not say.
+
+- **DuckDB's Node bindings have no Alpine (musl) build.** `@duckdb/node-bindings` ships linux-x64
+  and linux-arm64 for glibc, plus macOS and Windows; the server image is `node:20-alpine`
+  (`server/Dockerfile`). Decision 4 ("DuckDB in process, on a worker") therefore cannot run in the
+  current image. The write path does not need it (Parquet is written by `hyparquet-writer`, pure
+  JavaScript, which runs on Alpine). The query side must pick one of: a glibc base image for the
+  worker, a separate worker container, or the DuckDB CLI as a subprocess. Not decided here; it is the
+  first thing the query slice (#933) has to settle, and the engine stays an assumption until then.
+- **The writer's compression is Snappy, not zstd.** The lab measurement used zstd through DuckDB
+  (about 15x smaller than the JSON); `hyparquet-writer` writes Snappy by default and zstd needs an
+  external compressor. Files will be larger than the measured ones; the size is not measured for the
+  writer's output.
+- **The event column is not byte for byte.** Ingest reads the body with `JSON.parse`, so an integer
+  above 2^53 (a nanosecond timestamp, a process generation) is stored as the nearest double. The file
+  holds what ingest parsed, serialized again. Exactness would need ingest to keep the raw text.
+
+The slice also fixes two choices this ADR left open: the queue is a table with one row per batch and
+the events as a JSON column, and the first store is a directory (`LAKE_DIR`), the S3 store being the
+next slice behind the same one-method interface.
+
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
 One agent (`agent capture-events`, Fedora 43 lab VM, kernel 7.2.9) for 601 s under a synthetic loop
