@@ -74,6 +74,39 @@ describe("GET /api/cron/group-detections", () => {
     expect(body.casesCreated).toBe(2);
   });
 
+  // #1053: a structured detection stores only techniques[0] in the column; the rest of its
+  // list is in meta.techniques. Each order runs over two ticks, so the second detection meets
+  // the first as evidence of an open case, read back from the database.
+  for (const [first, second] of [
+    ["structured", "single"],
+    ["single", "structured"],
+  ] as const) {
+    it(`groups a structured detection with a single id from its list (${first} first)`, async () => {
+      const tenant = await createTestTenant();
+      const agent = await createTestAgent(tenant.id);
+      const t0 = new Date();
+      const create = (kind: "structured" | "single", timestamp: Date) =>
+        kind === "structured"
+          ? createTestDetection(tenant.id, agent.id, {
+              technique: "T1566.001",
+              meta: { techniques: ["T1566.001", "T1204.002"] },
+              timestamp,
+            })
+          : createTestDetection(tenant.id, agent.id, { technique: "T1204.002", timestamp });
+
+      await create(first, t0);
+      await GET(cronRequest());
+      await create(second, new Date(t0.getTime() + 60_000));
+      const body = await (await GET(cronRequest())).json();
+
+      expect(body.casesCreated).toBe(0);
+      const cases = await prisma.case.findMany({ where: { tenantId: tenant.id } });
+      expect(cases).toHaveLength(1);
+      const grouped = await prisma.detection.findMany({ where: { tenantId: tenant.id } });
+      expect(grouped.every((d) => d.caseId === cases[0].id)).toBe(true);
+    });
+  }
+
   it("does not group detections from different agents", async () => {
     const tenant = await createTestTenant();
     const agentA = await createTestAgent(tenant.id, "agent-a");

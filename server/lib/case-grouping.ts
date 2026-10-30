@@ -3,8 +3,8 @@
  * separated from the Prisma calls in app/api/cron/group-detections/route.ts
  * so it's unit-testable without a database.
  *
- * This is the honest limit of what's derivable from the single `technique`
- * string field actually stored on `Detection` — no MITRE tactic taxonomy
+ * This is the honest limit of what's derivable from the technique ids stored
+ * on `Detection` (`technique`, plus `meta.techniques`) — no MITRE tactic taxonomy
  * lookup exists in this codebase, so "related" means "same technique" or
  * "shares a base technique" (the part before the sub-technique dot, for each
  * id of a "/"-separated compound tag).
@@ -54,6 +54,27 @@ export function isRelatedTechnique(a: string, b: string): boolean {
   }
   const basesOfB = baseTechniques(b);
   return Array.from(baseTechniques(a)).some((base) => basesOfB.has(base));
+}
+
+// Same bounds as the ingest schema's structured `techniques` list (lib/detection-payload.ts).
+const LISTED_TECHNIQUE = /^[A-Za-z0-9._-]{1,64}$/;
+const MAX_LISTED_TECHNIQUES = 16;
+
+/**
+ * The tag grouping compares for one detection: its `technique` column joined with
+ * the ids of `meta.techniques` (#1053). A structured detection stores only
+ * `techniques[0]` in the column, so `T1566.001` + `T1204.002` grouped as `T1566`
+ * alone. `meta` of a legacy detection is whatever the agent sent, so only a
+ * bounded list of well-formed ids is read from it; anything else is ignored.
+ */
+export function groupingTechnique(technique: string, listed: unknown): string {
+  if (!Array.isArray(listed)) {
+    return technique;
+  }
+  const ids = listed
+    .slice(0, MAX_LISTED_TECHNIQUES)
+    .filter((id): id is string => typeof id === "string" && LISTED_TECHNIQUE.test(id));
+  return Array.from(new Set([technique, ...ids])).join("/");
 }
 
 export function withinTimeWindow(a: Date, b: Date, windowMs: number = GROUPING_TIME_WINDOW_MS): boolean {
