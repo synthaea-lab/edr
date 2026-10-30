@@ -95,6 +95,46 @@ rolled-back, or historical) still references (retention for hashes nothing refer
 is #834). A publish that lists a hash not present in the store is refused (422, "not in the
 store"), naming the missing path.
 
+## Publishing an IOC feed (#60, ADR-0038)
+
+An IOC feed is content of type `ioc`: `ioc/<feed>.txt` (and an optional `ioc/VERSION`), loaded by the
+agent on startup and on a content reload. `POST /api/content/ioc-feed` (owner or admin) builds the feed
+from a source and stages it in the store, so the `cp` step above is done for you:
+
+    curl -X POST .../api/content/ioc-feed -H 'content-type: application/json' -d '{
+      "feed": "abuse-ch", "version": "2026-10-28",
+      "source": { "format": "csv", "csv": "<the file>", "valueColumn": "indicator", "typeColumn": "type" }
+    }'
+
+`source` is `{ "format": "plain", "text": ... }` (`kind:value` lines, `defaultKind` for bare values) or
+`{ "format": "csv", "csv": ..., "valueColumn", "typeColumn"?, "defaultKind"?, "hasHeader"? }` (columns by
+header name, or by index with `hasHeader: false`) or `{ "format": "misp", "json": "<a MISP export>" }` (attributes flagged `to_ids`, of type sha256, ip-src/dst, domain
+or hostname; context attributes are dropped and reported) or `{ "format": "stix", "json": "<a STIX 2.1 bundle>" }`
+(indicators with a single-comparison pattern on a SHA-256, an address or a domain; revoked, expired and
+not-yet-valid ones are dropped and reported, and the device has no expiry, so an indicator that expires after
+this build stays loaded until a later release: see `docs/detection/ioc-matching.md`). The feed is built with the device's own rules and the
+public-suffix check; a line the device would skip is **dropped and counted**, not published, and the answer
+reports how many and which (`report.rejected`, `report.rejectedTotal`): read it, a column mapped wrong shows
+up as a long list. The answer also carries the manifest `entries` to paste into the unsigned content
+manifest (`type: "ioc"`, the path, `sha256`, `size`), which is then signed and published as above.
+
+Two refusals to know. A source that leaves **no** indicator is refused (422): an empty feed in a release
+unloads the set on every agent of the ring, and a mis-mapped column or an error page saved as the source
+gives exactly that; `"allowEmpty": true` says it is the intent. And at publish, an `ioc/` path that is not
+an `ioc` entry, or a feed with a line the device would skip, is refused like any bad release (422).
+
+To take a feed off agents, publish a corrective release that no longer lists it (above): the file is
+removed and the set unloads at the next reload.
+
+Staging writes the artifact to the store and nothing else: it does not create a release, and a feed
+staged and never listed is unreferenced until retention (#834) prunes it. `prune-artifacts` keeps an
+unreferenced file for 24 hours after its last write (`DEFAULT_MIN_AGE_MS`, by mtime), so that is the time
+between staging and publishing the signed release; staging the same bytes again resets it.
+
+The request body is capped at 32 MiB (413 above), in the handler and in nginx (`location =
+/api/content/ioc-feed` in `server/nginx.conf`, `client_max_body_size 32m`; the default 1 MiB would refuse a
+feed of about 15,000 hashes). Raise both together (`MAX_STAGE_BODY_BYTES` in `server/lib/ioc-stage.ts`).
+
 ## Upgrading a server from the old, path-keyed store (#804)
 
 Before #804, `storage/artifacts/` held one file per manifest path
