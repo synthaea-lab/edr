@@ -143,6 +143,17 @@ export class FsLakeStore implements LakeStore, LakeReader {
 }
 
 /**
+ * The reader the query side uses, or null when it cannot be built: the lake is off, or it is an S3
+ * bucket (`LakeReader` exists for the directory store only; `S3LakeStore` has no read side yet,
+ * #1052). Never the writer's credentials by design once S3 exists: a separate read-only reader.
+ */
+export function lakeReaderFromEnv(env: Record<string, string | undefined> = process.env): LakeReader | null {
+  const dir = env.LAKE_DIR;
+  if (dir === undefined || dir === "") return null;
+  return new FsLakeStore(dir);
+}
+
+/**
  * Whether the telemetry lake is on: a directory (`LAKE_DIR`) or an S3 bucket (`LAKE_S3_BUCKET`) is
  * configured. Cheap and free of the S3 client, so the ingest route can ask it on every request.
  * Which store, and whether the configuration is valid, is `lakeStoreFromEnv` (`lib/lake-env.ts`).

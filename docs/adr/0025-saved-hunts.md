@@ -82,6 +82,29 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
    when the transaction ends. A per-minute rate is not limited: the concurrency and the timeout
    bound the load, as the cooldown on runs does for point 7.
 
+10. **The raw event archive is a third search source, read through `queryLake` (#933).**
+    `POST /api/hunts/search` takes `source: "events"` with an `EventQuery` (`kind: "events"`,
+    `version: 1`): `lastDays` (1 to 90, whole UTC days including today: the archive is partitioned
+    by day), `types` (event types, at most 20), and `where` (exact matches on the typed columns
+    `agentId`, `comm`, `path`, `imagePath`, `daddr`, `query`, `sha256`). Same rules as point 1:
+    validated, unknown fields refused, structured. **It has no tenant field**: the tenant is the
+    session's, passed by the server, and `queryLake` lists only `tenant=<id>/` and rechecks every key
+    it gets back (ADR-0041 decision 4), so no body can widen it. The bounds are those of points 4
+    and 9 in the form this source can take: the **time limit** is an `AbortSignal` of 10 s checked
+    before each file (there is no statement to cancel, so a file already being read is not
+    interrupted: a search can overrun by one file; a 504); the **two searches in flight per tenant**
+    are the same advisory locks as a detection search, held for the whole read, so the sources share
+    the two slots; a row carries the **typed columns only**, each cut to 256 characters, never the
+    event's source text (the `event` column is not read from the file), because a command line or an
+    argument list lives there, as point 9 keeps it out of a detection row. One page of 50, **newest
+    first, with no cursor**: when more matched the answer says `truncated`, and when the archive had
+    more files than one search reads (2000, the oldest days left) it says `incomplete`; the way on is
+    a narrower window or a filter. It is a scan of every file in range on one tenant, not an index
+    (ADR-0041 "Findings"). The archive is a 503 while the lake is off, and there is no S3 reader yet.
+    **Not decided here:** saved hunts over events, their runs and a "new match" for them (a saved
+    hunt stays on detections), a cursor, showing the event's text, and a console page; each is a
+    separate decision.
+
 ## Consequences
 
 - #618 has something to build on: a saved hunt with a query, an owner, a schedule and a result
@@ -96,4 +119,5 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
 - Not built in this slice: notifications, live "ask this host now" queries (they ride the
   `response::live` channel and its gates), and the event archive (`server/datalake`, #77: a
   third source and a new query version when it exists). The console pages, graduation (#618) and
-  ad-hoc search (point 9) have since been added; their decisions are in the points above.
+  ad-hoc search (point 9) have since been added, and the archive's ad-hoc search (point 10); their
+  decisions are in the points above. Saved hunts over events are still not built.
