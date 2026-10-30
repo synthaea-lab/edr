@@ -33,8 +33,9 @@ To migrate from `old/lab` after review:
 | `ransomware-reflex.sh` | A benign encryptor reads the planted canaries, then renames throwaway files one by one; run with kill on or off (`EXPECT=enforce\|observe`, `CANARY_DIR`) | T1083 canary detection + T1486 + `RESPONSE-KILL` (issue #82) — asserts the encryptor is killed before more than `MAX_ENCRYPTED` (default 60) files are renamed; needs `[deception] canary_dirs` outside `/tmp`. Run on a VM 2026-10-08 and 2026-10-15 (Fedora 44, 43), observe and enforce: killed after 20 of 300 renames both times (see the yaml) |
 | `pid-reuse.sh` | A real `sed` runs, its pid is forced to be recycled (`ns_last_pid`) by a forked child that sets `comm=sed` and renames files with a `.bak` suffix; run as root, `recycled` (default) or `real` (control) | T1486 — asserts the in-place-edit exclusion does not follow a recycled pid (#519); `real` expects no alert |
 | `prevalence-lineage.sh` | The `lineage.sh` chain from a directory named by `TAG` (`TAG=shared` on two hosts, `TAG=only-a` on one); needs an uploading agent | T1059 + the fleet triage line on the case: "seen on 2 hosts" for the shared transition, "seen on 1 host" for the one-host one (issue #76, box 1) |
+| `windows-container.ps1` | A process-isolated container (`ping -t`, then `docker exec hostname.exe`) and a `hostname.exe` on the host; elevated, with `-AgentExe` it runs the agent and checks the result | No alert: asserts `EventMeta::container` on the container's exec events (the Docker id, including the process that exits at once) and none on the host's (#371). Needs the Containers feature and Docker in Windows mode (Server 2025 or Windows 11 22H2+ Pro). Not yet run on a VM |
 
-The `.ps1` scenarios above other than `bits-job.ps1` are the Windows demo surface — see `../../demo/`
+The `.ps1` scenarios above other than `bits-job.ps1` and `windows-container.ps1` are the Windows demo surface — see `../../demo/`
 for the runbook that chains them in the reviewer-facing order.
 
 New scenarios follow the same shape: one script, one documented expectation list,
