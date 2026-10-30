@@ -22,7 +22,7 @@
  * volume. DuckDB stays the planned engine for that (not measured, ADR "Measurements owed"); the
  * result shape is what a hunt layer consumes, so the engine can change under it.
  *
- * Rows come back oldest first (by `ts`, then by file) and carry `event`, the event's source text as
+ * Rows come back oldest first (by `ts`, then by file), or newest first with `order: "desc"`, and carry `event`, the event's source text as
  * ingest received it, never re-serialised.
  */
 
@@ -59,6 +59,22 @@ export interface LakeQuery {
   /** Exact matches, all of which must hold. `sha256` is compared in lowercase. */
   where?: Partial<Record<LakeFilterName, string>>;
   limit?: number;
+  /**
+   * "asc" (the default): the oldest rows of the range, oldest first. "desc": the newest rows, newest
+   * first, so a hunt over a wide window sees what happened last, and `limit` cuts the oldest.
+   */
+  order?: "asc" | "desc";
+  /**
+   * Checked before each file is read: an aborted signal ends the query by throwing its reason, so a
+   * caller can bound the time. A file already being read is not interrupted.
+   */
+  signal?: AbortSignal;
+  /**
+   * Read the `event` column (the event's whole source text; the largest column). Default true. With
+   * false the column is not read from the file at all (Parquet is columnar) and `event` is "": for a
+   * caller that shows only the typed columns.
+   */
+  includeEvent?: boolean;
 }
 
 export interface LakeRow {
@@ -130,14 +146,20 @@ export async function listPartitionFiles(
   first: number,
   last: number,
   types: string[] | null,
-  maxFiles: number
+  maxFiles: number,
+  opts: { newestFirst?: boolean; signal?: AbortSignal } = {}
 ): Promise<{ files: PartitionFile[]; truncated: boolean }> {
   const files: PartitionFile[] = [];
   const wanted = types === null ? null : Array.from(new Set(types));
-  for (let day = first; day <= last; day++) {
+  // The days are walked in the order the caller wants rows, so that the cap keeps the newest days for
+  // a newest-first query and the oldest for the other: it never keeps the wrong end of the range.
+  const days = Array.from({ length: last - first + 1 }, (_, i) => (opts.newestFirst ? last - i : first + i));
+  for (const day of days) {
     const date = dayString(day);
     const under = `tenant=${tenantId}/date=${date}/`;
     for (const prefix of wanted === null ? [under] : wanted.map((type) => `${under}type=${type}/`)) {
+      // The deadline is checked before each listing as well as before each file read.
+      opts.signal?.throwIfAborted();
       for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length })) {
         const m = KEY.exec(key);
         // The second layer: whatever the store listed, only this tenant's well-formed keys of this day are read.
@@ -165,6 +187,8 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
   if (last - first + 1 > MAX_RANGE_DAYS) throw new RangeError(`a query spans at most ${MAX_RANGE_DAYS} days`);
   for (const type of q.types ?? []) if (!TYPE.test(type)) throw new RangeError(`invalid event type: ${JSON.stringify(type)}`);
   if ((q.types ?? []).length > MAX_TYPES) throw new RangeError(`a query names at most ${MAX_TYPES} event types`);
+  if (q.order !== undefined && q.order !== "asc" && q.order !== "desc") throw new RangeError('order must be "asc" or "desc"');
+  const newestFirst = q.order === "desc";
   const limit = q.limit ?? DEFAULT_ROWS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_ROWS) throw new RangeError(`limit must be 1 to ${MAX_ROWS}`);
 
@@ -174,12 +198,15 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     if (typeof value !== "string") throw new RangeError(`filter ${name} must be a string`);
     tests.push([EQUALITY_COLUMNS[name as LakeFilterName], name === "sha256" ? value.toLowerCase() : value]);
   }
-  const listed = await listPartitionFiles(reader, q.tenantId, first, last, q.types === undefined ? null : q.types, MAX_FILES);
+  const listed = await listPartitionFiles(reader, q.tenantId, first, last, q.types === undefined ? null : q.types, MAX_FILES, { newestFirst, signal: q.signal });
   const files = listed.files;
   files.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.key < b.key ? -1 : 1));
+  // Read in the order the query wants rows (the listing already kept the right end of the range).
+  if (newestFirst) files.reverse();
 
   const toRead = files;
-  const columns = ["agent_id", "ts", "comm", "path", "image_path", "daddr", "query", "sha256", "event"];
+  const withEvent = q.includeEvent !== false;
+  const columns = ["agent_id", "ts", "comm", "path", "image_path", "daddr", "query", "sha256", ...(withEvent ? ["event"] : [])];
   const rows: LakeRow[] = [];
   let truncated = false;
   let filesRead = 0;
@@ -190,6 +217,7 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     const date = toRead[i].date;
     const day: LakeRow[] = [];
     for (; i < toRead.length && toRead[i].date === date; i++) {
+      q.signal?.throwIfAborted();
       const bytes = await reader.get(toRead[i].key);
       const file = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
       filesRead++;
@@ -206,11 +234,11 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
           daddr: (r.daddr as string | null) ?? null,
           query: (r.query as string | null) ?? null,
           sha256: (r.sha256 as string | null) ?? null,
-          event: String(r.event),
+          event: withEvent ? String(r.event) : "",
         });
       }
     }
-    day.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+    day.sort((a, b) => (newestFirst ? b.ts.getTime() - a.ts.getTime() : a.ts.getTime() - b.ts.getTime()));
     for (const row of day) {
       if (rows.length === limit) {
         truncated = true;

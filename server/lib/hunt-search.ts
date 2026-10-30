@@ -16,14 +16,16 @@ import {
   type HuntQuery,
   type Severity,
 } from "@/lib/hunt";
+import { parseEventQuery, type EventQuery } from "@/lib/hunt-events";
 
 /**
- * Ad-hoc search over the detection and case store (#61, ADR-0025).
+ * Ad-hoc search over the detection and case store (#61, ADR-0025). The raw event archive is a
+ * third source with its own page and runner, `lib/hunt-events-search.ts` (#933): it shares this
+ * file's admission (`admitSearch`), request parsing and failure mapping, not its transaction.
  *
  * The same structured, tenant-scoped queries as a saved hunt, run once and read back as rows
  * instead of counts: an analyst can look at what a hunt matches before saving it, and at what a
- * saved hunt matches now. Read-only. Both sources are Postgres tables; the raw event archive
- * (`server/datalake`, #77) is not built and is not searched.
+ * saved hunt matches now. Read-only. Both sources here are Postgres tables.
  */
 
 /** Rows per page. */
@@ -53,6 +55,9 @@ export type CaseQuery = {
 export type SearchRequest =
   | { source: "detections"; query: HuntQuery; cursor?: string }
   | { source: "cases"; query: CaseQuery; cursor?: string };
+
+/** A search of the event archive: one page, no cursor (see `lib/hunt-events-search.ts`). */
+export type EventSearchRequest = { source: "events"; query: EventQuery };
 
 export type DetectionRow = {
   id: string;
@@ -127,12 +132,17 @@ export function parseCaseQuery(input: unknown): CaseQuery {
 }
 
 /** Validates the body of `POST /api/hunts/search`; throws `HuntValidationError`. */
-export function parseSearchRequest(body: unknown): SearchRequest {
+export function parseSearchRequest(body: unknown): SearchRequest | EventSearchRequest {
   if (typeof body !== "object" || body === null || Array.isArray(body)) fail("body must be an object");
   const raw = body as Record<string, unknown>;
   for (const key of Object.keys(raw)) if (!["source", "query", "cursor"].includes(key)) fail(`unknown field "${key}"`);
   const source = raw.source ?? "detections";
-  if (source !== "detections" && source !== "cases") fail('source must be "detections" or "cases"');
+  if (source !== "detections" && source !== "cases" && source !== "events") fail('source must be "detections", "cases" or "events"');
+  if (source === "events") {
+    // One page of the newest events: a cursor over the archive is not built, so a request for one is refused, not ignored.
+    if (raw.cursor !== undefined && raw.cursor !== null) fail("the events source has no cursor: narrow the window or add a filter");
+    return { source, query: parseEventQuery(raw.query) };
+  }
   let cursor: string | undefined;
   if (raw.cursor !== undefined && raw.cursor !== null) {
     if (typeof raw.cursor !== "string") fail("cursor must be a string");
@@ -201,6 +211,22 @@ export type SearchOptions = {
 export type SearchOutcome = { status: "ok"; page: SearchPage } | { status: "busy" };
 
 /**
+ * Takes one of the tenant's `MAX_CONCURRENT_SEARCHES_PER_TENANT` slots, without waiting: a
+ * transaction-scoped advisory lock in Postgres, so the bound holds across server instances and frees
+ * itself when the transaction ends, however it ends. False when none is free. Every source takes
+ * its slot here, so an archive scan counts against the same two as a detection search.
+ */
+export async function admitSearch(tx: Prisma.TransactionClient, tenantId: string): Promise<boolean> {
+  for (let slot = 0; slot < MAX_CONCURRENT_SEARCHES_PER_TENANT; slot++) {
+    const [{ ok }] = await tx.$queryRaw<{ ok: boolean }[]>(
+      Prisma.sql`SELECT pg_try_advisory_xact_lock(hashtext(${`hunt_search:${tenantId}:${slot}`})) AS ok`
+    );
+    if (ok) return true;
+  }
+  return false;
+}
+
+/**
  * Runs one page of a search for `tenantId` as of `now`, inside a transaction with the hunt
  * statement timeout, so a costly `text` scan is cancelled instead of holding the database.
  *
@@ -222,14 +248,7 @@ export async function searchWithinLimit(
   return prisma.$transaction(
     async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${statementTimeoutMs}`);
-      let admitted = false;
-      for (let slot = 0; slot < MAX_CONCURRENT_SEARCHES_PER_TENANT && !admitted; slot++) {
-        const [{ ok }] = await tx.$queryRaw<{ ok: boolean }[]>(
-          Prisma.sql`SELECT pg_try_advisory_xact_lock(hashtext(${`hunt_search:${tenantId}:${slot}`})) AS ok`
-        );
-        admitted = ok;
-      }
-      if (!admitted) return { status: "busy" } as const;
+      if (!(await admitSearch(tx, tenantId))) return { status: "busy" } as const;
       await options.beforeQuery?.(tx);
       const page =
         request.source === "detections"
@@ -338,7 +357,8 @@ async function casePage(
 export function searchFailure(error: unknown): { status: number; message: string } {
   if (error instanceof HuntValidationError) return { status: 400, message: error.message };
   const text = error instanceof Error ? error.message : "";
-  if (/statement timeout/i.test(text)) {
+  // The archive search has no statement to cancel: its deadline is an AbortSignal, whose reason is a TimeoutError.
+  if (/statement timeout/i.test(text) || (error instanceof Error && error.name === "TimeoutError")) {
     return { status: 504, message: "the search exceeded its time limit and was cancelled" };
   }
   return { status: 500, message: "Internal server error" };
