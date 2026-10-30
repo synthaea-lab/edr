@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -35,6 +35,22 @@ export class LakeNotDeletableError extends Error {
   }
 }
 
+/**
+ * What the query side needs from a store (issue #77, ADR-0041, decision 4): list a prefix and read
+ * a file. It is separate from {@link LakeStore} so that the writer's and the retention job's
+ * credentials are not the reader's: an S3 reader should be built on read-only credentials.
+ */
+export interface LakeReader {
+  /**
+   * The files under `prefix` in key order. With `limit`, at most that many, the first ones: the
+   * store stops listing there instead of materialising the whole prefix (an S3 reader asks for
+   * `MaxKeys`). Without it, every file.
+   */
+  list(prefix: string, opts?: { limit?: number }): Promise<{ key: string; size: number }[]>;
+  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. */
+  get(key: string): Promise<Uint8Array>;
+}
+
 export type DeleteResult = { deleted: string[]; failed: { key: string; error: string }[] };
 
 /** A key the writer built is `tenant=…/date=…/type=…/<id>.parquet`; anything that could leave the root is refused. */
@@ -47,7 +63,7 @@ export function assertSafeKey(key: string): void {
 }
 
 /** Files under one directory. The write goes to a temporary name and is renamed, so a reader never lists half a file. */
-export class FsLakeStore implements LakeStore {
+export class FsLakeStore implements LakeStore, LakeReader {
   constructor(private readonly root: string) {
     if (!root) throw new Error("FsLakeStore needs a root directory");
   }
@@ -61,9 +77,17 @@ export class FsLakeStore implements LakeStore {
     await rename(tmp, target);
   }
 
-  async list(prefix: string): Promise<{ key: string; size: number }[]> {
+  async get(key: string): Promise<Uint8Array> {
+    assertSafeKey(key);
+    return new Uint8Array(await readFile(path.join(this.root, key)));
+  }
+
+  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
+    const limit = opts.limit;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
     const out: { key: string; size: number }[] = [];
+    // Names are visited in order, so with a limit the walk stops at the first `limit` keys.
     const walk = async (rel: string): Promise<void> => {
       let entries;
       try {
@@ -72,7 +96,9 @@ export class FsLakeStore implements LakeStore {
         if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
         throw e;
       }
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const entry of entries) {
+        if (limit !== undefined && out.length >= limit) return;
         const key = rel === "" ? entry.name : `${rel}/${entry.name}`;
         if (entry.isDirectory()) {
           await walk(key);
