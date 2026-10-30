@@ -66,8 +66,10 @@ integration test is added, since it would only repeat it against a database.
 
 Why not a materialized store now:
 
-- **It needs the event archive first.** Replaying "from events" requires events to be kept, and an
-  accepted event is counted and then dropped until `server/datalake` (#77) exists.
+- **It needs the event archive first.** Replaying "from events" requires events to be kept. The
+  archive exists now (`server/datalake`, #77): the prevalence counters can be recomputed from it
+  (`lib/prevalence-rebuild.ts`), and the graph's `hashPivot` reads those counters. A graph projection
+  from lake events is still not built; reopen the issue below for it.
 - **A store that is never written cannot drift.** A projection adds state that has to be kept
   consistent, bounded by a retention policy and proven against its source; nothing consumes that
   guarantee today. The four consumers (case subgraph, blast radius for #62, hunt pivots, ADR-0035's
