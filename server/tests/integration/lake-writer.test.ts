@@ -89,7 +89,7 @@ describe("telemetry lake writer against Postgres", () => {
     const [a1, a2] = [await createTestAgent(t1.id), await createTestAgent(t2.id)];
     await enqueueLakeBatch(prisma, { tenantId: t1.id, agentId: a1.id, events: [exec({ image_path: "/only/t1" })], receivedAt: AT });
     await enqueueLakeBatch(prisma, { tenantId: t2.id, agentId: a2.id, events: [exec({ image_path: "/only/t2" })], receivedAt: AT });
-    await drainLakeQueue(prisma, new FsLakeStore(dir));
+    await drainLakeQueue(prisma, new FsLakeStore(dir), { now: AT });
     for (const file of await filesUnder(dir)) {
       const owner = file.startsWith(`tenant=${t1.id}/`) ? "/only/t1" : "/only/t2";
       expect((await rowsOf(file)).map((r) => r.image_path)).toEqual([owner]);
@@ -101,7 +101,7 @@ describe("telemetry lake writer against Postgres", () => {
     const agent = await createTestAgent(tenant.id);
     await prisma.tenant.update({ where: { id: tenant.id }, data: { lakeRetentionDays: 0 } });
     await enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [exec()], receivedAt: AT });
-    expect(await drainLakeQueue(prisma, new FsLakeStore(dir))).toMatchObject({ events: 0, files: 0, droppedNoRetention: 1, remaining: 0 });
+    expect(await drainLakeQueue(prisma, new FsLakeStore(dir), { now: AT })).toMatchObject({ events: 0, files: 0, droppedNoRetention: 1, remaining: 0 });
     expect(await filesUnder(dir)).toEqual([]);
     expect(await prisma.lakeBatch.count()).toBe(0);
   });
@@ -110,9 +110,9 @@ describe("telemetry lake writer against Postgres", () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
     await enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [exec()], receivedAt: AT });
-    await expect(drainLakeQueue(prisma, { put: async () => { throw new Error("disk full"); } })).rejects.toThrow("disk full");
+    await expect(drainLakeQueue(prisma, { put: async () => { throw new Error("disk full"); } }, { now: AT })).rejects.toThrow("disk full");
     expect(await prisma.lakeBatch.count()).toBe(1);
-    expect(await drainLakeQueue(prisma, new FsLakeStore(dir))).toMatchObject({ batches: 1, files: 1, remaining: 0 });
+    expect(await drainLakeQueue(prisma, new FsLakeStore(dir), { now: AT })).toMatchObject({ batches: 1, files: 1, remaining: 0 });
   });
 
   it("takes at most maxBatches, oldest first, and reports what remains", async () => {
@@ -121,7 +121,7 @@ describe("telemetry lake writer against Postgres", () => {
     for (let i = 0; i < 3; i++) {
       await enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [exec({ image_path: `/b/${i}` })], receivedAt: new Date(AT.getTime() + i * 1000) });
     }
-    expect(await drainLakeQueue(prisma, new FsLakeStore(dir), { maxBatches: 2 })).toMatchObject({ batches: 2, events: 2, remaining: 1 });
+    expect(await drainLakeQueue(prisma, new FsLakeStore(dir), { maxBatches: 2, now: AT })).toMatchObject({ batches: 2, events: 2, remaining: 1 });
     const left = await prisma.lakeBatch.findMany();
     expect(left).toHaveLength(1);
     expect((left[0].events as { image_path: string }[])[0].image_path).toBe("/b/2");
@@ -134,7 +134,7 @@ describe("telemetry lake writer against Postgres", () => {
       await enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [exec({ image_path: `/p/${i}` })], receivedAt: new Date(AT.getTime() + i * 1000) });
     }
     const store = new FsLakeStore(dir);
-    const [a, b] = await Promise.all([drainLakeQueue(prisma, store, { maxBatches: 3 }), drainLakeQueue(prisma, store, { maxBatches: 3 })]);
+    const [a, b] = await Promise.all([drainLakeQueue(prisma, store, { maxBatches: 3, now: AT }), drainLakeQueue(prisma, store, { maxBatches: 3, now: AT })]);
     expect(a.batches + b.batches).toBe(6);
     const seen: string[] = [];
     for (const file of await filesUnder(dir)) seen.push(...(await rowsOf(file)).map((r) => r.image_path as string));

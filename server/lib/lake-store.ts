@@ -19,6 +19,20 @@ export interface LakeStore {
    * throws only for a key that is not safe, before removing anything.
    */
   delete(keys: string[]): Promise<DeleteResult>;
+  /**
+   * Called by the retention job once per run, before anything is deleted: throws a
+   * `LakeNotDeletableError` when the store cannot give the deletion proof it records (a versioned
+   * bucket keeps the bytes behind a delete marker). Optional: a directory has nothing to check.
+   */
+  assertDeletable?(): Promise<void>;
+}
+
+/** The store cannot make a deletion provable; the retention job refuses to run, deleting nothing. */
+export class LakeNotDeletableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LakeNotDeletableError";
+  }
 }
 
 export type DeleteResult = { deleted: string[]; failed: { key: string; error: string }[] };

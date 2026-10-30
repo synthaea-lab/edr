@@ -1,14 +1,22 @@
-import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
-import { assertSafeKey, type DeleteResult, type LakeStore } from "@/lib/lake-store";
+import {
+  DeleteObjectsCommand,
+  GetBucketVersioningCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  type S3Client,
+} from "@aws-sdk/client-s3";
+import { assertSafeKey, LakeNotDeletableError, type DeleteResult, type LakeStore } from "@/lib/lake-store";
 
 /**
  * The lake on an S3-compatible object store (issue #77, ADR-0041): AWS S3, or MinIO in the
  * self-hosted compose. Same three methods as the directory store, so the writer and the retention
  * job do not know which one they have.
  *
- * Versioning must be off, or aged out, on the bucket: on a versioned bucket a delete leaves a
- * delete marker and the bytes stay, and `lake_deletions` would say "verified empty" about a prefix
- * whose objects still exist. The store does not check; the deployment must (ADR-0041, section 5).
+ * Versioning must be off on the bucket: on a versioned bucket a delete leaves a delete marker and
+ * the bytes stay, and `lake_deletions` would say "verified empty" about a prefix whose objects still
+ * exist. `assertDeletable` checks it once per retention run and fails closed (ADR-0041, section 5):
+ * `Enabled`, `Suspended` (earlier versions are kept) and a status that cannot be read all refuse.
+ * It needs `s3:GetBucketVersioning` on the credentials the retention job uses.
  */
 
 /** S3's per-request cap on `DeleteObjects`. */
@@ -73,6 +81,23 @@ export class S3LakeStore implements LakeStore {
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token !== undefined);
     return out.sort((a, b) => (a.key < b.key ? -1 : 1));
+  }
+
+  async assertDeletable(): Promise<void> {
+    let status: string | undefined;
+    try {
+      status = (await this.client.send(new GetBucketVersioningCommand({ Bucket: this.bucket }))).Status;
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      throw new LakeNotDeletableError(
+        `Cannot read the versioning status of bucket ${this.bucket} (${error}); the retention job needs s3:GetBucketVersioning and deletes nothing without it`
+      );
+    }
+    if (status !== undefined && status !== "") {
+      throw new LakeNotDeletableError(
+        `Bucket ${this.bucket} has versioning ${status}: a delete leaves the bytes behind a marker, so the deletion could not be proven. Nothing was deleted; turn versioning off or move the lake to an unversioned bucket`
+      );
+    }
   }
 
   async delete(keys: string[]): Promise<DeleteResult> {

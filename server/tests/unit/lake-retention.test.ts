@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { FsLakeStore, type LakeStore } from "@/lib/lake-store";
+import { FsLakeStore, LakeNotDeletableError, type LakeStore } from "@/lib/lake-store";
 import { ageInDays, isExpired, manifestHash, pruneLake } from "@/lib/lake-retention";
 
 const NOW = new Date(Date.UTC(2026, 9, 29, 15, 30, 0));
@@ -139,6 +139,7 @@ class MemoryStore implements LakeStore {
   stuck = new Set<string>();
   throwAfter: number | null = null;
   listThrowsAfterDelete = false;
+  assertDeletable?: () => Promise<void>;
   deleted = false;
   async put(key: string, body: Uint8Array) { this.files.set(key, body.length); }
   async list(prefix: string) {
@@ -157,6 +158,32 @@ class MemoryStore implements LakeStore {
     return result;
   }
 }
+
+describe("pruneLake on a store that cannot prove a deletion", () => {
+  it("refuses before listing, recording or deleting anything", async () => {
+    const store = new MemoryStore();
+    await store.put(file("t1", "2026-07-01", "exec", "a"), new Uint8Array(4));
+    store.assertDeletable = async () => {
+      throw new LakeNotDeletableError("versioning Enabled");
+    };
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    await expect(pruneLake(db, store, NOW)).rejects.toThrow("versioning Enabled");
+    expect(deletions).toHaveLength(0);
+    expect(store.files.size).toBe(1);
+    expect(store.deleted).toBe(false);
+  });
+
+  it("checks once per run, not per partition", async () => {
+    const store = new MemoryStore();
+    await store.put(file("t1", "2026-07-01", "exec", "a"), new Uint8Array(1));
+    await store.put(file("t1", "2026-07-02", "exec", "b"), new Uint8Array(1));
+    const check = vi.fn(async () => {});
+    store.assertDeletable = check;
+    const { db } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    await pruneLake(db, store, NOW);
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("pruneLake", () => {
   it("deletes the expired partitions of a tenant and records each one", async () => {
@@ -223,6 +250,42 @@ describe("pruneLake", () => {
     expect(Array.from(store.files.keys())).toEqual([b]);
     expect(deletions[0]).toMatchObject({ objectCount: 3, deletedCount: 2, failedCount: 1, verifiedEmpty: false });
     expect(deletions[0].error).toMatch(/AccessDenied/);
+  });
+
+  it("counts only the sizes of the files that went, not the planned total, when the delete was partial", async () => {
+    const store = new MemoryStore();
+    const [a, b] = ["a", "b"].map((n) => file("t1", "2026-07-01", "exec", n));
+    await store.put(a, new Uint8Array(10));
+    await store.put(b, new Uint8Array(3));
+    store.stuck.add(a);
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    const result = await pruneLake(db, store, NOW);
+    expect(result).toMatchObject({ filesDeleted: 1, bytesDeleted: 3 });
+    expect(deletions[0]).toMatchObject({ bytes: BigInt(13), deletedCount: 1 });
+  });
+
+  it("does not call a file the writer added meanwhile a failed deletion, and leaves it to the next run", async () => {
+    const store = new MemoryStore();
+    const [a, b] = ["a", "b"].map((n) => file("t1", "2026-07-01", "exec", n));
+    await store.put(a, new Uint8Array(4));
+    await store.put(b, new Uint8Array(6));
+    const late = file("t1", "2026-07-01", "exec", "late");
+    const del = store.delete.bind(store);
+    store.delete = async (keys: string[]) => {
+      const r = await del(keys);
+      await store.put(late, new Uint8Array(9)); // a flush lands after the listing, before the check
+      return r;
+    };
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    const result = await pruneLake(db, store, NOW);
+    expect(result).toMatchObject({ partitionsDeleted: 1, filesDeleted: 2, bytesDeleted: 10, notEmpty: 0, failedPartitions: 0, errors: [] });
+    expect(deletions[0]).toMatchObject({ objectCount: 2, deletedCount: 2, failedCount: 0, arrivedDuringDeletion: 1, verifiedEmpty: true, error: null });
+    expect(Array.from(store.files.keys())).toEqual([late]);
+    // The next run finds the newcomer as its own listing and deletes it.
+    store.delete = del;
+    const again = await pruneLake(db, store, NOW);
+    expect(again).toMatchObject({ partitionsDeleted: 1, filesDeleted: 1, bytesDeleted: 9 });
+    expect(store.files.size).toBe(0);
   });
 
   it("still records the deletion when the store throws partway, from what is really left", async () => {

@@ -35,6 +35,20 @@ export function typeSegment(type: unknown): string {
   return typeof type === "string" && TYPE_SEGMENT.test(type) ? type : OTHER_TYPE;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the UTC day `day` (`YYYY-MM-DD`) is `retentionDays` or more old at `now`: the retention
+ * job deletes such a partition whole, and the writer must not put a file into it (ADR-0041,
+ * decision 2). An unparseable day is never expired.
+ */
+export function isPastRetention(day: string, retentionDays: number, now: Date): boolean {
+  const at = Date.parse(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(at)) return false;
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((today - at) / DAY_MS) >= retentionDays;
+}
+
 /** The UTC day, as the `date=` segment. */
 export function dayOf(at: Date): string {
   return at.toISOString().slice(0, 10);
@@ -61,7 +75,89 @@ export type LakeRow = {
   event: string;
 };
 
-export function lakeRow(agentId: string, event: Record<string, unknown>, receivedAt: Date): LakeRow {
+/**
+ * The source text of each element of the body's top-level `events` array, in order, or null when the
+ * body has none. The `event` column is the event "byte for byte as received" (ADR-0041, decision 1):
+ * `JSON.parse` then `JSON.stringify` rounds every integer above 2^53, and `meta.timestamp_ns` (about
+ * 1.8e18) always is, so the lake keeps the text the agent sent. The body must already be valid JSON
+ * (the route parsed it); like `JSON.parse`, the last `events` key wins.
+ */
+export function eventSources(raw: string): string[] | null {
+  let found: string[] | null = null;
+  let depth = 0;
+  let i = 0;
+  const n = raw.length;
+  const skipString = () => {
+    // raw[i] is the opening quote
+    i += 1;
+    while (i < n && raw[i] !== '"') i += raw[i] === "\\" ? 2 : 1;
+    i += 1;
+  };
+  const skipWs = () => {
+    while (i < n && /\s/.test(raw[i])) i += 1;
+  };
+  while (i < n) {
+    const c = raw[i];
+    if (c === '"') {
+      const start = i;
+      skipString();
+      if (depth === 1) {
+        const key = raw.slice(start, i);
+        const after = i;
+        skipWs();
+        if (raw[i] === ":" && key === '"events"') {
+          i += 1;
+          skipWs();
+          if (raw[i] === "[") {
+            const list: string[] = [];
+            i += 1;
+            let elementStart = -1;
+            let d = 0;
+            while (i < n) {
+              const ch = raw[i];
+              if (ch === '"') {
+                if (d === 0 && elementStart < 0) elementStart = i;
+                skipString();
+                continue;
+              }
+              if (ch === "{" || ch === "[") {
+                if (d === 0 && elementStart < 0) elementStart = i;
+                d += 1;
+              } else if (ch === "}" || ch === "]") {
+                if (d === 0) break; // the closing bracket of the events array
+                d -= 1;
+              } else if (ch === ",") {
+                if (d === 0 && elementStart >= 0) {
+                  list.push(raw.slice(elementStart, i).trimEnd());
+                  elementStart = -1;
+                }
+              } else if (d === 0 && elementStart < 0 && !/\s/.test(ch)) {
+                elementStart = i; // a number, true, false or null
+              }
+              i += 1;
+            }
+            if (elementStart >= 0) list.push(raw.slice(elementStart, i).trimEnd());
+            found = list;
+            i += 1;
+            continue;
+          }
+        }
+        i = after;
+      }
+      continue;
+    }
+    if (c === "{" || c === "[") depth += 1;
+    else if (c === "}" || c === "]") depth -= 1;
+    i += 1;
+  }
+  return found;
+}
+
+/**
+ * `source` is the event's text as received; without it (a queue row written before the text was
+ * kept) the event is serialised from the parsed object, which rounds integers above 2^53.
+ */
+export function lakeRow(agentId: string, event: Record<string, unknown>, receivedAt: Date, source?: string): LakeRow {
   const meta = event.meta;
   const comm = typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>).comm : undefined;
   const sha = typeof event.sha256 === "string" ? event.sha256.toLowerCase() : "";
@@ -74,7 +170,7 @@ export function lakeRow(agentId: string, event: Record<string, unknown>, receive
     daddr: column(event.daddr),
     query: column(event.query),
     sha256: SHA256.test(sha) ? sha : null,
-    event: JSON.stringify(event),
+    event: source ?? JSON.stringify(event),
   };
 }
 
@@ -111,7 +207,8 @@ export async function enqueueLakeBatch(
       tenantId: batch.tenantId,
       agentId: batch.agentId,
       receivedAt: batch.receivedAt,
-      events: batch.events as object[],
+      // Strings of source text (see `eventSources`) or, for a caller without it, parsed objects.
+      events: batch.events as (string | object)[],
       eventCount: batch.events.length,
     },
   });
@@ -123,6 +220,12 @@ export type DrainResult = {
   files: number;
   /** Events dropped because their tenant keeps nothing (`lakeRetentionDays` = 0). */
   droppedNoRetention: number;
+  /**
+   * Events dated at or past their tenant's retention: ingest keeps a past timestamp, and a file in
+   * such a day would be deleted at the next retention run, or refill a prefix already recorded as
+   * deleted. Dropped here, counted, not written.
+   */
+  droppedPastRetention: number;
   /** Queued events that were not objects with a string `type`. */
   skippedMalformed: number;
   /** Batches still queued after this drain. */
@@ -132,15 +235,16 @@ export type DrainResult = {
 export async function drainLakeQueue(
   prisma: PrismaClient,
   store: Pick<LakeStore, "put">,
-  opts: { maxBatches?: number } = {}
+  opts: { maxBatches?: number; now?: Date } = {}
 ): Promise<DrainResult> {
   const max = opts.maxBatches ?? DEFAULT_MAX_BATCHES;
+  const now = opts.now ?? new Date();
   return prisma.$transaction(
     async (tx) => {
       // SKIP LOCKED: two drains at once take different rows instead of waiting on, or repeating, each other.
       const picked = await tx.$queryRaw<{ id: string }[]>`
         SELECT id FROM lake_batches ORDER BY received_at, id LIMIT ${max} FOR UPDATE SKIP LOCKED`;
-      const empty: DrainResult = { batches: 0, events: 0, files: 0, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 };
+      const empty: DrainResult = { batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 };
       if (picked.length === 0) return empty;
 
       const ids = picked.map((r) => r.id);
@@ -149,6 +253,7 @@ export async function drainLakeQueue(
         where: { id: { in: Array.from(new Set(batches.map((b) => b.tenantId))) } },
         select: { id: true, lakeRetentionDays: true },
       });
+      const retentionOf = new Map(tenants.map((t) => [t.id, t.lakeRetentionDays]));
       const keepsNothing = new Set(tenants.filter((t) => t.lakeRetentionDays === 0).map((t) => t.id));
       // A tenant that no longer exists cascades its batches away; one that raced the delete has no row here.
       const known = new Set(tenants.map((t) => t.id));
@@ -156,11 +261,22 @@ export async function drainLakeQueue(
       const groups = new Map<string, { tenantId: string; day: string; type: string; rows: LakeRow[]; batchIds: Set<string> }>();
       let events = 0;
       let droppedNoRetention = 0;
+      let droppedPastRetention = 0;
       let skippedMalformed = 0;
       for (const batch of batches) {
         if (!known.has(batch.tenantId)) continue;
         const list = Array.isArray(batch.events) ? batch.events : [];
-        for (const raw of list) {
+        for (const queued of list) {
+          let source: string | undefined;
+          let raw: unknown = queued;
+          if (typeof queued === "string") {
+            source = queued;
+            try {
+              raw = JSON.parse(queued);
+            } catch {
+              raw = null;
+            }
+          }
           if (typeof raw !== "object" || raw === null || Array.isArray(raw) || typeof (raw as { type?: unknown }).type !== "string") {
             skippedMalformed += 1;
             continue;
@@ -170,9 +286,13 @@ export async function drainLakeQueue(
             continue;
           }
           const event = raw as Record<string, unknown>;
-          const row = lakeRow(batch.agentId, event, batch.receivedAt);
+          const row = lakeRow(batch.agentId, event, batch.receivedAt, source);
           const type = typeSegment(event.type);
           const day = dayOf(row.at);
+          if (isPastRetention(day, retentionOf.get(batch.tenantId) ?? 0, now)) {
+            droppedPastRetention += 1;
+            continue;
+          }
           const gk = `${batch.tenantId}\u0000${day}\u0000${type}`;
           let group = groups.get(gk);
           if (!group) {
@@ -192,7 +312,7 @@ export async function drainLakeQueue(
 
       await tx.lakeBatch.deleteMany({ where: { id: { in: ids } } });
       const remaining = await tx.lakeBatch.count();
-      return { batches: ids.length, events, files: groups.size, droppedNoRetention, skippedMalformed, remaining };
+      return { batches: ids.length, events, files: groups.size, droppedNoRetention, droppedPastRetention, skippedMalformed, remaining };
     },
     // The transaction holds the row locks while the files are written.
     { timeout: 120_000, maxWait: 10_000 }

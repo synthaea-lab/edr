@@ -765,9 +765,13 @@ model LakeDeletion {
   // Files that were really removed; null when it could not be told (the listing afterwards failed).
   deletedCount   Int?      @map("deleted_count")
   failedCount    Int?      @map("failed_count")
+  // Files under the prefix after the deletion that were not in the listing it started from: the
+  // writer put them there meanwhile. Left for the next run, not counted in `failedCount`.
+  arrivedDuringDeletion Int? @map("arrived_during_deletion")
   // The first failure, when there was one.
   error          String?
-  // The same prefix listed empty after the deletion.
+  // Every file of the listing the deletion started from is gone (files that arrived meanwhile are
+  // `arrivedDuringDeletion`, not a failure).
   verifiedEmpty  Boolean   @default(false) @map("verified_empty")
 
   @@index([tenantId, date])

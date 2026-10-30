@@ -31,7 +31,9 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   returns `remaining`, so a schedule that does not keep up shows as a number that grows. Schedule it
   like the other crons.
 - **File.** Columns `agent_id`, `ts`, `comm`, `path`, `image_path`, `daddr`, `query`, `sha256`, and
-  `event` (the event as JSON, after ingest's `JSON.parse`). Tenant, date and type are in the path, not
+  `event` (the event's source text as the agent sent it: the queue holds the text of each element of
+  the body's `events`, so integers above 2^53 such as `meta.timestamp_ns` are not rounded; a queue row
+  written before this holds a parsed object and is serialised, with the rounding). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
 - **Store.** A directory (`LAKE_DIR`, `FsLakeStore`: a mounted volume) or an S3-compatible bucket
@@ -48,11 +50,18 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   | `LAKE_S3_PREFIX` | A key prefix inside the bucket, to share it. |
   | `LAKE_S3_FORCE_PATH_STYLE` | `true` or `false`; defaults to `true` when an endpoint is set. |
 
-  **The bucket must not be versioned** (or its old versions must be aged out): on a versioned bucket a
-  delete leaves a delete marker and the bytes, so a `lake_deletions` row would say "verified empty"
-  about a prefix whose objects still exist. The store does not check this.
+  **The bucket must not be versioned**: on a versioned bucket a delete leaves a delete marker and the
+  bytes, so a `lake_deletions` row would say "verified empty" about a prefix whose objects still exist.
+  The retention job checks it: once per run, before it lists or deletes anything, it asks the bucket for
+  its versioning status (`GetBucketVersioning`) and answers `500` with the reason when the status is
+  `Enabled` or `Suspended` (earlier versions are kept) or cannot be read. The credentials of the writer
+  and retention job therefore need `s3:GetBucketVersioning`, besides put, list and delete. Writer and
+  retention need bucket-wide write and delete: the query side (DuckDB, not built) must use separate
+  read-only credentials, ideally scoped to one tenant prefix, never these (ADR-0041, decision 4).
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
-  tenant's events (counted as `droppedNoRetention`).
+  tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention
+  (ingest keeps past timestamps) is dropped and counted as `droppedPastRetention`, so a prefix the
+  retention job deleted never refills.
 - **Retention job.** `GET /api/cron/prune-lake` (`CRON_SECRET` bearer; run it once a day) deletes every
   `date=` partition whose age in UTC days has reached its tenant's retention (`0` keeps nothing, today
   included), one partition at a time, and keeps a `lake_deletions` row for each:
@@ -61,7 +70,9 @@ storage, queried in process; status **proposed**, decisions taken under the owne
     deleted and waits for the next run.
   - **Completed after it**, from what the prefix lists afterwards, not from what the store claimed: how
     many files really went (`deleted_count`), how many are still there (`failed_count`), the first error,
-    whether the prefix listed empty (`verified_empty`), and `completed_at`.
+    whether every file of the starting listing is gone (`verified_empty`), and `completed_at`. A file the
+    writer put under the prefix meanwhile is not in that listing: it is counted in `arrived_during_deletion`,
+    is not a failure, and is deleted by the next run. `bytesDeleted` adds the sizes of the files that went.
   - A row with `completed_at` null is a deletion that started and was never recorded as finished (a crash,
     or the database going away): the files may or may not be gone.
   - A failure on one partition is recorded and the run goes on to the next, so one bad tenant does not

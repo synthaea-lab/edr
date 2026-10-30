@@ -19,7 +19,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 import { POST as ingestEvents } from "@/app/api/ingest/events/route";
 import { GET as writeLake } from "@/app/api/cron/write-lake/route";
 import { GET as pruneLake } from "@/app/api/cron/prune-lake/route";
-import { FsLakeStore } from "@/lib/lake-store";
+import { FsLakeStore, LakeNotDeletableError } from "@/lib/lake-store";
 
 const SECRET = "test-proxy-secret";
 const NOW = Date.UTC(2026, 9, 29, 10, 0, 0);
@@ -75,7 +75,26 @@ describe("POST /api/ingest/events and the lake queue", () => {
     expect(db.lakeBatch.create).toHaveBeenCalledTimes(1);
     const data = db.lakeBatch.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ tenantId: "t1", agentId: "a1", eventCount: 2, receivedAt: new Date(NOW) });
-    expect(data.events).toEqual([exec(), exec({ image_path: "/bin/ls" })]);
+    // The queue holds each event's text as received, not the parsed object.
+    expect(data.events.map((e: string) => JSON.parse(e))).toEqual([exec(), exec({ image_path: "/bin/ls" })]);
+  });
+
+  it("queues the text of an event as the agent sent it, integers above 2^53 included", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    const body = '{"events": [ {"type":"exec","meta":{"timestamp_ns":1793287944852336852}} ,7,{"type":"dns_query","query":"a]b,\\"c"} ]}';
+    expect((await ingestEvents(new NextRequest("http://localhost/api/ingest/events", { method: "POST", headers: AGENT_HEADERS, body }))).status).toBe(200);
+    expect(db.lakeBatch.create.mock.calls[0][0].data.events).toEqual([
+      '{"type":"exec","meta":{"timestamp_ns":1793287944852336852}}',
+      '{"type":"dns_query","query":"a]b,\\"c"}',
+    ]);
+  });
+
+  it("does not answer 500 for a lastSeen failure after the batch is queued", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    db.agent.update.mockRejectedValue(new Error("db down"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await postEvents({ events: [exec()] })).status).toBe(200);
+    expect(db.lakeBatch.create).toHaveBeenCalledTimes(1);
   });
 
   it("answers 500 when the batch cannot be queued, so the agent keeps its segment", async () => {
@@ -121,7 +140,7 @@ describe("GET /api/cron/write-lake", () => {
     db.$transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
     const res = await call();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ batches: 1, events: 1, files: 1, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0, maxBatches: 5 });
+    expect(await res.json()).toEqual({ batches: 1, events: 1, files: 1, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0, maxBatches: 5 });
     const files = await readdir(path.join(lakeDir, "tenant=t1/date=2026-10-29/type=exec"));
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^[0-9a-f]{32}\.parquet$/);
@@ -186,6 +205,27 @@ describe("GET /api/cron/prune-lake", () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ partitionsDeleted: 0, failedPartitions: 1 });
     expect(await readdir(lakeDir)).toEqual(["tenant=t1"]); // nothing was deleted without a record
+  });
+
+  it("answers 500 with the reason, and deletes nothing, when the store cannot prove a deletion", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
+    // A directory has no versioning to check; stand in for a versioned S3 bucket.
+    const proto = FsLakeStore.prototype as unknown as { assertDeletable?: () => Promise<void> };
+    proto.assertDeletable = async () => {
+      throw new LakeNotDeletableError("Bucket lake has versioning Enabled");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await call();
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Bucket lake has versioning Enabled" });
+    } finally {
+      delete proto.assertDeletable;
+    }
+    expect(db.lakeDeletion.create).not.toHaveBeenCalled();
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]);
   });
 
   it("answers 500 when the database fails", async () => {

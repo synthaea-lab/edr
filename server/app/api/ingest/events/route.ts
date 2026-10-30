@@ -6,7 +6,7 @@ import { acceptedOutcome, recordIngest, refusedOutcome, lagOf } from "@/lib/inge
 import { aggregateSightings, extractObservations, recordSightings } from "@/lib/prevalence";
 import { eventTime } from "@/lib/event-time";
 import { lakeEnabled } from "@/lib/lake-store";
-import { enqueueLakeBatch } from "@/lib/lake-writer";
+import { enqueueLakeBatch, eventSources } from "@/lib/lake-writer";
 
 /** Body ceiling, checked on the bytes actually read (not the Content-Length header). */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -66,13 +66,16 @@ export async function POST(req: NextRequest) {
     const now = new Date();
     const items: { at: Date; observations: ReturnType<typeof extractObservations> }[] = [];
     const lakeEvents: unknown[] = [];
+    // The lake keeps each event's text as received; the parsed value rounds integers above 2^53.
+    const sources = eventSources(raw);
     let accepted = 0;
-    for (const event of events) {
+    for (let index = 0; index < events.length; index += 1) {
+      const event: unknown = events[index];
       if (typeof event !== "object" || event === null || typeof (event as { type?: unknown }).type !== "string") {
         continue;
       }
       accepted += 1;
-      lakeEvents.push(event);
+      lakeEvents.push(sources !== null && sources.length === events.length ? sources[index] : event);
       const e = event as Record<string, unknown>;
       items.push({ at: eventTime(e, now), observations: extractObservations(e) });
     }
@@ -91,7 +94,12 @@ export async function POST(req: NextRequest) {
       console.error("Prevalence update failed:", error);
     }
 
-    await prisma.agent.update({ where: { id: agent.id }, data: { lastSeen: now } });
+    // Best effort as well: past the enqueue a 500 would make the agent resend a batch already queued.
+    try {
+      await prisma.agent.update({ where: { id: agent.id }, data: { lastSeen: now } });
+    } catch (error) {
+      console.error("lastSeen update failed:", error);
+    }
 
     // Best effort too (`recordIngest` never throws). Counted last so that a 500 above is
     // counted as a refusal, not as an accepted batch.

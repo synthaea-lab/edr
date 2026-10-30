@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { FsLakeStore, lakeEnabled } from "@/lib/lake-store";
+import { DeleteObjectsCommand, GetBucketVersioningCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { FsLakeStore, LakeNotDeletableError, lakeEnabled } from "@/lib/lake-store";
 import { S3LakeStore } from "@/lib/lake-s3-store";
 import { lakeStoreFromEnv } from "@/lib/lake-env";
 
 /** An in-memory bucket behind the one method the store uses, with pages of two and injectable delete errors (per key, or a whole request failing on its nth call). */
-function fakeBucket(opts: { deleteErrors?: { Key: string; Code: string }[]; failDeleteCall?: number } = {}) {
+function fakeBucket(
+  opts: { deleteErrors?: { Key: string; Code: string }[]; failDeleteCall?: number; versioning?: string | "denied" } = {}
+) {
   let deleteCalls = 0;
   const objects = new Map<string, Uint8Array>();
   const sent: { name: string; input: Record<string, unknown> }[] = [];
@@ -34,6 +36,10 @@ function fakeBucket(opts: { deleteErrors?: { Key: string; Code: string }[]; fail
         const failing = new Set((opts.deleteErrors ?? []).map((e) => e.Key));
         for (const o of c.input.Delete.Objects) if (!failing.has(o.Key)) objects.delete(o.Key);
         return { Errors: opts.deleteErrors };
+      }
+      if (command instanceof GetBucketVersioningCommand) {
+        if (opts.versioning === "denied") throw new Error("AccessDenied");
+        return opts.versioning === undefined ? {} : { Status: opts.versioning };
       }
       throw new Error(`unexpected command ${c.constructor.name}`);
     },
@@ -135,6 +141,30 @@ describe("S3LakeStore", () => {
     const { client } = fakeBucket();
     expect(() => new S3LakeStore({ bucket: "", client })).toThrow(/bucket/);
     expect(() => new S3LakeStore({ bucket: "b", prefix: "../x", client })).toThrow(/Unsafe lake key/);
+  });
+});
+
+describe("S3LakeStore.assertDeletable", () => {
+  const store = (opts: Parameters<typeof fakeBucket>[0]) => {
+    const bucket = fakeBucket(opts);
+    return { bucket, store: new S3LakeStore({ bucket: "lake", client: bucket.client }) };
+  };
+
+  it("passes on a bucket that never had versioning, and asks once for the bucket's status", async () => {
+    const { bucket, store: s } = store({});
+    await expect(s.assertDeletable()).resolves.toBeUndefined();
+    expect(bucket.sent.map((c) => [c.name, c.input.Bucket])).toEqual([["GetBucketVersioningCommand", "lake"]]);
+  });
+
+  it.each(["Enabled", "Suspended"])("refuses a bucket whose versioning is %s", async (status) => {
+    const { store: s } = store({ versioning: status });
+    await expect(s.assertDeletable()).rejects.toBeInstanceOf(LakeNotDeletableError);
+    await expect(s.assertDeletable()).rejects.toThrow(new RegExp(status));
+  });
+
+  it("refuses when the status cannot be read, instead of assuming it is off", async () => {
+    const { store: s } = store({ versioning: "denied" });
+    await expect(s.assertDeletable()).rejects.toThrow(/s3:GetBucketVersioning/);
   });
 });
 
