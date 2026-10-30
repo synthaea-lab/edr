@@ -64,6 +64,21 @@ describe("buildFeedFromMisp", () => {
     expect(r.text).toBe("ip:203.0.113.2\n");
   });
 
+  it("refuses the attributes of a deleted object", () => {
+    // MISP soft-deletes an object as a whole: its attributes need not be flagged one by one.
+    const r = build(
+      event(
+        [],
+        [
+          { name: "domain-ip", deleted: true, Attribute: [attr("domain", "gone.example.org")] },
+          { name: "domain-ip", deleted: "0", Attribute: [attr("domain", "kept.example.org")] },
+        ],
+      ),
+    );
+    expect(r.rejected.map((x) => x.reason)).toEqual(["deleted"]);
+    expect(r.text).toBe("domain:kept.example.org\n");
+  });
+
   it("never splits a composite type", () => {
     const r = build(
       event([attr("ip-src|port", "203.0.113.9|443"), attr("filename|sha256", `evil.exe|${HASH}`), attr("domain|ip", "evil.example.org|203.0.113.9")]),

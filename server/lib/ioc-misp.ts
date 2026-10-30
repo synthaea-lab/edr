@@ -13,7 +13,8 @@
  * - `to_ids` must be true. MISP uses it to mark an attribute as a detection indicator; one without it
  *   is context (a victim's address, a sample's name) and publishing it as a detection would raise
  *   findings on it. Refused as `not_for_detection`.
- * - A `deleted` attribute is refused as `deleted`.
+ * - A `deleted` attribute is refused as `deleted`, and so is every attribute of a `deleted` object:
+ *   MISP soft-deletes an object as a whole, without necessarily flagging its attributes one by one.
  * - Composite types (`ip-src|port`, `filename|sha256`, `domain|ip`), `md5`, `sha1`, `url`, `email-*`
  *   and everything else are `unknown_kind`: the engine does not match them, and a
  *   composite is never split, because half of `domain|ip` is not the indicator the feed claimed.
@@ -93,7 +94,7 @@ export function buildFeedFromMisp(input: MispFeedInput): FeedResult {
 
   const lines: SourceLine[] = [];
   let line = 0;
-  const read = (attribute: unknown) => {
+  const read = (attribute: unknown, inDeletedObject = false) => {
     line++;
     const refuse = (reason: RejectReason, value: string): void => {
       lines.push({ line, refuse: { reason, value } });
@@ -103,7 +104,7 @@ export function buildFeedFromMisp(input: MispFeedInput): FeedResult {
       return;
     }
     const { type, value } = attribute;
-    if (truthy(attribute.deleted)) return refuse("deleted", value);
+    if (inDeletedObject || truthy(attribute.deleted)) return refuse("deleted", value);
     const kind = KIND_OF[type];
     if (kind === undefined) return refuse("unknown_kind", `${type}: ${value}`);
     if (!truthy(attribute.to_ids)) return refuse("not_for_detection", value);
@@ -114,7 +115,8 @@ export function buildFeedFromMisp(input: MispFeedInput): FeedResult {
     for (const attribute of Array.isArray(event.Attribute) ? event.Attribute : []) read(attribute);
     for (const object of Array.isArray(event.Object) ? event.Object : []) {
       if (!isRecord(object)) continue;
-      for (const attribute of Array.isArray(object.Attribute) ? object.Attribute : []) read(attribute);
+      const deleted = truthy(object.deleted);
+      for (const attribute of Array.isArray(object.Attribute) ? object.Attribute : []) read(attribute, deleted);
     }
   }
 
