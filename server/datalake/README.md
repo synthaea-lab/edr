@@ -88,15 +88,20 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   change under it. The ADR's other isolation requirement (read-only credentials) is a store matter:
   `LakeReader` (`list`, `get`) is separate from `LakeStore` so the reader can be built on its own
   credentials. Only the directory store implements it; the S3 reader waits for the S3 store (#1052).
-- **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
-  filters other than equality, ordering other than by time, compaction-aware reading.
+- **Two options for a caller** (#933): `order: "desc"` (the newest rows, newest first; the default is
+  the oldest first), `includeEvent: false` (the `event` column is not read from the file) and `signal`
+  (an `AbortSignal` checked before each file, so a caller can bound the time).
+- **The hunt `events` source** (#933, `server/hunt/README.md`, ADR-0025 point 10) is the one caller:
+  `POST /api/hunts/search` with `source: "events"`.
+- **Not built:** time-of-day bounds finer than a day, filters other than equality, ordering other than
+  by time, compaction-aware reading, a cursor over the archive.
 
 ## What is not built
 
 - The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
   store exists.
 - Compaction: every drain writes new small files.
-- A `HuntQuery` events source and a route over the query side (#933), and DuckDB for fleet volume.
+- Saved hunts over events (the ad-hoc search is #933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
 - Duplicates: a crash between the file writes and the commit can leave the events of that flush

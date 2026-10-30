@@ -1,10 +1,17 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parquetReadObjects } from "hyparquet";
 import { FsLakeStore, type LakeReader } from "@/lib/lake-store";
 import { encodeParquet, lakeKey, lakeRow, type LakeRow as WriterRow } from "@/lib/lake-writer";
 import { MAX_FILES, MAX_ROWS, queryLake } from "@/lib/lake-query";
+
+// The real reader, watched: a test can see which columns a query asked the file for.
+vi.mock("hyparquet", async (original) => {
+  const real = await original<typeof import("hyparquet")>();
+  return { ...real, parquetReadObjects: vi.fn(real.parquetReadObjects) };
+});
 
 const T1 = "tenant-one";
 const T2 = "tenant-two";
@@ -72,6 +79,63 @@ describe("queryLake", () => {
     const exact = await queryLake(store, { tenantId: T1, from: "2026-10-28", to: "2026-10-29", limit: 3 });
     expect(exact).toMatchObject({ truncated: false });
     expect(exact.rows).toHaveLength(3);
+  });
+
+  it("with order desc keeps the newest rows under the limit, newest first, and says it cut", async () => {
+    await put(T1, "2026-10-28", "exec", "a", [row("a", at("2026-10-28", "05:00:00"), "exec"), row("a", at("2026-10-28", "01:00:00"), "exec")]);
+    await put(T1, "2026-10-29", "exec", "a", [row("a", at("2026-10-29", "00:30:00"), "exec")]);
+    await put(T1, "2026-10-29", "exec", "b", [row("a", at("2026-10-29", "09:00:00"), "exec")]);
+    const q = { tenantId: T1, from: "2026-10-28", to: "2026-10-29", order: "desc" as const };
+    const r = await queryLake(store, { ...q, limit: 3 });
+    expect(r.rows.map((x) => x.ts.toISOString())).toEqual(["2026-10-29T09:00:00.000Z", "2026-10-29T00:30:00.000Z", "2026-10-28T05:00:00.000Z"]);
+    expect(r.truncated).toBe(true);
+    expect((await queryLake(store, { ...q, limit: 4 })).truncated).toBe(false);
+    // Without it nothing changed: oldest first.
+    expect((await queryLake(store, { ...q, order: undefined, limit: 1 })).rows[0].ts.toISOString()).toBe("2026-10-28T01:00:00.000Z");
+    await expect(queryLake(store, { ...q, order: "sideways" as never })).rejects.toThrow(RangeError);
+  });
+
+  it("with order desc and more files than MAX_FILES reads the newest days and skips the oldest", async () => {
+    const bytes = encodeParquet([row("a", at("2026-10-29", "01:00:00"), "exec")]);
+    const keys = [
+      ...Array.from({ length: MAX_FILES }, (_, i) => lakeKey(T1, "2026-10-29", "exec", `n${String(i).padStart(5, "0")}`)),
+      lakeKey(T1, "2026-10-01", "exec", "old"),
+    ];
+    const read: string[] = [];
+    const many: LakeReader = { list: async () => keys.map((key) => ({ key, size: 1 })), get: async (k) => (read.push(k), bytes) };
+    const r = await queryLake(many, { tenantId: T1, from: "2026-10-01", to: "2026-10-29", order: "desc", limit: MAX_ROWS });
+    expect(read).not.toContain(lakeKey(T1, "2026-10-01", "exec", "old"));
+    expect(r).toMatchObject({ filesMatched: MAX_FILES + 1, filesRead: MAX_FILES, filesSkipped: 1 });
+  });
+
+  it("does not read the event column unless asked, and leaves event empty", async () => {
+    vi.mocked(parquetReadObjects).mockClear();
+    await put(T1, "2026-10-29", "exec", "a", [row("a", at("2026-10-29", "01:00:00"), "exec", { image_path: "/usr/bin/curl" })]);
+    const q = { tenantId: T1, from: "2026-10-29", to: "2026-10-29" };
+    const without = await queryLake(store, { ...q, includeEvent: false });
+    expect(without.rows[0]).toMatchObject({ event: "", imagePath: "/usr/bin/curl" });
+    expect((await queryLake(store, q)).rows[0].event).toContain("1800000000123456789");
+    // The column is not requested from the file at all, rather than read and dropped.
+    const asked = vi.mocked(parquetReadObjects).mock.calls.map((c) => (c[0] as { columns: string[] }).columns);
+    expect(asked[0]).not.toContain("event");
+    expect(asked[1]).toContain("event");
+  });
+
+  it("stops before the next file once its signal is aborted, throwing the reason", async () => {
+    await put(T1, "2026-10-29", "exec", "a", [row("a", at("2026-10-29", "01:00:00"), "exec")]);
+    await put(T1, "2026-10-29", "exec", "b", [row("a", at("2026-10-29", "02:00:00"), "exec")]);
+    const controller = new AbortController();
+    let gets = 0;
+    const reader: LakeReader = {
+      list: (p) => store.list(p),
+      get: async (k) => {
+        gets += 1;
+        controller.abort(new DOMException("deadline", "TimeoutError"));
+        return store.get(k);
+      },
+    };
+    await expect(queryLake(reader, { tenantId: T1, from: "2026-10-29", to: "2026-10-29", signal: controller.signal })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(gets).toBe(1);
   });
 
   it("never reads another tenant, including one whose id starts with this one's", async () => {

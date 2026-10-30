@@ -119,6 +119,17 @@ export class FsLakeStore implements LakeStore, LakeReader {
 }
 
 /**
+ * The reader the query side uses, or null when it cannot be built: the lake is off, or it is an S3
+ * bucket (`LakeReader` exists for the directory store only; the S3 reader waits for the S3 store,
+ * #1052). Never the writer's credentials by design once S3 exists: a separate read-only reader.
+ */
+export function lakeReaderFromEnv(env: Record<string, string | undefined> = process.env): LakeReader | null {
+  const dir = env.LAKE_DIR;
+  if (dir === undefined || dir === "") return null;
+  return new FsLakeStore(dir);
+}
+
+/**
  * The store the environment asks for, or null when the lake is off. `LAKE_DIR` is the only switch:
  * unset (the default) means ingest queues nothing and the writer has nothing to do, so a
  * deployment that has no lake does not grow a queue nobody drains.
