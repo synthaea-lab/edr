@@ -91,16 +91,21 @@ storage, queried in process; status **proposed**, decisions taken under the owne
 `queryLake(reader, { tenantId, from, to, types?, where?, limit? })` reads events back: a tenant, a
 range of UTC days (both included, at most 366), optionally event types and exact matches on `agentId`,
 `comm`, `path`, `imagePath`, `daddr`, `query`, `sha256` (compared in lowercase), and a row limit
-(default 100, at most 1000). It lists `tenant=<id>/`, keeps the files whose `date=` and `type=` fit
-(partition pruning is the path: the files of a type that was not asked for are not read), reads them with
+(default 100, at most 1000). It lists the partitions in range **one day at a time** (and one type at a
+time when `types` is given, at most 32), so a tenant's history outside the range is never listed, and it
+asks the reader for at most the files still wanted plus one (`list(prefix, { limit })`): the writer makes a
+file per flush, so a tenant's prefix has no ceiling, and listing it whole to cut it afterwards would cost
+unbounded time and memory (a review point on #1084). At most 2000 files are listed and read; the partition
+path does the pruning (the files of a type that was not asked for are not read). It reads them with
 `hyparquet` and filters the rows. Rows come back oldest first, each with `event`, the event's source text
-as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`),
-`filesSkipped` (more than 2000 matching files: the answer is incomplete).
+as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`) and
+`listingTruncated` (more than 2000 matching files exist: the answer is incomplete; `filesSkipped` is then 1,
+"at least one", not a count).
 
-- **Tenant isolation is structural, in two layers.** The only listing is the tenant's own prefix, for an
-  id from a closed character set; and every key the store lists is parsed against the whole layout and
-  ignored unless its tenant segment is that id, so a store that answers a wider prefix reads nothing
-  of another tenant's. There is no query language for a compiler bug to widen.
+- **Tenant isolation is structural, in two layers.** Every listing is under the tenant's own prefix, for
+  an id from a closed character set; and every key the store lists is parsed against the whole layout and
+  ignored unless its tenant, day and type are the ones asked for, so a store that answers a wider prefix
+  reads nothing of another tenant's. There is no query language for a compiler bug to widen.
 - **Not DuckDB, for now.** ADR-0041 decision 4 plans DuckDB, but its Node bindings have no Alpine build
   (ADR, "Findings") and the image is Alpine. `hyparquet` is pure JavaScript, already a dependency, and
   runs in the image. The cost is a scan of every file in range: fine for a hunt over days on one tenant,

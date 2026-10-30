@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FsLakeStore, type LakeReader } from "@/lib/lake-store";
 import { encodeParquet, lakeKey, lakeRow, type LakeRow as WriterRow } from "@/lib/lake-writer";
-import { MAX_FILES, MAX_ROWS, queryLake } from "@/lib/lake-query";
+import { MAX_FILES, MAX_ROWS, MAX_TYPES, queryLake } from "@/lib/lake-query";
 
 const T1 = "tenant-one";
 const T2 = "tenant-two";
@@ -94,11 +94,30 @@ describe("queryLake", () => {
     expect(r.filesMatched).toBe(1);
   });
 
-  it("asks the store for the tenant's own prefix, with its trailing slash, and nothing wider", async () => {
+  it("lists only the days in range, under the tenant's own prefix, and nothing wider", async () => {
     const asked: string[] = [];
     const spy: LakeReader = { list: async (p) => (asked.push(p), []), get: (key) => store.get(key) };
-    await queryLake(spy, { tenantId: T1, from: "2026-10-29", to: "2026-10-29" });
-    expect(asked).toEqual([`tenant=${T1}/`]);
+    await queryLake(spy, { tenantId: T1, from: "2026-10-28", to: "2026-10-30" });
+    expect(asked).toEqual([`tenant=${T1}/date=2026-10-28/`, `tenant=${T1}/date=2026-10-29/`, `tenant=${T1}/date=2026-10-30/`]);
+    asked.length = 0;
+    await queryLake(spy, { tenantId: T1, from: "2026-10-29", to: "2026-10-29", types: ["exec", "connect", "exec"] });
+    expect(asked).toEqual([`tenant=${T1}/date=2026-10-29/type=exec/`, `tenant=${T1}/date=2026-10-29/type=connect/`]);
+  });
+
+  it("ignores a key of another day returned for a day's prefix", async () => {
+    await put(T1, "2026-10-29", "exec", "a", [row("a", at("2026-10-29", "01:00:00"), "exec")]);
+    await put(T1, "2026-10-27", "exec", "a", [row("old", at("2026-10-27", "01:00:00"), "exec")]);
+    const loose: LakeReader = { list: async () => store.list(""), get: (key) => store.get(key) };
+    const r = await queryLake(loose, { tenantId: T1, from: "2026-10-29", to: "2026-10-29" });
+    expect(r.rows.map((x) => x.agentId)).toEqual(["a"]);
+  });
+
+  it("ignores a key of another type returned for a type's prefix", async () => {
+    await put(T1, "2026-10-29", "exec", "a", [row("e", at("2026-10-29", "01:00:00"), "exec")]);
+    await put(T1, "2026-10-29", "connect", "a", [row("c", at("2026-10-29", "02:00:00"), "connect")]);
+    const loose: LakeReader = { list: async () => store.list(""), get: (key) => store.get(key) };
+    const r = await queryLake(loose, { tenantId: T1, from: "2026-10-29", to: "2026-10-29", types: ["connect"] });
+    expect(r.rows.map((x) => x.agentId)).toEqual(["c"]);
   });
 
   it("ignores keys that do not fit the layout", async () => {
@@ -123,20 +142,59 @@ describe("queryLake", () => {
       filesMatched: 0,
       filesRead: 0,
       filesSkipped: 0,
+      listingTruncated: false,
     });
   });
 
-  it("reads at most MAX_FILES files and says how many it left", async () => {
+  it("never lists more than MAX_FILES + 1 files, however many the tenant has, and says the answer is incomplete", async () => {
     const bytes = encodeParquet([row("a", at("2026-10-29", "01:00:00"), "exec")]);
-    const keys = Array.from({ length: MAX_FILES + 5 }, (_, i) => lakeKey(T1, "2026-10-29", "exec", `f${String(i).padStart(5, "0")}`));
+    // A tenant with far more files than the cap, all in one day. The fake honours `limit` like a real store.
+    const keys = Array.from({ length: MAX_FILES * 5 }, (_, i) => lakeKey(T1, "2026-10-29", "exec", `f${String(i).padStart(6, "0")}`));
+    let handedOut = 0;
     let gets = 0;
     const many: LakeReader = {
-      list: async () => keys.map((key) => ({ key, size: bytes.length })),
+      list: async (prefix, opts) => {
+        const under = keys.filter((k) => k.startsWith(prefix)).slice(0, opts?.limit);
+        handedOut += under.length;
+        return under.map((key) => ({ key, size: bytes.length }));
+      },
       get: async () => (gets++, bytes),
     };
     const r = await queryLake(many, { tenantId: T1, from: "2026-10-29", to: "2026-10-29", limit: MAX_ROWS });
+    expect(handedOut).toBe(MAX_FILES + 1);
     expect(gets).toBe(MAX_FILES);
-    expect(r).toMatchObject({ filesMatched: MAX_FILES + 5, filesRead: MAX_FILES, filesSkipped: 5 });
+    expect(r).toMatchObject({ filesMatched: MAX_FILES, filesRead: MAX_FILES, filesSkipped: 1, listingTruncated: true });
+  });
+
+  it("spends the file budget across days and stops listing once it is spent", async () => {
+    const bytes = encodeParquet([row("a", at("2026-10-28", "01:00:00"), "exec")]);
+    const perDay = MAX_FILES - 1; // day 1 leaves room for one file of day 2; day 3 is never listed
+    const asked: string[] = [];
+    const limits: (number | undefined)[] = [];
+    const days: LakeReader = {
+      list: async (prefix, opts) => {
+        asked.push(prefix);
+        limits.push(opts?.limit);
+        return Array.from({ length: perDay }, (_, i) => ({ key: `${prefix}type=exec/f${i}.parquet`, size: bytes.length })).slice(0, opts?.limit);
+      },
+      get: async () => bytes,
+    };
+    const r = await queryLake(days, { tenantId: T1, from: "2026-10-28", to: "2026-10-30" });
+    expect(asked).toEqual([`tenant=${T1}/date=2026-10-28/`, `tenant=${T1}/date=2026-10-29/`]);
+    expect(limits).toEqual([MAX_FILES + 1, 2]);
+    expect(r.listingTruncated).toBe(true);
+    expect(r.filesMatched).toBe(MAX_FILES);
+  });
+
+  it("does not report a truncated listing when the files fit exactly", async () => {
+    const bytes = encodeParquet([row("a", at("2026-10-29", "01:00:00"), "exec")]);
+    const keys = Array.from({ length: MAX_FILES }, (_, i) => lakeKey(T1, "2026-10-29", "exec", `f${String(i).padStart(5, "0")}`));
+    const exact: LakeReader = {
+      list: async (_p, opts) => keys.slice(0, opts?.limit).map((key) => ({ key, size: bytes.length })),
+      get: async () => bytes,
+    };
+    const r = await queryLake(exact, { tenantId: T1, from: "2026-10-29", to: "2026-10-29", limit: MAX_ROWS });
+    expect(r).toMatchObject({ filesMatched: MAX_FILES, filesSkipped: 0, listingTruncated: false });
   });
 
   it("rejects what it cannot take", async () => {
@@ -151,6 +209,7 @@ describe("queryLake", () => {
       { ...ok, from: "2026-10-30", to: "2026-10-29" },
       { ...ok, from: "2025-01-01", to: "2026-10-29" },
       { ...ok, types: ["Exec"] },
+      { ...ok, types: Array.from({ length: MAX_TYPES + 1 }, (_, i) => `t${i}`) },
       { ...ok, types: ["a/b"] },
       { ...ok, limit: 0 },
       { ...ok, limit: MAX_ROWS + 1 },
@@ -160,5 +219,19 @@ describe("queryLake", () => {
     ]) {
       await expect(queryLake(store, bad)).rejects.toThrow(RangeError);
     }
+  });
+});
+
+describe("FsLakeStore.list with a limit", () => {
+  it("returns the first `limit` keys in key order and rejects a limit that is not a positive integer", async () => {
+    for (const name of ["c", "a", "b", "d"]) await put(T1, "2026-10-29", "exec", name, [row("a", at("2026-10-29", "01:00:00"), "exec")]);
+    await put(T1, "2026-10-28", "exec", "z", [row("a", at("2026-10-28", "01:00:00"), "exec")]);
+    const all = (await store.list(`tenant=${T1}/`)).map((f) => f.key);
+    expect(all).toHaveLength(5);
+    expect((await store.list(`tenant=${T1}/`, { limit: 3 })).map((f) => f.key)).toEqual(all.slice(0, 3));
+    expect((await store.list(`tenant=${T1}/date=2026-10-29/`, { limit: 2 })).map((f) => f.key)).toEqual(all.slice(1, 3));
+    expect(await store.list(`tenant=${T1}/`, { limit: 99 })).toHaveLength(5);
+    await expect(store.list(`tenant=${T1}/`, { limit: 0 })).rejects.toThrow(RangeError);
+    await expect(store.list(`tenant=${T1}/`, { limit: 1.5 })).rejects.toThrow(RangeError);
   });
 });
