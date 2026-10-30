@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
-import { lakeStoreFromEnv } from "@/lib/lake-store";
+import { lakeStoreFromEnv } from "@/lib/lake-env";
 import { DEFAULT_MAX_BATCHES, drainLakeQueue } from "@/lib/lake-writer";
 
 /** A positive integer from the environment, or `fallback` when unset. A value that is set but wrong throws: a typo must not silently mean "keep the default". */

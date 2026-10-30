@@ -5,7 +5,7 @@ import { authenticateAgent, type AuthenticatedAgent } from "@/lib/agent-auth";
 import { acceptedOutcome, recordIngest, refusedOutcome, lagOf } from "@/lib/ingest-stats";
 import { aggregateSightings, extractObservations, recordSightings } from "@/lib/prevalence";
 import { eventTime } from "@/lib/event-time";
-import { lakeStoreFromEnv } from "@/lib/lake-store";
+import { lakeEnabled } from "@/lib/lake-store";
 import { enqueueLakeBatch, eventSources } from "@/lib/lake-writer";
 
 /** Body ceiling, checked on the bytes actually read (not the Content-Length header). */
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
 
     // Not best effort: a batch that cannot be queued answers 5xx so the agent keeps its segment and
     // retries, instead of dropping events the lake was meant to keep. Off unless LAKE_DIR is set.
-    if (lakeStoreFromEnv() !== null) {
+    if (lakeEnabled()) {
       await enqueueLakeBatch(prisma, { tenantId: agent.tenantId, agentId: agent.id, events: lakeEvents, receivedAt: now });
     }
 
