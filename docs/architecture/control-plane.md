@@ -276,7 +276,7 @@ let them link hosts on demand. The generic accounts are compared by their bare n
 which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
 are signed in to as `vagrant`, and a lab run could not otherwise show the join.
 
-**The successful-logon half has one source: FIRST-SEEN-LOGON (T1078, #376).** The join reads
+**The successful-logon half has two sources: FIRST-SEEN-LOGON and ODD-HOUR-LOGON (T1078, #376).** The join reads
 `detection.event`, and a detection stores the event that fired a rule. Before that rule no rule
 on `main` fired on a successful logon (`RuleState::on_auth` returned nothing for `AuthKind::Logon`,
 it returned early for a Windows logon, and no Sigma rule matches `auth` events), so a detection
@@ -286,7 +286,7 @@ account after a 24-hour learning window, Low, generic accounts excluded with the
 with this one (`vagrant` still not generic). It alerts at most once per account, so the join sees
 an identity only the first time that account logs on to a host after the window. The Windows
 `session` events of the RDP rule (T1563.002) are the other identity source that already reaches a
-detection. **Not proven in a lab run**; the rule is covered by unit tests only.
+detection. ODD-HOUR-LOGON (Low, a logon outside 07:00 to 20:00 host-local, once per account per 8 hours, off unless `[detection] utc_offset_minutes` is set) is the second source and follows the same gate and generic-account list. **Not proven in a lab run**; the rules are covered by unit tests only.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.

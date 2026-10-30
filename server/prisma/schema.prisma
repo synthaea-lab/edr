@@ -733,10 +733,15 @@ model LakeBatch {
   receivedAt DateTime @map("received_at")
   events     Json
   eventCount Int      @map("event_count")
+  // Set, and committed, before any file of the flush is written (lib/lake-writer.ts, #1093): a batch
+  // that has one belongs to that flush for good, so a retry after a crash writes the same files
+  // under the same names and cannot write an event twice. Null: not yet assigned.
+  flushId    String?  @map("flush_id")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([receivedAt])
+  @@index([flushId])
   @@map("lake_batches")
 }
 

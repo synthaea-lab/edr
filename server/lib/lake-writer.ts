@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { parquetWriteBuffer } from "hyparquet-writer";
 import type { PrismaClient } from "@prisma/client";
 import { eventTime } from "@/lib/event-time";
@@ -10,11 +10,13 @@ import type { LakeStore } from "@/lib/lake-store";
  * out `tenant=<id>/date=<YYYY-MM-DD>/type=<event_type>/<flush>.parquet`, one file per
  * (tenant, day, type) per drain.
  *
- * At-least-once: the files are written before the queue rows are deleted, in one transaction.
- * A crash between the two leaves the rows, and the retry writes them again. The file name is a
- * hash of the batches it holds, so a retry over the same batches rewrites the same files; a retry
- * over a different set (a slower request's older batch arriving in between) can leave the events
- * of that flush twice. Nothing in this slice removes such a duplicate.
+ * Exactly once into the files, across a crash (#1093): a drain first assigns the oldest unassigned
+ * batches to one `flushId`, committed before any file is written, then writes the flush under names
+ * built from that id and deletes its batches. A crash between the writes and the delete leaves the
+ * batches under their id, and the retry writes the same files, same names, same events: it replaces,
+ * it does not add. A batch that arrives meanwhile joins a different flush. Not covered: the same
+ * event sent twice by the agent (a lost `2xx`), which ingest accepts twice; and files written by a
+ * drain before this assignment existed, which nothing removes.
  */
 
 /** How many queued batches one drain takes (an agent batch is at most 1000 events, usually 100). */
@@ -232,6 +234,24 @@ export type DrainResult = {
   remaining: number;
 };
 
+function emptyDrain(): DrainResult {
+  return { batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 };
+}
+
+/**
+ * Drains the queue into files. Two steps, so that a crash cannot make an event land twice (#1093):
+ *
+ * 1. **Assign.** The oldest unassigned batches get one `flushId`, in a transaction that commits
+ *    before any file is written. From then on those batches belong to that flush for good.
+ * 2. **Write.** Each assigned flush is written under names built from its `flushId`, then its
+ *    batches are deleted, in one transaction. A flush whose write failed or whose process died keeps
+ *    its batches and its id, so the next drain writes the same files under the same names with the
+ *    same events: the retry replaces, never adds. A batch that arrived meanwhile is assigned to a
+ *    different flush, so it cannot change what the failed one holds.
+ *
+ * Before this, a file's name came from the set of batches the drain happened to pick, so a retry
+ * that picked one more batch wrote a differently named file holding the first batch's events again.
+ */
 export async function drainLakeQueue(
   prisma: PrismaClient,
   store: Pick<LakeStore, "put">,
@@ -239,16 +259,49 @@ export async function drainLakeQueue(
 ): Promise<DrainResult> {
   const max = opts.maxBatches ?? DEFAULT_MAX_BATCHES;
   const now = opts.now ?? new Date();
+
+  await prisma.$transaction(async (tx) => {
+    // SKIP LOCKED: two drains at once take different rows instead of waiting on, or repeating, each other.
+    const picked = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM lake_batches WHERE flush_id IS NULL ORDER BY received_at, id LIMIT ${max} FOR UPDATE SKIP LOCKED`;
+    if (picked.length === 0) return;
+    await tx.lakeBatch.updateMany({ where: { id: { in: picked.map((r) => r.id) } }, data: { flushId: randomUUID() } });
+  });
+
+  const total = emptyDrain();
+  const assigned = await prisma.lakeBatch.findMany({ where: { flushId: { not: null } }, select: { flushId: true }, distinct: ["flushId"] });
+  for (const { flushId } of assigned) {
+    if (flushId === null) continue;
+    const part = await writeFlush(prisma, store, flushId, now);
+    if (part === null) continue;
+    total.batches += part.batches;
+    total.events += part.events;
+    total.files += part.files;
+    total.droppedNoRetention += part.droppedNoRetention;
+    total.droppedPastRetention += part.droppedPastRetention;
+    total.skippedMalformed += part.skippedMalformed;
+  }
+  total.remaining = await prisma.lakeBatch.count();
+  return total;
+}
+
+/** Writes one assigned flush, or returns null when another drain holds it or it is already gone. */
+async function writeFlush(
+  prisma: PrismaClient,
+  store: Pick<LakeStore, "put">,
+  flushId: string,
+  now: Date
+): Promise<Omit<DrainResult, "remaining"> | null> {
   return prisma.$transaction(
     async (tx) => {
-      // SKIP LOCKED: two drains at once take different rows instead of waiting on, or repeating, each other.
-      const picked = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM lake_batches ORDER BY received_at, id LIMIT ${max} FOR UPDATE SKIP LOCKED`;
-      const empty: DrainResult = { batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 };
-      if (picked.length === 0) return empty;
+      // One drain per flush at a time. Two drains writing the same flush would write identical files,
+      // but a flush must not be seen half-locked by row locks, so the whole flush is one advisory lock.
+      const lock = await tx.$queryRaw<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${flushId})) AS ok`;
+      if (!lock[0]?.ok) return null;
 
-      const ids = picked.map((r) => r.id);
-      const batches = await tx.lakeBatch.findMany({ where: { id: { in: ids } }, orderBy: [{ receivedAt: "asc" }, { id: "asc" }] });
+      const batches = await tx.lakeBatch.findMany({ where: { flushId }, orderBy: [{ receivedAt: "asc" }, { id: "asc" }] });
+      if (batches.length === 0) return null;
+      const ids = batches.map((b) => b.id);
       const tenants = await tx.tenant.findMany({
         where: { id: { in: Array.from(new Set(batches.map((b) => b.tenantId))) } },
         select: { id: true, lakeRetentionDays: true },
@@ -258,7 +311,7 @@ export async function drainLakeQueue(
       // A tenant that no longer exists cascades its batches away; one that raced the delete has no row here.
       const known = new Set(tenants.map((t) => t.id));
 
-      const groups = new Map<string, { tenantId: string; day: string; type: string; rows: LakeRow[]; batchIds: Set<string> }>();
+      const groups = new Map<string, { tenantId: string; day: string; type: string; rows: LakeRow[] }>();
       let events = 0;
       let droppedNoRetention = 0;
       let droppedPastRetention = 0;
@@ -296,25 +349,22 @@ export async function drainLakeQueue(
           const gk = `${batch.tenantId}\u0000${day}\u0000${type}`;
           let group = groups.get(gk);
           if (!group) {
-            group = { tenantId: batch.tenantId, day, type, rows: [], batchIds: new Set() };
+            group = { tenantId: batch.tenantId, day, type, rows: [] };
             groups.set(gk, group);
           }
           group.rows.push(row);
-          group.batchIds.add(batch.id);
           events += 1;
         }
       }
 
       for (const g of Array.from(groups.values())) {
-        const flushId = createHash("sha256").update(Array.from(g.batchIds).sort().join(",")).digest("hex").slice(0, 32);
-        await store.put(lakeKey(g.tenantId, g.day, g.type, flushId), encodeParquet(g.rows));
+        await store.put(lakeKey(g.tenantId, g.day, g.type, flushId.replace(/-/g, "")), encodeParquet(g.rows));
       }
 
       await tx.lakeBatch.deleteMany({ where: { id: { in: ids } } });
-      const remaining = await tx.lakeBatch.count();
-      return { batches: ids.length, events, files: groups.size, droppedNoRetention, droppedPastRetention, skippedMalformed, remaining };
+      return { batches: ids.length, events, files: groups.size, droppedNoRetention, droppedPastRetention, skippedMalformed };
     },
-    // The transaction holds the row locks while the files are written.
+    // The transaction holds the lock while the files are written.
     { timeout: 120_000, maxWait: 10_000 }
   );
 }

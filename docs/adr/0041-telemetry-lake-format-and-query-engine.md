@@ -217,10 +217,31 @@ deployment change that is not worth making before the volume is measured. A quer
 2000 files, 1000 rows) and says when it was cut. Reversible: the result shape is the contract, and
 DuckDB, on a glibc worker, remains the plan if a measured hunt over a fleet's volume is too slow.
 
-Isolation (decision 4's two layers) is met here by construction instead of by DuckDB settings: the tenant
-prefix is the only listing, and every listed key is re-checked against the tenant. The read-only
+Isolation (decision 4's two layers) is met here by construction instead of by DuckDB settings: every
+listing is under the tenant's prefix, one day (and type) at a time and never past the file cap, and every
+listed key is re-checked against the tenant, the day and the type asked for. The read-only
 credentials requirement stays open for the S3 reader: `LakeReader` is its own interface so those
 credentials need not be the writer's. Not measured: query time on any volume.
+
+## Decisions on the prevalence rebuild, 2026-10-30
+
+Taken under the owner's delegation ("prends les décisions que tu recommandes") by session edr-repo-81, from the
+six questions the rebuild slice (#1086) left in `issues/issue-77.md`. Reversible before an apply path exists.
+
+1. **The counters table stays authoritative; the lake rebuild is a check.** The lake is bounded by its
+   retention (90 days by default) and the table keeps 180, so the lake cannot be the source. A difference
+   between a rebuild and the table is a signal to look at, not a normal state.
+2. **No backfill is written for now.** A replace would destroy counters older than the lake's retention and a
+   merge would double count. An apply path waits for a stated need and its own decision.
+3. **A tenant whose lake window cannot cover the range is reported, not refused.** Retention 0 keeps no events,
+   and the writer drops events past retention: for such a tenant the rebuild answers `complete: false`.
+4. **The detection route keeps counting its observations.** `POST /api/ingest/detection` counts events that are
+   not in the lake, so counters can exceed a rebuild by those; this is documented. Changing what the counters
+   count is a prevalence decision, not a lake one.
+5. **Duplicates are removed in the writer, not in the rebuild.** The archive is fixed at its source, which also
+   serves the hunt (#933). Tracked in #1093.
+6. **The graph stays computed on read.** A materialised projection rebuilt from the lake would be a new store
+   with its own retention; reopen it only if a consumer needs the graph as of a past date.
 
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
