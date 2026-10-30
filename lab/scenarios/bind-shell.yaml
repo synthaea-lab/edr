@@ -27,7 +27,11 @@ notes: >
   is the follow-up that would make this detection immediate.
 
   Live-tested 2026-09-25 on the Alpine lab VM (kernel 6.18.50-0-virt, busybox nc,
-  release agent with embedded probes): exactly one T1571 ("comm=nc new listener
-  on 127.0.0.1:4445"), one T1059/T1071 for the client nc, all three socket events
+  release agent with embedded probes): exactly one T1571 ("comm=nc new
+  listener on 127.0.0.1:4445"), one T1059/T1071 for the client nc, all three socket events
   captured, zero ring-buffer drops. A T1562 line also appears when the harness
   stops the agent with SIGTERM; that comes from the teardown, not the scenario.
+
+  #676 (this PR) added the protocol word to that alert text ("new tcp listener",
+  not "new listener") — not re-verified live since; the detection logic and the
+  message format are unchanged otherwise.

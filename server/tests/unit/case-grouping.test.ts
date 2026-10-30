@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  baseTechniques,
   isRelatedTechnique,
   outranksSeverity,
   withinTimeWindow,
@@ -17,6 +18,31 @@ describe("isRelatedTechnique", () => {
 
   it("does not group unrelated techniques", () => {
     expect(isRelatedTechnique("T1059.001", "T1105")).toBe(false);
+  });
+
+  it("groups a compound technique with each single technique it names", () => {
+    expect(isRelatedTechnique("T1566.001/T1204.002", "T1204.002")).toBe(true);
+    expect(isRelatedTechnique("T1204.002", "T1566.001/T1204.002")).toBe(true);
+    expect(isRelatedTechnique("T1566.001/T1204.002", "T1566.001")).toBe(true);
+    expect(isRelatedTechnique("T1560/T1041", "T1041")).toBe(true);
+    expect(isRelatedTechnique("T1204/T1059", "T1059.004")).toBe(true);
+  });
+
+  it("groups two compound techniques that share one base technique", () => {
+    expect(isRelatedTechnique("T1566.001/T1204.002", "T1204/T1059")).toBe(true);
+  });
+
+  it("does not group compound techniques that share no base technique", () => {
+    expect(isRelatedTechnique("T1566.001/T1204.002", "T1560/T1041")).toBe(false);
+    expect(isRelatedTechnique("T1560/T1041", "T1105")).toBe(false);
+  });
+});
+
+describe("baseTechniques", () => {
+  it("splits compound ids before dropping sub-techniques", () => {
+    expect(baseTechniques("T1566.001/T1204.002")).toEqual(new Set(["T1566", "T1204"]));
+    expect(baseTechniques("T1059.001")).toEqual(new Set(["T1059"]));
+    expect(baseTechniques("T1105")).toEqual(new Set(["T1105"]));
   });
 });
 
