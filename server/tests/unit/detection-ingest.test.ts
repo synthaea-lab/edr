@@ -12,6 +12,7 @@ const db = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST } from "@/app/api/ingest/detection/route";
+import { MAX_TITLE_BYTES, truncateUtf8 } from "@/lib/detection-payload";
 
 const headers = {
   "X-Proxy-Secret": "test-proxy-secret",
@@ -201,6 +202,84 @@ describe("POST /api/ingest/detection", () => {
       for (const bad of ["T1059 T1071", "T1059\u0000", ""]) {
         expect((await post(legacy(bad))).status, JSON.stringify(bad)).toBe(400);
       }
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bounded detection strings (#1060)", () => {
+    const structured = (overrides: Record<string, unknown>) => ({
+      timestamp_ns: 1_700_000_000_000_000_000,
+      severity: "high",
+      title: "Bounded strings",
+      source: { engine: "rule", rule_id: "r" },
+      techniques: [],
+      events: [],
+      ...overrides,
+    });
+    const stored = () => db.detection.create.mock.calls[0][0].data.meta;
+
+    it("keeps a title cut at its bound, so a padded command line cannot erase the detection", async () => {
+      const title = `T1059 cmdline=${"A".repeat(3 * MAX_TITLE_BYTES)}`;
+      expect((await post(structured({ title }))).status).toBe(200);
+      const kept: string = stored().title;
+      expect(kept.startsWith("T1059 cmdline=AAAA")).toBe(true);
+      expect(kept.endsWith(`… [truncated, ${title.length} bytes]`)).toBe(true);
+      expect(Buffer.byteLength(kept)).toBeLessThan(MAX_TITLE_BYTES + 64);
+    });
+
+    it("keeps a correlator case id cut at its bound, for an image named to the NTFS limit", async () => {
+      const longest = `12345:${"é".repeat(255)}`;
+      expect((await post(structured({ source: { engine: "correlator", case_id: longest } }))).status).toBe(200);
+      expect(stored().case_id).toBe(longest);
+
+      vi.clearAllMocks();
+      db.agent.findUnique.mockResolvedValue({ id: "agent-db", tenantId: "tenant-db" });
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      const padded = `12345:${"x".repeat(5000)}`;
+      expect((await post(structured({ source: { engine: "correlator", case_id: padded } }))).status).toBe(200);
+      expect(stored().case_id).toMatch(/^12345:x+… \[truncated, 5006 bytes\]$/);
+    });
+
+    it("never splits a character when it cuts", () => {
+      // "é" is two bytes, "😀" four: a cut at 5 bytes lands inside one of them.
+      expect(truncateUtf8("éé😀", 5)).toBe("éé… [truncated, 8 bytes]");
+      expect(truncateUtf8("ééé", 5)).toBe("éé… [truncated, 6 bytes]");
+      expect(truncateUtf8("short", 5)).toBe("short");
+    });
+
+    it("refuses an oversized identifier that comes from shipped content", async () => {
+      for (const source of [
+        { engine: "rule", rule_id: "r".repeat(257) },
+        { engine: "sigma", rule_id: "s".repeat(257) },
+        { engine: "yara", rule_name: "y".repeat(129) },
+        { engine: "ml", tier: 0, model_id: "m".repeat(129), model_version: "1" },
+        { engine: "ml", tier: 0, model_id: "m", model_version: "1".repeat(129) },
+        { engine: "ioc", kind: "domain", indicator: "d".repeat(257), feed: "f", feed_version: "1" },
+        { engine: "ioc", kind: "domain", indicator: "a.example", feed: "f".repeat(65), feed_version: "1" },
+        { engine: "ioc", kind: "domain", indicator: "a.example", feed: "f", feed_version: "1".repeat(65) },
+        { engine: "ioc", kind: "domain", indicator: "a.example", feed: "f", feed_version: "1", reference: "r".repeat(2049) },
+      ]) {
+        expect((await post(structured({ source }))).status, JSON.stringify(source).slice(0, 80)).toBe(400);
+      }
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("accepts identifiers at their bounds", async () => {
+      for (const source of [
+        { engine: "rule", rule_id: "r".repeat(256) },
+        { engine: "yara", rule_name: "y".repeat(128) },
+        { engine: "ioc", kind: "domain", indicator: `${"a".repeat(249)}.com`, feed: "f".repeat(64), feed_version: "1".repeat(64) },
+      ]) {
+        expect((await post(structured({ source }))).status, JSON.stringify(source).slice(0, 80)).toBe(200);
+      }
+    });
+
+    it("refuses attributions past the model bounds", async () => {
+      const ml = { engine: "ml", tier: 1, model_id: "m", model_version: "1" };
+      const attribution = (feature: string) => ({ feature, value: 1, contribution: 0.1 });
+      expect((await post(structured({ source: ml, attributions: [attribution("f".repeat(129))] }))).status).toBe(400);
+      const many = Array.from({ length: 65 }, (_, i) => attribution(`f${i}`));
+      expect((await post(structured({ source: ml, attributions: many }))).status).toBe(400);
       expect(db.detection.create).not.toHaveBeenCalled();
     });
   });
