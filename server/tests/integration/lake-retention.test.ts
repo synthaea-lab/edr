@@ -40,11 +40,15 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-/** Writes events dated `daysAgo` days before NOW through the real writer. */
+/**
+ * Writes events dated `daysAgo` days before NOW through the real writer, as if drained the day they
+ * happened: the writer drops events already past the tenant's retention at drain time (#1047), so
+ * draining at NOW would never produce the expired partitions these tests need to delete.
+ */
 async function write(tenantId: string, agentId: string, daysAgo: number, count = 2) {
   const at = new Date(NOW.getTime() - daysAgo * DAY);
   await enqueueLakeBatch(prisma, { tenantId, agentId, events: Array.from({ length: count }, (_, i) => event(at, { image_path: `/p/${daysAgo}/${i}` })), receivedAt: at });
-  await drainLakeQueue(prisma, store);
+  await drainLakeQueue(prisma, store, { now: at });
 }
 
 describe("lake retention against Postgres", () => {
@@ -155,7 +159,7 @@ describe("lake retention against Postgres", () => {
     // The route uses the real clock: write a partition far enough in the past for any date today.
     const old = new Date(Date.UTC(2020, 0, 1, 12));
     await enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [event(old)], receivedAt: old });
-    await drainLakeQueue(prisma, store);
+    await drainLakeQueue(prisma, store, { now: old });
     process.env.LAKE_DIR = dir;
     const res = await pruneRoute(new NextRequest("http://localhost/api/cron/prune-lake", { headers: { Authorization: "Bearer test_cron_secret" } }));
     expect(res.status).toBe(200);
