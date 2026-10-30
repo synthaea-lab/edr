@@ -168,6 +168,29 @@ normalisation, device rules and public-suffix gate, and gives the same bytes (an
 - A quote in the middle of an unquoted field is kept as text (lenient on input; the output is always
   normalised).
 
+### A STIX 2.1 source (`server/lib/ioc-stix.ts`)
+
+`buildFeedFromStix({ feed, json, now, isPublicSuffix })` reads a STIX bundle (or a TAXII envelope: an object
+with an `objects` array) and passes its indicators to the same builder core, so the normalisation, device
+rules and public-suffix gate are the same and the same indicators give the same bytes as a plain feed.
+
+- **Patterns.** The engine matches one value per line, so an `indicator` is taken only when its pattern is a
+  single `=` comparison on `file:hashes.'SHA-256'`, `ipv4-addr:value`, `ipv6-addr:value` or
+  `domain-name:value`. `AND`, `OR`, `FOLLOWEDBY`, `IN`, `LIKE`, `MATCHES`, a qualifier (`WITHIN`, `REPEATS`),
+  `!=`, another property (`file:name`, `MD5`), a CIDR range and a `pattern_type` other than `stix` are
+  `unsupported_pattern`: never read in part, because half of an `OR` is an indicator the feed did not claim.
+- **Lifetime** is judged at build time against `now`: `revoked: true` is `revoked`, `valid_until` at or before
+  `now` is `expired`, `valid_from` after `now` is `not_yet_valid`, an unreadable timestamp or a missing pattern
+  is `bad_stix`. **The device has no expiry**: the file is a snapshot, so an indicator that expires after the
+  build stays loaded until a later release replaces the file. Rebuild and re-release on a schedule shorter than
+  the shortest `valid_until` you care about; nothing does that automatically yet.
+- Objects that are not indicators (malware, relationships, ...) are ignored and not counted. A rejection
+  carries the object's 1-based position in `objects` in place of a line number.
+- Not a bundle (not JSON, no `objects`, another `type`) throws, as a wrong CSV column does. `POST
+  /api/content/ioc-feed` takes it as `{ "format": "stix", "json": "<the bundle>" }`.
+- Not done: fetching a bundle from a TAXII server, STIX `x-` extensions, `indicator` objects that name a
+  confidence (the device carries none).
+
 ### Publishing (`ioc` content type)
 
 A feed is published as an `ioc` entry of a content release (`ContentType` has `ioc`): the file as

@@ -108,7 +108,10 @@ from a source and stages it in the store, so the `cp` step above is done for you
 
 `source` is `{ "format": "plain", "text": ... }` (`kind:value` lines, `defaultKind` for bare values) or
 `{ "format": "csv", "csv": ..., "valueColumn", "typeColumn"?, "defaultKind"?, "hasHeader"? }` (columns by
-header name, or by index with `hasHeader: false`). The feed is built with the device's own rules and the
+header name, or by index with `hasHeader: false`) or `{ "format": "stix", "json": "<a STIX 2.1 bundle>" }`
+(indicators with a single-comparison pattern on a SHA-256, an address or a domain; revoked, expired and
+not-yet-valid ones are dropped and reported, and the device has no expiry, so an indicator that expires after
+this build stays loaded until a later release: see `docs/detection/ioc-matching.md`). The feed is built with the device's own rules and the
 public-suffix check; a line the device would skip is **dropped and counted**, not published, and the answer
 reports how many and which (`report.rejected`, `report.rejectedTotal`): read it, a column mapped wrong shows
 up as a long list. The answer also carries the manifest `entries` to paste into the unsigned content

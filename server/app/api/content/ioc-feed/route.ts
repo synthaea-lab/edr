@@ -15,6 +15,7 @@ const StageSchema = z.object({
   allowEmpty: z.boolean().optional(),
   source: z.discriminatedUnion("format", [
     z.object({ format: z.literal("plain"), text: z.string(), defaultKind: Kind.optional() }),
+    z.object({ format: z.literal("stix"), json: z.string() }),
     z.object({
       format: z.literal("csv"),
       csv: z.string(),
@@ -46,7 +47,8 @@ async function stage(artifactsDir: string, { entry, bytes }: StagedArtifact): Pr
  *
  * Authentication: better-auth session, `owner` or `admin` member of the tenant (#803)
  * Request body: { feed, version?, allowEmpty?, source } where `source` is
- *   { format: "plain", text, defaultKind? } or
+ *   { format: "plain", text, defaultKind? },
+ *   { format: "stix", json } (a STIX 2.1 bundle: single-comparison indicator patterns, lifetimes judged now) or
  *   { format: "csv", csv, valueColumn, typeColumn?, defaultKind?, hasHeader? }
  * Response: { status: "staged", entries, report }
  *
