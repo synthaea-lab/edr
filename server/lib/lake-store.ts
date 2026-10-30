@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -21,6 +21,17 @@ export interface LakeStore {
   delete(keys: string[]): Promise<DeleteResult>;
 }
 
+/**
+ * What the query side needs from a store (issue #77, ADR-0041, decision 4): list a prefix and read
+ * a file. It is separate from {@link LakeStore} so that the writer's and the retention job's
+ * credentials are not the reader's: an S3 reader should be built on read-only credentials.
+ */
+export interface LakeReader {
+  list(prefix: string): Promise<{ key: string; size: number }[]>;
+  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. */
+  get(key: string): Promise<Uint8Array>;
+}
+
 export type DeleteResult = { deleted: string[]; failed: { key: string; error: string }[] };
 
 /** A key the writer built is `tenant=…/date=…/type=…/<id>.parquet`; anything that could leave the root is refused. */
@@ -33,7 +44,7 @@ export function assertSafeKey(key: string): void {
 }
 
 /** Files under one directory. The write goes to a temporary name and is renamed, so a reader never lists half a file. */
-export class FsLakeStore implements LakeStore {
+export class FsLakeStore implements LakeStore, LakeReader {
   constructor(private readonly root: string) {
     if (!root) throw new Error("FsLakeStore needs a root directory");
   }
@@ -45,6 +56,11 @@ export class FsLakeStore implements LakeStore {
     const tmp = `${target}.tmp-${process.pid}`;
     await writeFile(tmp, body);
     await rename(tmp, target);
+  }
+
+  async get(key: string): Promise<Uint8Array> {
+    assertSafeKey(key);
+    return new Uint8Array(await readFile(path.join(this.root, key)));
   }
 
   async list(prefix: string): Promise<{ key: string; size: number }[]> {

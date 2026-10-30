@@ -66,14 +66,37 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   backups or versioning (ADR-0041). `LakeStore.delete` reports `{ deleted, failed }` per key instead of
   throwing, because by the time a later key fails the earlier ones are already gone.
 
+## The query side (issue #77, `lib/lake-query.ts`)
+
+`queryLake(reader, { tenantId, from, to, types?, where?, limit? })` reads events back: a tenant, a
+range of UTC days (both included, at most 366), optionally event types and exact matches on `agentId`,
+`comm`, `path`, `imagePath`, `daddr`, `query`, `sha256` (compared in lowercase), and a row limit
+(default 100, at most 1000). It lists `tenant=<id>/`, keeps the files whose `date=` and `type=` fit
+(partition pruning is the path: the files of a type that was not asked for are not read), reads them with
+`hyparquet` and filters the rows. Rows come back oldest first, each with `event`, the event's source text
+as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`),
+`filesSkipped` (more than 2000 matching files: the answer is incomplete).
+
+- **Tenant isolation is structural, in two layers.** The only listing is the tenant's own prefix, for an
+  id from a closed character set; and every key the store lists is parsed against the whole layout and
+  ignored unless its tenant segment is that id, so a store that answers a wider prefix reads nothing
+  of another tenant's. There is no query language for a compiler bug to widen.
+- **Not DuckDB, for now.** ADR-0041 decision 4 plans DuckDB, but its Node bindings have no Alpine build
+  (ADR, "Findings") and the image is Alpine. `hyparquet` is pure JavaScript, already a dependency, and
+  runs in the image. The cost is a scan of every file in range: fine for a hunt over days on one tenant,
+  not measured at fleet volume, and the result shape is what a hunt layer consumes, so the engine can
+  change under it. The ADR's other isolation requirement (read-only credentials) is a store matter:
+  `LakeReader` (`list`, `get`) is separate from `LakeStore` so the reader can be built on its own
+  credentials. Only the directory store implements it; the S3 reader waits for the S3 store (#1052).
+- **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
+  filters other than equality, ordering other than by time, compaction-aware reading.
+
 ## What is not built
 
 - The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
   store exists.
 - Compaction: every drain writes new small files.
-- Skipping at write time an event already older than its tenant's retention: the writer files it, and
-  the next `prune-lake` deletes it and records the deletion.
-- The query side (#933): DuckDB reading these files, and a `HuntQuery` events source.
+- A `HuntQuery` events source and a route over the query side (#933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
 - Duplicates: a crash between the file writes and the commit can leave the events of that flush

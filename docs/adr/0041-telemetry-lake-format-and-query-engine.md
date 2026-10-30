@@ -196,6 +196,22 @@ The slice also fixes two choices this ADR left open: the queue is a table with o
 the events as a JSON column, and the first store is a directory (`LAKE_DIR`), the S3 store being the
 next slice behind the same one-method interface.
 
+## Findings from building the query side (2026-10-30)
+
+The first read slice (`server/lib/lake-query.ts`) settles the question the findings above left open:
+which engine runs in the image. Decision taken under the owner's delegation ("oui" to building the
+query layer): **the first slice reads with `hyparquet`, not DuckDB.** It is pure JavaScript, already a
+dependency, and runs on Alpine; DuckDB would have needed a glibc worker image or a subprocess, a
+deployment change that is not worth making before the volume is measured. A query is structured
+(tenant, days, types, equality filters, limit) and scans every file in range; it is bounded (366 days,
+2000 files, 1000 rows) and says when it was cut. Reversible: the result shape is the contract, and
+DuckDB, on a glibc worker, remains the plan if a measured hunt over a fleet's volume is too slow.
+
+Isolation (decision 4's two layers) is met here by construction instead of by DuckDB settings: the tenant
+prefix is the only listing, and every listed key is re-checked against the tenant. The read-only
+credentials requirement stays open for the S3 reader: `LakeReader` is its own interface so those
+credentials need not be the writer's. Not measured: query time on any volume.
+
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
 One agent (`agent capture-events`, Fedora 43 lab VM, kernel 7.2.9) for 601 s under a synthetic loop
