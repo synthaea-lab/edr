@@ -19,7 +19,7 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 import { POST as ingestEvents } from "@/app/api/ingest/events/route";
 import { GET as writeLake } from "@/app/api/cron/write-lake/route";
 import { GET as pruneLake } from "@/app/api/cron/prune-lake/route";
-import { FsLakeStore } from "@/lib/lake-store";
+import { FsLakeStore, LakeNotDeletableError } from "@/lib/lake-store";
 
 const SECRET = "test-proxy-secret";
 const NOW = Date.UTC(2026, 9, 29, 10, 0, 0);
@@ -205,6 +205,27 @@ describe("GET /api/cron/prune-lake", () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ partitionsDeleted: 0, failedPartitions: 1 });
     expect(await readdir(lakeDir)).toEqual(["tenant=t1"]); // nothing was deleted without a record
+  });
+
+  it("answers 500 with the reason, and deletes nothing, when the store cannot prove a deletion", async () => {
+    process.env.LAKE_DIR = lakeDir;
+    await new FsLakeStore(lakeDir).put(OLD, new Uint8Array(1));
+    db.tenant.findMany.mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]);
+    // A directory has no versioning to check; stand in for a versioned S3 bucket.
+    const proto = FsLakeStore.prototype as unknown as { assertDeletable?: () => Promise<void> };
+    proto.assertDeletable = async () => {
+      throw new LakeNotDeletableError("Bucket lake has versioning Enabled");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await call();
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Bucket lake has versioning Enabled" });
+    } finally {
+      delete proto.assertDeletable;
+    }
+    expect(db.lakeDeletion.create).not.toHaveBeenCalled();
+    expect(await readdir(lakeDir)).toEqual(["tenant=t1"]);
   });
 
   it("answers 500 when the database fails", async () => {

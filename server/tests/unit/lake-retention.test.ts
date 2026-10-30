@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { FsLakeStore, type LakeStore } from "@/lib/lake-store";
+import { FsLakeStore, LakeNotDeletableError, type LakeStore } from "@/lib/lake-store";
 import { ageInDays, isExpired, manifestHash, pruneLake } from "@/lib/lake-retention";
 
 const NOW = new Date(Date.UTC(2026, 9, 29, 15, 30, 0));
@@ -139,6 +139,7 @@ class MemoryStore implements LakeStore {
   stuck = new Set<string>();
   throwAfter: number | null = null;
   listThrowsAfterDelete = false;
+  assertDeletable?: () => Promise<void>;
   deleted = false;
   async put(key: string, body: Uint8Array) { this.files.set(key, body.length); }
   async list(prefix: string) {
@@ -157,6 +158,32 @@ class MemoryStore implements LakeStore {
     return result;
   }
 }
+
+describe("pruneLake on a store that cannot prove a deletion", () => {
+  it("refuses before listing, recording or deleting anything", async () => {
+    const store = new MemoryStore();
+    await store.put(file("t1", "2026-07-01", "exec", "a"), new Uint8Array(4));
+    store.assertDeletable = async () => {
+      throw new LakeNotDeletableError("versioning Enabled");
+    };
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    await expect(pruneLake(db, store, NOW)).rejects.toThrow("versioning Enabled");
+    expect(deletions).toHaveLength(0);
+    expect(store.files.size).toBe(1);
+    expect(store.deleted).toBe(false);
+  });
+
+  it("checks once per run, not per partition", async () => {
+    const store = new MemoryStore();
+    await store.put(file("t1", "2026-07-01", "exec", "a"), new Uint8Array(1));
+    await store.put(file("t1", "2026-07-02", "exec", "b"), new Uint8Array(1));
+    const check = vi.fn(async () => {});
+    store.assertDeletable = check;
+    const { db } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    await pruneLake(db, store, NOW);
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("pruneLake", () => {
   it("deletes the expired partitions of a tenant and records each one", async () => {

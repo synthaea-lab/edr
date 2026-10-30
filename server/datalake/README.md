@@ -36,8 +36,28 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   written before this holds a parsed object and is serialised, with the rounding). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
-- **Store.** A directory (`FsLakeStore`): a mounted volume, with `put`, `list` and `delete`. Writes go
-  to a temporary name and are renamed; `delete` removes the directories it leaves empty.
+- **Store.** A directory (`LAKE_DIR`, `FsLakeStore`: a mounted volume) or an S3-compatible bucket
+  (`LAKE_S3_BUCKET`, `S3LakeStore`), both with `put`, `list` and `delete`. The directory store writes
+  to a temporary name and renames, and `delete` removes the directories it empties; an S3 PUT is
+  atomic. Setting both is refused. The lake is on when either is set.
+
+  | Variable | Meaning |
+  |---|---|
+  | `LAKE_S3_BUCKET` | The bucket. Required to use S3. |
+  | `LAKE_S3_ENDPOINT` | A custom endpoint (MinIO-like servers); unset for AWS S3. |
+  | `LAKE_S3_REGION` | Default `us-east-1`. |
+  | `LAKE_S3_ACCESS_KEY_ID`, `LAKE_S3_SECRET_ACCESS_KEY` | Set both or neither; neither uses the SDK's default credential chain (instance role, environment). |
+  | `LAKE_S3_PREFIX` | A key prefix inside the bucket, to share it. |
+  | `LAKE_S3_FORCE_PATH_STYLE` | `true` or `false`; defaults to `true` when an endpoint is set. |
+
+  **The bucket must not be versioned**: on a versioned bucket a delete leaves a delete marker and the
+  bytes, so a `lake_deletions` row would say "verified empty" about a prefix whose objects still exist.
+  The retention job checks it: once per run, before it lists or deletes anything, it asks the bucket for
+  its versioning status (`GetBucketVersioning`) and answers `500` with the reason when the status is
+  `Enabled` or `Suspended` (earlier versions are kept) or cannot be read. The credentials of the writer
+  and retention job therefore need `s3:GetBucketVersioning`, besides put, list and delete. Writer and
+  retention need bucket-wide write and delete: the query side (DuckDB, not built) must use separate
+  read-only credentials, ideally scoped to one tenant prefix, never these (ADR-0041, decision 4).
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
   tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention
   (ingest keeps past timestamps) is dropped and counted as `droppedPastRetention`, so a prefix the
@@ -98,8 +118,8 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
 
 ## What is not built
 
-- The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
-  store exists.
+- An object store in `server/docker-compose.yml`: the compose still has only Postgres, the server and
+  nginx, so `LAKE_S3_*` points at a store you run yourself. See the ADR on which one.
 - Compaction: every drain writes new small files.
 - Saved hunts over events (the ad-hoc search is #933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows

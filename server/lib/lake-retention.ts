@@ -75,6 +75,8 @@ export async function pruneLake(
   now: Date = new Date()
 ): Promise<RetentionResult> {
   const runId = randomUUID();
+  // Before listing, and so before anything is written or deleted: a store that cannot prove a deletion deletes nothing.
+  await store.assertDeletable?.();
   const all = await store.list("");
   const result: RetentionResult = {
     runId,

@@ -19,6 +19,20 @@ export interface LakeStore {
    * throws only for a key that is not safe, before removing anything.
    */
   delete(keys: string[]): Promise<DeleteResult>;
+  /**
+   * Called by the retention job once per run, before anything is deleted: throws a
+   * `LakeNotDeletableError` when the store cannot give the deletion proof it records (a versioned
+   * bucket keeps the bytes behind a delete marker). Optional: a directory has nothing to check.
+   */
+  assertDeletable?(): Promise<void>;
+}
+
+/** The store cannot make a deletion provable; the retention job refuses to run, deleting nothing. */
+export class LakeNotDeletableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LakeNotDeletableError";
+  }
 }
 
 /**
@@ -120,8 +134,8 @@ export class FsLakeStore implements LakeStore, LakeReader {
 
 /**
  * The reader the query side uses, or null when it cannot be built: the lake is off, or it is an S3
- * bucket (`LakeReader` exists for the directory store only; the S3 reader waits for the S3 store,
- * #1052). Never the writer's credentials by design once S3 exists: a separate read-only reader.
+ * bucket (`LakeReader` exists for the directory store only: the S3 store of #1052 is the writer's,
+ * and the S3 reader, on read-only credentials of its own, is not built yet).
  */
 export function lakeReaderFromEnv(env: Record<string, string | undefined> = process.env): LakeReader | null {
   const dir = env.LAKE_DIR;
@@ -130,12 +144,10 @@ export function lakeReaderFromEnv(env: Record<string, string | undefined> = proc
 }
 
 /**
- * The store the environment asks for, or null when the lake is off. `LAKE_DIR` is the only switch:
- * unset (the default) means ingest queues nothing and the writer has nothing to do, so a
- * deployment that has no lake does not grow a queue nobody drains.
+ * Whether the telemetry lake is on: a directory (`LAKE_DIR`) or an S3 bucket (`LAKE_S3_BUCKET`) is
+ * configured. Cheap and free of the S3 client, so the ingest route can ask it on every request.
+ * Which store, and whether the configuration is valid, is `lakeStoreFromEnv` (`lib/lake-env.ts`).
  */
-export function lakeStoreFromEnv(env: Record<string, string | undefined> = process.env): LakeStore | null {
-  const dir = env.LAKE_DIR;
-  if (dir === undefined || dir === "") return null;
-  return new FsLakeStore(dir);
+export function lakeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return (env.LAKE_DIR ?? "") !== "" || (env.LAKE_S3_BUCKET ?? "") !== "";
 }
