@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, rename, writeFile } from "fs/promises";
+import { mkdir, rename, rm, writeFile } from "fs/promises";
+import { randomUUID } from "crypto";
 import path from "path";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -33,13 +34,20 @@ const StageSchema = z.object({
  * step docs/operations/content.md does by hand with `cp`. The name is the hash of the bytes, so
  * writing the same bytes twice is the same file and a different feed can never land on it. The
  * write goes through a temporary name and a rename: an agent fetching mid-write never reads half
- * a feed.
+ * a feed. The temporary name is unique to each write (the pid alone is shared by every request of
+ * the process: two requests staging the same content would write and rename the same path, and the
+ * second rename fails with ENOENT), and it is removed if the write or the rename fails.
  */
 async function stage(artifactsDir: string, { entry, bytes }: StagedArtifact): Promise<void> {
   const dest = path.join(artifactsDir, entry.sha256);
-  const tmp = `${dest}.${process.pid}.tmp`;
-  await writeFile(tmp, bytes);
-  await rename(tmp, dest);
+  const tmp = `${dest}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, bytes);
+    await rename(tmp, dest);
+  } finally {
+    // Gone after a successful rename; left behind only when the write or the rename failed.
+    await rm(tmp, { force: true });
+  }
 }
 
 /**

@@ -143,6 +143,14 @@ describe("POST /api/content/ioc-feed, then POST /api/content/release", () => {
     expect(readdirSync(artifacts())).toEqual([a.entries[0].sha256]);
   });
 
+  it("stages the same content from concurrent requests without one failing the other, and leaves no temporary file", async () => {
+    const results = await Promise.all(Array.from({ length: 25 }, () => stageRoute(stageReq({ feed: "lab", source: { format: "plain", text: PLAIN } }))));
+    expect(results.map((r) => r.status)).toEqual(Array(25).fill(200));
+    const names = readdirSync(artifacts());
+    expect(names.filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    expect(names).toHaveLength(1);
+  });
+
   it("goes from a CSV source to an accepted release: the staged entries are what publish checks", async () => {
     const staged = await (
       await stageRoute(
