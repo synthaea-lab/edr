@@ -31,13 +31,17 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   returns `remaining`, so a schedule that does not keep up shows as a number that grows. Schedule it
   like the other crons.
 - **File.** Columns `agent_id`, `ts`, `comm`, `path`, `image_path`, `daddr`, `query`, `sha256`, and
-  `event` (the event as JSON, after ingest's `JSON.parse`). Tenant, date and type are in the path, not
+  `event` (the event's source text as the agent sent it: the queue holds the text of each element of
+  the body's `events`, so integers above 2^53 such as `meta.timestamp_ns` are not rounded; a queue row
+  written before this holds a parsed object and is serialised, with the rounding). Tenant, date and type are in the path, not
   in the file. An event type that is not `[a-z][a-z0-9_]{0,63}` goes under `type=other`; its real type
   stays in `event`. Compression is Snappy (`hyparquet-writer`, pure JavaScript).
 - **Store.** A directory (`FsLakeStore`): a mounted volume, with `put`, `list` and `delete`. Writes go
   to a temporary name and are renamed; `delete` removes the directories it leaves empty.
 - **Retention setting.** `tenants.lake_retention_days` (default 90). `0` makes the writer drop that
-  tenant's events (counted as `droppedNoRetention`).
+  tenant's events (counted as `droppedNoRetention`). An event dated at or past its tenant's retention
+  (ingest keeps past timestamps) is dropped and counted as `droppedPastRetention`, so a prefix the
+  retention job deleted never refills.
 - **Retention job.** `GET /api/cron/prune-lake` (`CRON_SECRET` bearer; run it once a day) deletes every
   `date=` partition whose age in UTC days has reached its tenant's retention (`0` keeps nothing, today
   included), one partition at a time, and keeps a `lake_deletions` row for each:
@@ -46,7 +50,9 @@ storage, queried in process; status **proposed**, decisions taken under the owne
     deleted and waits for the next run.
   - **Completed after it**, from what the prefix lists afterwards, not from what the store claimed: how
     many files really went (`deleted_count`), how many are still there (`failed_count`), the first error,
-    whether the prefix listed empty (`verified_empty`), and `completed_at`.
+    whether every file of the starting listing is gone (`verified_empty`), and `completed_at`. A file the
+    writer put under the prefix meanwhile is not in that listing: it is counted in `arrived_during_deletion`,
+    is not a failure, and is deleted by the next run. `bytesDeleted` adds the sizes of the files that went.
   - A row with `completed_at` null is a deletion that started and was never recorded as finished (a crash,
     or the database going away): the files may or may not be gone.
   - A failure on one partition is recorded and the run goes on to the next, so one bad tenant does not

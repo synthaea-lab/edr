@@ -11,6 +11,8 @@ import {
   drainLakeQueue,
   encodeParquet,
   enqueueLakeBatch,
+  eventSources,
+  isPastRetention,
   lakeKey,
   lakeRow,
   typeSegment,
@@ -75,6 +77,39 @@ describe("lakeRow", () => {
   it("drops a value that is not a hash from the hash column and bounds a long path", () => {
     expect(lakeRow("a", exec({ sha256: "not-a-hash" }), RECEIVED).sha256).toBeNull();
     expect(lakeRow("a", exec({ path: "/x".repeat(2000) }), RECEIVED).path).toHaveLength(1024);
+  });
+});
+
+describe("eventSources", () => {
+  it("returns each event's text exactly, whitespace between events aside", () => {
+    expect(eventSources('{"events":[ {"a":1} , {"b":[1,2]},"s", 3 ]}')).toEqual(['{"a":1}', '{"b":[1,2]}', '"s"', "3"]);
+  });
+
+  it("keeps an integer above 2^53 that JSON.parse would round", () => {
+    const text = '{"type":"exec","meta":{"timestamp_ns":1793287944852336852}}';
+    expect(JSON.stringify(JSON.parse(text))).not.toBe(text);
+    expect(eventSources(`{"events":[${text}]}`)).toEqual([text]);
+  });
+
+  it("is not fooled by brackets, commas, quotes and escapes inside strings", () => {
+    const text = '{"type":"x","query":"a]},[{\\"\\\\"}';
+    expect(eventSources(`{"events":[${text},{"type":"y"}]}`)).toEqual([text, '{"type":"y"}']);
+  });
+
+  it("ignores an events key that is nested, and takes the last top-level one like JSON.parse", () => {
+    expect(eventSources('{"meta":{"events":[1]},"events":[{"a":1}]}')).toEqual(['{"a":1}']);
+    expect(eventSources('{"events":[1],"events":[2,3]}')).toEqual(["2", "3"]);
+  });
+
+  it("is null without a top-level events array, and empty for an empty one", () => {
+    expect(eventSources('{"other":[1]}')).toBeNull();
+    expect(eventSources('{"events":{}}')).toBeNull();
+    expect(eventSources('{"events":[]}')).toEqual([]);
+  });
+
+  it("agrees with JSON.parse on the number and order of the elements", () => {
+    const body = JSON.stringify({ x: "[", events: [{ type: "a", n: [1, { m: "}," }] }, "q\"", 5, null, [], {}], z: { events: 1 } });
+    expect(eventSources(body)!.map((t) => JSON.parse(t))).toEqual(JSON.parse(body).events);
   });
 });
 
@@ -184,11 +219,60 @@ class MemoryStore implements Pick<LakeStore, "put"> {
   }
 }
 
+describe("isPastRetention", () => {
+  const now = new Date("2026-10-30T15:00:00Z");
+  it("is true from the day that is `retentionDays` old, as the retention job counts it", () => {
+    expect(isPastRetention("2026-07-31", 90, now)).toBe(true); // 91 days
+    expect(isPastRetention("2026-08-01", 90, now)).toBe(true); // 90 days: deleted at the next run
+    expect(isPastRetention("2026-08-02", 90, now)).toBe(false); // 89 days
+    expect(isPastRetention("2026-10-30", 0, now)).toBe(true);
+  });
+  it("is false for today, a future day and an unparseable day", () => {
+    expect(isPastRetention("2026-10-30", 1, now)).toBe(false);
+    expect(isPastRetention("2026-11-02", 90, now)).toBe(false);
+    expect(isPastRetention("not-a-day", 0, now)).toBe(false);
+  });
+});
+
 describe("drainLakeQueue", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(RECEIVED);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops, and counts, an event dated past its tenant's retention, and keeps the rest of the batch", async () => {
+    const old = RECEIVED.getTime() - 91 * 86_400_000;
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), exec({ meta: { comm: "old", timestamp_ns: NS(new Date(old)) } })] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, files: 1, droppedPastRetention: 1, remaining: 0 });
+    expect(Array.from(store.files.keys())).toEqual([expect.stringContaining("/date=2026-10-29/")]);
+    expect(state.batches).toHaveLength(0);
+  });
+
+  it("applies each tenant's own retention", async () => {
+    const tenDaysAgo = new Date(RECEIVED.getTime() - 10 * 86_400_000);
+    const event = exec({ meta: { comm: "x", timestamp_ns: NS(tenDaysAgo) } });
+    const { prisma } = fakePrisma(
+      [
+        { id: "b1", tenantId: "short", agentId: "a1", receivedAt: RECEIVED, events: [event] },
+        { id: "b2", tenantId: "long", agentId: "a2", receivedAt: RECEIVED, events: [event] },
+      ],
+      [{ id: "short", lakeRetentionDays: 7 }, { id: "long", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, droppedPastRetention: 1 });
+    expect(Array.from(store.files.keys()).every((k) => k.startsWith("tenant=long/"))).toBe(true);
+  });
   it("does nothing on an empty queue", async () => {
     const { prisma } = fakePrisma([], []);
     const store = new MemoryStore();
-    expect(await drainLakeQueue(prisma, store)).toEqual({ batches: 0, events: 0, files: 0, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(await drainLakeQueue(prisma, store)).toEqual({ batches: 0, events: 0, files: 0, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 });
     expect(store.files.size).toBe(0);
   });
 
@@ -204,7 +288,7 @@ describe("drainLakeQueue", () => {
     );
     const store = new MemoryStore();
     const result = await drainLakeQueue(prisma, store);
-    expect(result).toEqual({ batches: 3, events: 4, files: 4, droppedNoRetention: 0, skippedMalformed: 0, remaining: 0 });
+    expect(result).toEqual({ batches: 3, events: 4, files: 4, droppedNoRetention: 0, droppedPastRetention: 0, skippedMalformed: 0, remaining: 0 });
     expect(state.batches).toHaveLength(0);
     const keys = Array.from(store.files.keys()).map((k) => k.replace(/\/[0-9a-f]{32}\.parquet$/, ""));
     expect(keys.sort()).toEqual([
@@ -257,6 +341,28 @@ describe("drainLakeQueue", () => {
     expect(result).toMatchObject({ events: 1, files: 1, droppedNoRetention: 2, remaining: 0 });
     expect(Array.from(store.files.keys()).every((k) => k.startsWith("tenant=t1/"))).toBe(true);
     expect(state.batches).toHaveLength(0);
+  });
+
+  it("writes a queued event's source text into the file, so a timestamp above 2^53 is not rounded", async () => {
+    const text = `{"type":"exec","meta":{"comm":"bash","timestamp_ns":${NS(RECEIVED)}852}}`;
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [text] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ events: 1, skippedMalformed: 0 });
+    const rows = await readParquet(Array.from(store.files.values())[0]);
+    expect(rows[0].event).toBe(text);
+    expect(rows[0]).toMatchObject({ comm: "bash" });
+    expect(new Date(rows[0].ts as Date)).toEqual(RECEIVED);
+  });
+
+  it("still reads a row queued as parsed objects, and skips a source text that is not JSON", async () => {
+    const { prisma } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec(), "{not json", '"just a string"'] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    expect(await drainLakeQueue(prisma, new MemoryStore())).toMatchObject({ events: 1, skippedMalformed: 2 });
   });
 
   it("skips a malformed queued event without losing the good ones", async () => {

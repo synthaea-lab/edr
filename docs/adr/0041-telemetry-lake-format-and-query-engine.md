@@ -37,7 +37,9 @@ One row per event. Typed columns for what every query filters or joins on: `tena
 `agent_id`, `event_type`, `ts` (from `meta.timestamp_ns`, clamped as ingest already does),
 `schema_version`, and the few fields prevalence already extracts (image hash, image path, parent
 and child image, DNS domain). The whole event stays in one `event` JSON column, byte for byte as
-received. A new event variant or field therefore needs no migration of files already written, and
+received: that includes integers above 2^53 (`meta.timestamp_ns` is about 1.8e18), so the path from
+the request body to the file must carry the event's source text, never a `JSON.parse` followed by a
+`JSON.stringify`, which rounds them. A new event variant or field therefore needs no migration of files already written, and
 the typed columns can be extended by a later file version. A query that needs a field that is not
 typed reads it from the JSON column (slower, correct).
 
@@ -48,12 +50,22 @@ is one prefix, which is what makes per-tenant retention and deletion a prefix op
 makes a tenant-scoped query unable to read another tenant's files. `date` is the event's day (UTC),
 not the arrival day, so a flushed spool lands where the event happened.
 
+Two rules keep the layout honest. The `type=` segment is agent-supplied text (ingest only checks that
+it is a string), so it is validated against a closed character set before it shapes a path, and an
+event that fails is not written under it. And a past timestamp is not trusted: ingest clamps only the
+future (24 h), so a spool flushed after an outage, or a buggy or compromised agent, can name a day
+that is already past retention, possibly one the retention job deleted and recorded as empty. The
+writer therefore drops, and counts, the events older than the tenant's retention at write time (the
+next retention run would delete them anyway), so a prefix recorded as deleted never refills.
+
 ### 3. The write path is micro-batch files, then compaction
 
 Ingest does not write to the object store on the request path. It appends the accepted batch to a
-local durable queue (a Postgres table) in the same transaction as the prevalence counters, and a
-writer drains it into one small Parquet file per (tenant, day, type) per flush. A compaction job
-merges the small files of a closed day into few large ones. The agent's `2xx` means "durably
+local durable queue (a Postgres table), by its own insert (prevalence counters are best effort and
+are not in the same transaction), and a writer drains it into one small Parquet file per (tenant, day, type) per flush. A compaction job
+merges the small files of a closed day into few large ones. A "closed" day is not final: an event
+with a past timestamp that is still inside retention can add a file to it days later, so compaction
+must be able to re-compact a day, and must not assume that a day it compacted stays alone. The agent's `2xx` means "durably
 queued", not "in the lake": the lag is a number the health console shows (it already counts ingest
 lag).
 
@@ -69,6 +81,14 @@ to SQL as it already does for the Postgres source (ADR-0025), with the same boun
 timeout, searches in flight per tenant, a row never carrying more than the page needs. The tenant
 predicate is a path prefix first and a column filter second.
 
+**Tenant isolation has two independent layers, as a requirement of the engine slice and not a detail
+of the hunt compiler.** The worker's DuckDB must not hold the writer's bucket-wide credentials: a
+compiler bug, or a query feature added later, would then be a cross-tenant read. The query side gets
+read-only credentials, and each query is confined to the tenant's prefix by a mechanism that does
+not depend on the SQL it runs: either DuckDB restricted per query to `tenant=<id>/` (`allowed_directories`
+with external access off, then `lock_configuration`), or per-tenant S3 credentials scoped by a bucket
+policy to that prefix (MinIO supports prefix conditions). The prefix in the SQL is the second layer.
+
 ### 5. Retention is a prefix deletion with an audit record
 
 A per-tenant policy gives the retention in days. The retention job deletes the `date=` prefixes
@@ -76,7 +96,11 @@ older than that and writes an audit row: tenant, prefix, object count, bytes, th
 the listing it deleted, when, and by which job run. "Provable" means that record plus a listing
 that shows the prefix empty after the deletion; it does not mean the bytes are unrecoverable from
 the storage provider's own backups or versioning, which the deployment must turn off or age out
-for the lake bucket.
+for the lake bucket. The retention job checks this instead of trusting the deployment: before it
+deletes anything it asks the store for the bucket's versioning status and refuses to run when it is
+`Enabled` or `Suspended` (a suspended bucket still keeps earlier versions), because a delete on a
+versioned bucket leaves a marker and the bytes, and the audit row would then claim an empty prefix
+that is not.
 
 ### 6. Out of scope here
 

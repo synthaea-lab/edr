@@ -225,6 +225,42 @@ describe("pruneLake", () => {
     expect(deletions[0].error).toMatch(/AccessDenied/);
   });
 
+  it("counts only the sizes of the files that went, not the planned total, when the delete was partial", async () => {
+    const store = new MemoryStore();
+    const [a, b] = ["a", "b"].map((n) => file("t1", "2026-07-01", "exec", n));
+    await store.put(a, new Uint8Array(10));
+    await store.put(b, new Uint8Array(3));
+    store.stuck.add(a);
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    const result = await pruneLake(db, store, NOW);
+    expect(result).toMatchObject({ filesDeleted: 1, bytesDeleted: 3 });
+    expect(deletions[0]).toMatchObject({ bytes: BigInt(13), deletedCount: 1 });
+  });
+
+  it("does not call a file the writer added meanwhile a failed deletion, and leaves it to the next run", async () => {
+    const store = new MemoryStore();
+    const [a, b] = ["a", "b"].map((n) => file("t1", "2026-07-01", "exec", n));
+    await store.put(a, new Uint8Array(4));
+    await store.put(b, new Uint8Array(6));
+    const late = file("t1", "2026-07-01", "exec", "late");
+    const del = store.delete.bind(store);
+    store.delete = async (keys: string[]) => {
+      const r = await del(keys);
+      await store.put(late, new Uint8Array(9)); // a flush lands after the listing, before the check
+      return r;
+    };
+    const { db, deletions } = fakeDb([{ id: "t1", lakeRetentionDays: 30 }]);
+    const result = await pruneLake(db, store, NOW);
+    expect(result).toMatchObject({ partitionsDeleted: 1, filesDeleted: 2, bytesDeleted: 10, notEmpty: 0, failedPartitions: 0, errors: [] });
+    expect(deletions[0]).toMatchObject({ objectCount: 2, deletedCount: 2, failedCount: 0, arrivedDuringDeletion: 1, verifiedEmpty: true, error: null });
+    expect(Array.from(store.files.keys())).toEqual([late]);
+    // The next run finds the newcomer as its own listing and deletes it.
+    store.delete = del;
+    const again = await pruneLake(db, store, NOW);
+    expect(again).toMatchObject({ partitionsDeleted: 1, filesDeleted: 1, bytesDeleted: 9 });
+    expect(store.files.size).toBe(0);
+  });
+
   it("still records the deletion when the store throws partway, from what is really left", async () => {
     const store = new MemoryStore();
     for (const n of ["a", "b", "c", "d"]) await store.put(file("t1", "2026-07-01", "exec", n), new Uint8Array(1));
