@@ -115,6 +115,33 @@ describe("telemetry lake writer against Postgres", () => {
     expect(await drainLakeQueue(prisma, new FsLakeStore(dir), { now: AT })).toMatchObject({ batches: 1, files: 1, remaining: 0 });
   });
 
+  it("writes each event once when a drain fails after some files are written and a new batch arrives before the retry (#1093)", async () => {
+    const tenant = await createTestTenant();
+    const agent = await createTestAgent(tenant.id);
+    const at = (i: number) => new Date(AT.getTime() + i * 1000);
+    const queue = (i: number, type: string) =>
+      enqueueLakeBatch(prisma, { tenantId: tenant.id, agentId: agent.id, events: [exec({ type, image_path: `/e/${i}` })], receivedAt: at(i) });
+    await queue(1, "exec");
+    await queue(2, "connect");
+
+    // The crash: the first file reaches the store, the second put fails, the transaction rolls back.
+    const real = new FsLakeStore(dir);
+    let puts = 0;
+    const crashing = { put: async (key: string, body: Uint8Array) => (puts++ === 1 ? Promise.reject(new Error("crash")) : real.put(key, body)) };
+    await expect(drainLakeQueue(prisma, crashing, { now: AT })).rejects.toThrow("crash");
+    expect(await prisma.lakeBatch.count()).toBe(2);
+    expect(await filesUnder(dir)).toHaveLength(1);
+
+    // A batch of the same type and day arrives before the retry, so the retry groups differently.
+    await queue(3, "exec");
+    await drainLakeQueue(prisma, real, { now: AT });
+
+    const seen: string[] = [];
+    for (const file of await filesUnder(dir)) seen.push(...(await rowsOf(file)).map((r) => r.image_path as string));
+    expect(seen.sort()).toEqual(["/e/1", "/e/2", "/e/3"]);
+    expect(await prisma.lakeBatch.count()).toBe(0);
+  });
+
   it("takes at most maxBatches, oldest first, and reports what remains", async () => {
     const tenant = await createTestTenant();
     const agent = await createTestAgent(tenant.id);
