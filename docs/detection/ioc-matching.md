@@ -191,6 +191,26 @@ rules and public-suffix gate are the same and the same indicators give the same 
 - Not done: fetching a bundle from a TAXII server, STIX `x-` extensions, `indicator` objects that name a
   confidence (the device carries none).
 
+### A MISP source (`server/lib/ioc-misp.ts`)
+
+`buildFeedFromMisp({ feed, json, isPublicSuffix })` reads a MISP export (the JSON of `/events/restSearch`,
+`{"Event": ...}` or a bare event) and passes its attributes, from `Event.Attribute` and from `Event.Object`,
+to the same builder core: same normalisation, device rules and public-suffix gate, same bytes for the same
+indicators.
+
+- **Types taken:** `sha256`, `ip-src`, `ip-dst`, `domain`, `hostname`. Everything else (`md5`, `sha1`, `url`,
+  `email-*`, and every composite such as `ip-src|port`, `filename|sha256`, `domain|ip`) is `unknown_kind`. A
+  composite is never split: half of `domain|ip` is not the indicator the feed claimed.
+- **`to_ids` must be true** (`true`, `1` or `"1"`). It is MISP's flag for "a detection indicator"; an
+  attribute without it is context (a victim's address, a sample's name), and publishing it would raise findings
+  on it. Refused as `not_for_detection`. A `deleted` attribute is `deleted`.
+- **No expiry here.** A MISP attribute has no `valid_until`; decay is a score MISP computes. Filter on the
+  MISP side (`last`, `publish_timestamp`, a decaying model) before exporting. The device has no expiry either.
+- A rejection carries the attribute's 1-based position in the order read (an event's attributes, then its
+  objects') in place of a line number. A malformed attribute is `bad_misp`; text that holds no event throws.
+  `POST /api/content/ioc-feed` takes it as `{ "format": "misp", "json": "<the export>" }`.
+- Not done: fetching from a MISP instance (API key handling), tags and galaxies, attribute `comment`.
+
 ### Publishing (`ioc` content type)
 
 A feed is published as an `ioc` entry of a content release (`ContentType` has `ioc`): the file as

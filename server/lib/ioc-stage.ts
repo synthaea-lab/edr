@@ -3,7 +3,7 @@
  * (issue #60, ADR-0038): `ioc/<feed>.txt` and, optionally, `ioc/VERSION`, each with the manifest
  * entry that lists it.
  *
- * This is the step between a source (plain `kind:value` text, CSV or a STIX bundle) and the unsigned content
+ * This is the step between a source (plain `kind:value` text, CSV, a STIX bundle or a MISP export) and the unsigned content
  * manifest the operator signs offline (docs/operations/content.md). It builds the feed with the
  * same builder the device's rules come from, drops the lines the device would skip, and refuses
  * what would do harm if published:
@@ -20,12 +20,14 @@ import { createHash } from "crypto";
 import { buildFeed, versionFile, type FeedResult, type IocKind } from "@/lib/ioc-feed";
 import { buildFeedFromCsv } from "@/lib/ioc-csv";
 import { buildFeedFromStix } from "@/lib/ioc-stix";
+import { buildFeedFromMisp } from "@/lib/ioc-misp";
 import { iocEntryError } from "@/lib/content-publish";
 import { isPublicSuffix as realIsPublicSuffix } from "@/lib/public-suffix";
 
 export type StageSource =
   | { format: "plain"; text: string; defaultKind?: IocKind }
   | { format: "stix"; json: string }
+  | { format: "misp"; json: string }
   | {
       format: "csv";
       csv: string;
@@ -86,6 +88,9 @@ export function buildIocStage(input: StageInput): StageResult {
         break;
       case "stix":
         built = buildFeedFromStix({ feed: input.feed, json: input.source.json, now: input.now ?? new Date(), isPublicSuffix });
+        break;
+      case "misp":
+        built = buildFeedFromMisp({ feed: input.feed, json: input.source.json, isPublicSuffix });
         break;
       case "plain":
         built = buildFeed({ feed: input.feed, text: input.source.text, defaultKind: input.source.defaultKind, isPublicSuffix });
