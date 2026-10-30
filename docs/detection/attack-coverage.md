@@ -161,4 +161,9 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1562 | 3 | `rules:crates/rules/src/state.rs` |
 | T1562.002 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1564.004 | 3 | `rules:crates/rules/src/stateless.rs` |
+| T1566.001 | 3 | `rules:crates/rules/src/state.rs` |
+
+## Not verified
+
+- T1566.001 (mail attachment) is tagged only for a mark whose quarantine agent is `Mail` (Apple Mail). That string is the **expected** one and is **not yet captured**: no `com.apple.quarantine` value from a saved Mail attachment is in the repo, and if a Mac shows another string the tag does not fire. Outlook is **not verified** either. Hypothesis: the opened attachment is copied under the `Content.Outlook` folder; whether it carries a mark, and which process writes it, is still to be observed. Thunderbird is not verified. Neither is in the rule until a lab capture shows the mark and its writer (#376).
 
