@@ -91,6 +91,43 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
 - **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
   filters other than equality, ordering other than by time, compaction-aware reading.
 
+## Rebuilding prevalence from the lake (issue #77, `lib/prevalence-rebuild.ts`)
+
+`rebuildSightings(reader, { tenantId, from, to })` folds a tenant's `exec` and `dns_query` events into
+per-agent sightings with the **same two functions ingest uses** (`extractObservations`,
+`aggregateSightings`), so when the counting rules change the rebuild changes with them.
+`compareSightings(rebuilt, table)` says, per `(agent, kind, key)`, what is only in the rebuild, only in
+the table, or in both with another count or time. **It reads and compares; nothing writes the table.**
+Whether a rebuild may replace, merge into or only be checked against the counters is the owner's call
+(`issues/issue-77.md`, "Questions").
+
+- **Why a scan and not `queryLake`.** A query returns at most 1000 rows, and one host's day is far more:
+  paging by day would silently drop the rest of a busy day. `scanLake` (`lib/lake-query.ts`) reads the
+  same files with the same scope checks and the same two isolation layers, with no row limit, one file at
+  a time, and hands each file's rows to a callback. Memory is the distinct `(agent, kind, key)` triples
+  (capped at the table's own 5,000,000 per tenant), not the events.
+- **What it costs.** Every `exec` and `dns_query` file in range is read (other types are pruned by their
+  path): one `list` of the tenant's prefix plus one `get` and one Parquet decode per file, and with no
+  compaction a day is as many files as the writer flushed. A range is at most 366 days per call; a longer
+  history is several calls folded by `mergeSightings`. Not measured at fleet volume or on an object store
+  (there is no S3 reader yet). A scan reads at most 50,000 files; past that `complete` is false.
+- **`complete` is the only result to trust.** It is false when files were left unread (`scan.filesSkipped`)
+  or the sighting cap was reached; `skipped` counts events whose text was not JSON (their observations
+  are lost, not guessed).
+- **Where it cannot equal the table, by construction:** events the lake never held (the writer drops those
+  past the tenant's retention and keeps nothing at retention 0; `prune-lake` deletes old days; the counters
+  have their own 180-day retention); observations ingest counted from `POST /api/ingest/detection`, which
+  is not a lake input; and the duplicate a crash between the file writes and the commit can leave (see
+  below), which counts twice in a rebuild. A comparison over a range that does not reach back to the
+  table's oldest sighting is expected to differ, and the diff says where.
+- **Proven:** unit tests over a hand-built lake against a model of ingest's folding, and an integration
+  test on Postgres 15 that uploads through the real ingest route (two hosts, several days, a Windows
+  path, a domain, an event with no usable time, a future one), drains the queue and finds the rebuilt
+  counters identical to the table row for row. **Not proven:** an object store, fleet volume, a lab host.
+- **The graph is not rebuilt.** `lib/graph.ts` is computed on read from detections and sightings, so a
+  pivot over rebuilt sightings is the same function over other rows; a graph projection from lake events
+  would be a new store (see `server/graph/README.md`).
+
 ## What is not built
 
 - The S3 store (the ADR makes the S3 API the interface; MinIO in the compose). Only the directory
