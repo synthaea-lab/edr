@@ -48,7 +48,7 @@ account logs on to a host after the window. **No lab run is claimed.**
 - **The baseline is in memory.** An agent restart, an update included, begins a new learning window,
   and an account that logs on during a window is learned without an alert, an intruder's included.
   No state is read from the host (`last`, the Security log) to seed it.
-- **Odd hours are a second rule**, ODD-HOUR-LOGON below, and need the host's UTC offset in `agent.toml`.
+- **Odd hours are a second rule**, ODD-HOUR-LOGON below, and need the host's local time: the platform's time zone, or the operator's UTC offset in `agent.toml`.
 - **Expected false positives**: a domain controller or file server (every user's first logon), a new
   hire, a service account first used after an install, a reinstalled host. Hence Low. The baseline
   holds 16 384 accounts; past that an evicted account is first-seen again.
@@ -64,8 +64,23 @@ the same generic-account list, but no learning window: a logon of a non-generic 
 address when there is one and the local hour. One alert per account per 8 hours, so a night's
 reconnects are one finding. It is independent of FIRST-SEEN-LOGON: a new account at night raises both.
 
-**It is off unless the operator sets the host's UTC offset.** The event's timestamp is UTC and nothing
-else in the agent knows the local time, so the rule has no hour to judge without it:
+**The host's local time comes from the platform's time zone, and the rule is on only if a zone is found
+(#1088).** The event's timestamp is UTC, so the rule converts it with the zone's rules **at that
+instant**: a logon either side of a daylight-saving change lands on the hour the host's clock showed.
+The agent asks the platform at startup (`enrich::localzone`):
+
+| Platform | Source | Found when |
+| --- | --- | --- |
+| Linux, macOS | `tzset` + `localtime_r` (`TZ`, `/etc/localtime`, the zoneinfo file); `tzset` is called on every conversion, so a zone changed while the agent runs is followed | `TZ` is set or `/etc/localtime` exists |
+| Windows | `GetDynamicTimeZoneInformation` + `SystemTimeToTzSpecificLocalTimeEx` (year-aware rules) | always (a zone setting always exists) |
+
+**No zone database is bundled**: the platform has one and keeps it current; the cost is three small
+platform calls and an answer only as right as the host's own zone setting. A Unix host with no `TZ` and
+no `/etc/localtime` (a minimal container) is silently UTC to the C library, which no one chose, so it
+counts as **no zone** and the rule stays off. A source that cannot convert the present is refused the
+same way, and an instant the source cannot convert is not judged (no fallback to UTC).
+
+The operator's fixed offset **overrides** the zone, for a host whose zone is wrong or absent:
 
 ```toml
 [detection]
@@ -73,20 +88,27 @@ utc_offset_minutes = 120   # UTC+2; -300 for UTC-5. Between -720 and 840, checke
 ```
 
 An offset no timezone has fails the config load (fail fast, ADR-0013); `RuleState::set_local_utc_offset_minutes`
-refuses it too and the rule stays off.
+refuses it too. A fixed offset does not follow daylight saving.
 
 Provisional, and stated:
 
 - **07:00 to 20:00 and 8 hours are choices, not measurements.** No weekends, no shifts, no per-host
   profile: a host used around the clock, on-call staff and night shifts alert every night. That is why
   the rule is Low and why it stays off by default.
-- **A fixed offset.** It does not follow daylight saving: the rule is an hour out for half the year on
-  a host that changes, unless the operator changes the setting with the clocks. Reading the host's own
-  zone would be a platform query in a sensor crate; not built.
+- **On by default wherever a zone is found** (a change of #1088; it was off until the operator set an
+  offset): the rule now alerts on hosts nobody configured. It stays Low, once per account per 8 hours.
+- **The zone is the host's setting.** A server left on UTC is judged in UTC; a laptop whose user travels
+  is judged by the zone the OS shows at that moment.
+- A fixed `utc_offset_minutes` does not follow daylight saving: set it only to override.
 - **Windows 4624 includes service and batch logons**, so a named service account that logs on at night
   by schedule alerts. Generic accounts are excluded, a named service account is not.
 - The hour is read from the event's own timestamp (event time), so a replayed journal is judged by when
   the logon happened, not when it was read.
 - **No lab run is claimed**: unit tests only (`crates/rules/src/tests/logon.rs`, five hand mutations
-  each failing a named test; `crates/config` tests for the offset). Not run: the agent with a real
-  `agent.toml`, a live sshd or 4624 logon at night, Windows or macOS clippy.
+  each failing a named test; `crates/config` tests for the offset). #1088 adds the zone tests: the
+  rule with a stand-in zone at fixed instants either side of both 2026 changes, the override in either
+  order, a zone with no answer; and `crates/enrich/tests/localzone.rs`, the real `localtime_r` under POSIX
+  `TZ` rules either side of the EU and US changes (Unix only). Not run: the agent with a real
+  `agent.toml`, a live sshd or 4624 logon at night, **the Windows conversion (compiled for
+  `x86_64-pc-windows-gnu`, never run)**, Windows or macOS clippy beyond `enrich`. Per-OS verification
+  is #1090 (Linux), #1091 (Windows), #1092 (macOS).
