@@ -274,6 +274,15 @@ describe("POST /api/ingest/detection", () => {
       }
     });
 
+    it("counts feed names in characters, as the agent cuts them", async () => {
+      // 64 non-BMP characters: within the agent's 64-char cut, 128 UTF-16 units.
+      const feed = "😀".repeat(64);
+      const source = { engine: "ioc", kind: "domain", indicator: "a.example", feed, feed_version: feed };
+      expect((await post(structured({ source }))).status).toBe(200);
+      const over = { ...source, feed: "😀".repeat(65) };
+      expect((await post(structured({ source: over }))).status).toBe(400);
+    });
+
     it("refuses attributions past the model bounds", async () => {
       const ml = { engine: "ml", tier: 1, model_id: "m", model_version: "1" };
       const attribution = (feature: string) => ({ feature, value: 1, contribution: 0.1 });

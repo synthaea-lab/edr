@@ -35,6 +35,17 @@ export function truncateUtf8(value: string, maxBytes: number): string {
 const truncatedString = (maxBytes: number) =>
   z.string().min(1).transform((value) => truncateUtf8(value, maxBytes));
 
+// The agent cuts feed names and versions at 64 Rust `char`s (`label`, agent/src/ioc.rs), which are
+// code points; zod's `.max` counts UTF-16 units, so a non-BMP name the agent let through would be
+// refused here and its detection lost.
+const MAX_FEED_LABEL_CHARS = 64;
+const FeedLabelSchema = z
+  .string()
+  .min(1)
+  .refine((value) => Array.from(value).length <= MAX_FEED_LABEL_CHARS, {
+    message: `at most ${MAX_FEED_LABEL_CHARS} characters`,
+  });
+
 const SourceSchema = z.discriminatedUnion("engine", [
   z.object({ engine: z.literal("rule"), rule_id: z.string().min(1).max(256) }),
   z.object({ engine: z.literal("sigma"), rule_id: z.string().min(1).max(256) }),
@@ -52,9 +63,8 @@ const SourceSchema = z.discriminatedUnion("engine", [
     kind: z.enum(["sha256", "sha1", "md5", "ip", "domain"]),
     // The longest canonical indicator is a 253-character domain.
     indicator: z.string().min(1).max(256),
-    // The agent already cuts feed metadata at 64 (docs/detection/ioc-matching.md).
-    feed: z.string().min(1).max(64),
-    feed_version: z.string().min(1).max(64),
+    feed: FeedLabelSchema,
+    feed_version: FeedLabelSchema,
     reference: z.string().min(1).max(2048).optional(),
   }),
 ]);
