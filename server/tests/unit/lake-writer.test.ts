@@ -182,26 +182,44 @@ describe("enqueueLakeBatch", () => {
   });
 });
 
-type Batch = { id: string; tenantId: string; agentId: string; receivedAt: Date; events: unknown };
+type Batch = { id: string; tenantId: string; agentId: string; receivedAt: Date; events: unknown; flushId?: string | null };
 
 /** The slice of Prisma `drainLakeQueue` uses, backed by arrays. */
 function fakePrisma(batches: Batch[], tenants: { id: string; lakeRetentionDays: number }[]) {
-  const state = { batches: [...batches], committed: true };
+  const state = { batches: batches.map((b) => ({ ...b, flushId: b.flushId ?? null })), lockedFlushes: new Set<string>() };
+  const lakeBatch = {
+    findMany: vi.fn(async ({ where }: { where: { flushId?: string | { not: null } } }) => {
+      const wanted = where.flushId;
+      const rows = state.batches.filter((b) => (typeof wanted === "string" ? b.flushId === wanted : b.flushId !== null));
+      // `distinct: ["flushId"]` is only asked for with `select: { flushId }`.
+      return typeof wanted === "string" ? rows : rows.filter((b, i) => rows.findIndex((o) => o.flushId === b.flushId) === i);
+    }),
+    updateMany: vi.fn(async ({ where, data }: { where: { id: { in: string[] } }; data: { flushId: string } }) => {
+      for (const b of state.batches) if (where.id.in.includes(b.id)) b.flushId = data.flushId;
+    }),
+    deleteMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
+      state.batches = state.batches.filter((b) => !where.id.in.includes(b.id));
+    }),
+    count: vi.fn(async () => state.batches.length),
+  };
   const tx = {
-    $queryRaw: vi.fn(async () => state.batches.map((b) => ({ id: b.id }))),
-    lakeBatch: {
-      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => state.batches.filter((b) => where.id.in.includes(b.id))),
-      deleteMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
-        state.batches = state.batches.filter((b) => !where.id.in.includes(b.id));
-      }),
-      count: vi.fn(async () => state.batches.length),
-    },
+    // The unassigned batches, or the advisory lock on a flush.
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join("").includes("pg_try_advisory_xact_lock")) {
+        const flush = String(values[0]);
+        const ok = !state.lockedFlushes.has(flush);
+        return [{ ok }];
+      }
+      return state.batches.filter((b) => b.flushId === null).map((b) => ({ id: b.id }));
+    }),
+    lakeBatch,
     tenant: { findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => tenants.filter((t) => where.id.in.includes(t.id))) },
   };
   const prisma = {
-    // A real transaction rolls back when the callback throws; the fake restores the rows.
+    lakeBatch,
+    // A real transaction rolls back when the callback throws; the fake restores the rows and their flush ids.
     $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => {
-      const before = [...state.batches];
+      const before = state.batches.map((b) => ({ ...b }));
       try {
         return await fn(tx);
       } catch (e) {
@@ -385,14 +403,73 @@ describe("drainLakeQueue", () => {
     expect(state.batches).toHaveLength(1);
   });
 
-  it("names a file after the batches it holds, so a retry over the same batches rewrites the same file", async () => {
-    const make = () =>
-      fakePrisma([{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()] }], [{ id: "t1", lakeRetentionDays: 90 }]);
-    const first = new MemoryStore();
-    const second = new MemoryStore();
-    await drainLakeQueue(make().prisma, first);
-    await drainLakeQueue(make().prisma, second);
-    expect(Array.from(first.files.keys())).toEqual(Array.from(second.files.keys()));
+  it("keeps a failed flush's batches and id, and the retry writes the same file under the same name (#1093)", async () => {
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec({ image_path: "/e/1" })] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    await expect(drainLakeQueue(prisma, { put: async () => Promise.reject(new Error("disk full")) })).rejects.toThrow("disk full");
+    // The assignment committed before the write; the failed write left the batch queued under it.
+    expect(state.batches).toHaveLength(1);
+    const flushId = state.batches[0].flushId;
+    expect(flushId).not.toBeNull();
+    const store = new MemoryStore();
+    await drainLakeQueue(prisma, store);
+    expect(Array.from(store.files.keys())).toEqual([expect.stringContaining(`/${flushId!.replace(/-/g, "")}.parquet`)]);
+    expect(state.batches).toHaveLength(0);
+  });
+
+  it("does not let a batch that arrives between a failed drain and its retry change what the failed flush holds (#1093)", async () => {
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec({ image_path: "/e/1" })] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    // The first file reaches the store, then the drain dies: the file stays, the batch stays queued.
+    const survivor = new MemoryStore();
+    let puts = 0;
+    await expect(
+      drainLakeQueue(prisma, {
+        put: async (key: string, body: Uint8Array) => {
+          await survivor.put(key, body);
+          if (++puts === 1) throw new Error("crash");
+        },
+      })
+    ).rejects.toThrow("crash");
+    state.batches.push({ id: "b2", tenantId: "t1", agentId: "a1", receivedAt: new Date(RECEIVED.getTime() + 1000), events: [exec({ image_path: "/e/2" })], flushId: null });
+    await drainLakeQueue(prisma, survivor);
+
+    const seen: unknown[] = [];
+    for (const bytes of Array.from(survivor.files.values())) seen.push(...(await readParquet(bytes)).map((r) => r.image_path));
+    expect(seen.sort()).toEqual(["/e/1", "/e/2"]);
+    // The retried flush replaced its own file; the new batch got a different flush and its own file.
+    expect(survivor.files.size).toBe(2);
+    expect(new Set(survivor.files.keys()).size).toBe(2);
+  });
+
+  it("assigns a new flush to batches that arrive after another flush was assigned", async () => {
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()] }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    await expect(drainLakeQueue(prisma, { put: async () => Promise.reject(new Error("down")) })).rejects.toThrow("down");
+    state.batches.push({ id: "b2", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()], flushId: null });
+    await expect(drainLakeQueue(prisma, { put: async () => Promise.reject(new Error("down")) })).rejects.toThrow("down");
+    const [a, b] = state.batches;
+    expect(a.flushId).not.toBeNull();
+    expect(b.flushId).not.toBeNull();
+    expect(a.flushId).not.toBe(b.flushId);
+  });
+
+  it("skips a flush another drain holds, and writes nothing for it", async () => {
+    const { prisma, state } = fakePrisma(
+      [{ id: "b1", tenantId: "t1", agentId: "a1", receivedAt: RECEIVED, events: [exec()], flushId: "held" }],
+      [{ id: "t1", lakeRetentionDays: 90 }]
+    );
+    state.lockedFlushes.add("held");
+    const store = new MemoryStore();
+    expect(await drainLakeQueue(prisma, store)).toMatchObject({ batches: 0, files: 0, remaining: 1 });
+    expect(store.files.size).toBe(0);
+    expect(state.batches).toHaveLength(1);
   });
 
   it("takes at most the requested number of batches", async () => {

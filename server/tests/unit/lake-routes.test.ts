@@ -7,7 +7,7 @@ import { NextRequest } from "next/server";
 const db = vi.hoisted(() => ({
   agent: { findUnique: vi.fn(), update: vi.fn() },
   agentHealth: { findUnique: vi.fn(), upsert: vi.fn() },
-  lakeBatch: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
+  lakeBatch: { create: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn(), count: vi.fn() },
   tenant: { findMany: vi.fn() },
   lakeDeletion: { create: vi.fn(), update: vi.fn() },
   $executeRaw: vi.fn(),
@@ -131,12 +131,24 @@ describe("GET /api/cron/write-lake", () => {
   it("drains the queue into files under LAKE_DIR and reports the counts", async () => {
     process.env.LAKE_DIR = lakeDir;
     process.env.LAKE_WRITER_MAX_BATCHES = "5";
-    const batch = { id: "b1", tenantId: "t1", agentId: "a1", receivedAt: new Date(NOW), events: [exec()] };
+    const batch = { id: "b1", tenantId: "t1", agentId: "a1", receivedAt: new Date(NOW), events: [exec()], flushId: "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f" };
+    // The assignment select answers b1; the advisory lock of the flush is granted.
+    const raw = vi.fn(async (strings: TemplateStringsArray) =>
+      strings.join("").includes("pg_try_advisory_xact_lock") ? [{ ok: true }] : [{ id: "b1" }]
+    );
     const tx = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: "b1" }]),
-      lakeBatch: { findMany: vi.fn().mockResolvedValue([batch]), deleteMany: vi.fn().mockResolvedValue({ count: 1 }), count: vi.fn().mockResolvedValue(0) },
+      $queryRaw: raw,
+      lakeBatch: {
+        findMany: vi.fn().mockResolvedValue([batch]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        count: vi.fn().mockResolvedValue(0),
+      },
       tenant: { findMany: vi.fn().mockResolvedValue([{ id: "t1", lakeRetentionDays: 90 }]) },
     };
+    // The unassigned-and-assigned lookups outside a transaction.
+    db.lakeBatch.findMany.mockResolvedValue([{ flushId: "0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f" }]);
+    db.lakeBatch.count.mockResolvedValue(0);
     db.$transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
     const res = await call();
     expect(res.status).toBe(200);

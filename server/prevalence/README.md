@@ -62,9 +62,11 @@ Not built: publishing the snapshot to agents. The code lives with the rest of th
   case page showing "seen on 1 host" for a transition one host ran and "seen on 2 hosts" for one
   both ran (`lab/scenarios/prevalence-lineage.sh`).
 
-**Known limits:** the raw events are not kept anywhere (the lake, `server/datalake`,
-doesn't exist), so prevalence cannot be rebuilt from history if the counting rules
-change. The triage counts include the event that raised the detection, so "seen on 1
+**Known limits:** the counters can be **recomputed and compared** from the lake
+(`lib/prevalence-rebuild.ts`, `server/datalake/README.md`), which proves the fold is a pure function
+of the events within the lake's retention; there is no apply path (replace or merge into the table is
+an open decision, `issues/issue-77.md`), and a rebuild cannot reach events the lake dropped or
+deleted, so prevalence still cannot be rebuilt past the lake's retention if the counting rules change. The triage counts include the event that raised the detection, so "seen on 1
 host" means only this host has shown it.
 
 Decided (ADR-0020, accepted): the correlator evidence and the ML rarity feature, both fed
