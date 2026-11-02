@@ -89,14 +89,15 @@ start that follows can be seen. It alerts, Medium, unless the stop is explained:
 | --- | --- | --- |
 | an exec that stopped the same unit (the exec rule above already alerted: no second alert) | up to 120 s before the record (a stop job can last `DefaultTimeoutStopSec`, 90 s), 5 s after for clock skew | `systemctl stop`, `disable --now`, `mask --now`, `service X stop`, `/etc/init.d/X stop` |
 | a restart or a start of the same unit | a restart exec like the one above; a start up to 120 s after the stop (a package upgrade stops in its pre-remove script and starts in post-install) | `systemctl restart|try-restart|start|reload-or-restart|enable --now`, `service`, `invoke-rc.d`, `deb-systemd-invoke` |
-| the host shutting down | up to 300 s after the exec | `shutdown` (not `-k`, `-c`), `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
+| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
 
 The windows are choices, not measurements (no fleet data), and are named constants in the module.
 
 Stated gaps: **no shutdown signal exists in the stream** (the journal sensor reports unit stops of
 the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
 exec that asks for it; one asked another way (power button, logind from a desktop session, an ACPI
-request) or delayed past the window (`shutdown +10`) has its stops alert. A start that no exec
+request) has its stops alert.
+A **scheduled** shutdown (`shutdown +60`, `shutdown 23:00`, a bare `shutdown` which is `+1`, `systemctl reboot --when=…`) stops nothing yet and does not open the window, so it cannot cloak a stop; `shutdown -c`/`--cancel` (and `--when=cancel`) closes a window already open. The cloak `shutdown +99`, stop the tool, `shutdown -c` is therefore handled, and a scheduled shutdown that does fire has the stops of its own run alert (the cost of not trusting a command that only promises one). A start that no exec
 shows (systemd's own `Restart=` after a crash, a socket activation) is not seen as one, so the
 stop that preceded it alerts. A judged stop waits for a later exec or file-open event to move the
 clock, so on a host with none the alert is late. A stop over D-Bus by an administrator is
