@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, rename, rm, writeFile } from "fs/promises";
+import { access, mkdir, rename, rm, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
 import { z } from "zod";
@@ -43,7 +43,15 @@ async function stage(artifactsDir: string, { entry, bytes }: StagedArtifact): Pr
   const tmp = `${dest}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmp, bytes);
-    await rename(tmp, dest);
+    try {
+      await rename(tmp, dest);
+    } catch (err) {
+      // Windows refuses to replace a file another rename is replacing (EPERM). The name is the
+      // hash of the bytes, so an existing `dest` already holds this content.
+      await access(dest).catch(() => {
+        throw err;
+      });
+    }
   } finally {
     // Gone after a successful rename; left behind only when the write or the rename failed.
     await rm(tmp, { force: true });
