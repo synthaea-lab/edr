@@ -67,7 +67,7 @@ reconnects are one finding. It is independent of FIRST-SEEN-LOGON: a new account
 **The host's local time comes from the platform's time zone, and the rule is on only if a zone is found
 (#1088).** The event's timestamp is UTC, so the rule converts it with the zone's rules **at that
 instant**: a logon either side of a daylight-saving change lands on the hour the host's clock showed.
-The agent asks the platform at startup (`enrich::localzone`):
+The agent asks the platform at startup (`agent/src/commands/localzone.rs`):
 
 | Platform | Source | Found when |
 | --- | --- | --- |
@@ -107,7 +107,7 @@ Provisional, and stated:
 - **No lab run is claimed**: unit tests only (`crates/rules/src/tests/logon.rs`, five hand mutations
   each failing a named test; `crates/config` tests for the offset). #1088 adds the zone tests: the
   rule with a stand-in zone at fixed instants either side of both 2026 changes, the override in either
-  order, a zone with no answer; and `crates/enrich/tests/localzone.rs`, the real `localtime_r` under POSIX
+  order, a zone with no answer; and the module's own test in the agent, the real `localtime_r` under POSIX
   `TZ` rules either side of the EU and US changes (Unix only). Not run: the agent with a real
   `agent.toml`, a live sshd or 4624 logon at night, **the Windows conversion (compiled for
   `x86_64-pc-windows-gnu`, never run)**, Windows or macOS clippy beyond `enrich`. Per-OS verification
