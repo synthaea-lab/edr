@@ -90,18 +90,55 @@ utc_offset_minutes = 120   # UTC+2; -300 for UTC-5. Between -720 and 840, checke
 An offset no timezone has fails the config load (fail fast, ADR-0013); `RuleState::set_local_utc_offset_minutes`
 refuses it too. A fixed offset does not follow daylight saving.
 
+## Calibration: the window, shifts, service accounts (#1089)
+
+**The window is `[detection] work_hours`, 07:00 to 20:00 by default.** The default is a plain working day,
+a choice with one weak measurement behind it (below), and is named `WORK_HOURS_LOCAL` in
+`crates/rules/src/exclusions.rs`. An operator whose people do not work those hours declares theirs:
+
+```toml
+[detection]
+work_hours = [22, 6]                          # a night shift: 22:00 to 06:00 is ordinary, the day is not
+odd_hour_exempt_accounts = ["svc_backup", "CORP\\oncall"]
+```
+
+`work_hours = [start, end]`: `start` 0 to 23, `end` 1 to 24, different; `start` greater than `end` wraps
+midnight. `odd_hour_exempt_accounts` lists the accounts whose odd-hour logons are expected (on-call staff, the
+service or batch account of a schedule): matched without case, a bare name also matches that account under any
+domain, a `DOMAIN\name` entry only that domain, at most 64. **Both are empty by default and only the
+odd-hour rule reads them**: FIRST-SEEN-LOGON still sees an exempt account, and nothing is exempt until the
+operator names it. Both fail the config load when malformed (ADR-0013); the rules refuse them too.
+
+**Measurement (one host, stated with its limits).** `last -F` on a Linux workstation (Fedora 43, Europe/Paris),
+2026-10-10 to 2026-11-02: 148 login records of **one account**, 124 on pseudo-terminals and 24 on consoles.
+Local hour: 72 at 09:00, 76 more between 10:00 and 17:00, **12 outside 07:00 to 20:00** (3 at 20:00, 9 at
+21:00), none between 22:00 and 08:00. Weekend days: 20 of 148. Limits: one host, one account, one person's
+working pattern; `wtmp` counts every terminal opened, which the agent does not see as a logon (it sees sshd and PAM
+sessions through the journal); no service or batch account, no Windows host, no macOS host, no logon types. **It
+supports "a workday window removes most of the noise on a workstation" and nothing about servers, shifts,
+Windows or a fleet**; the Windows and macOS measurements are still to do (#1091, #1092).
+
+**What was changed and what was not, with the reason:**
+
+| Case | Decision |
+| --- | --- |
+| Night shifts, on-call staff | **Changed**: the operator declares the window (`work_hours`, overnight wrap) and the on-call accounts. Default window unchanged. |
+| Service or batch logon of a named account | **Changed, by naming**: `odd_hour_exempt_accounts`. Telling them apart by logon type is **not possible** today: `AuthEvent` carries no logon type (the Windows 4624 `LogonType` is read by the sensor and dropped), so it needs a schema field and a version bump; recorded, not done. A heuristic on the name (`svc_`, `svc-`) or on `source_address` being absent was refused: the first blinds the rule for anyone who picks such a name, the second is true of console logons as well. |
+| Weekends | **No change, no safe one.** Counting a weekend day as odd adds an alert for every weekend logon (13 % of the measured records); counting it as ordinary blinds the rule on it. Neither is better than the other without a fleet baseline. Stays an operator concern; M9 fleet anomalies. |
+| A per-account learned pattern | **Not built**: it needs a persisted baseline per account and hour (the FIRST-SEEN baseline is in memory and resets on restart) and a learning window longer than a day to mean anything; an intruder logging on during it is learned silently. M9. |
+
 Provisional, and stated:
 
-- **07:00 to 20:00 and 8 hours are choices, not measurements.** No weekends, no shifts, no per-host
-  profile: a host used around the clock, on-call staff and night shifts alert every night. That is why
-  the rule is Low and why it stays off by default.
+- **07:00 to 20:00 and 8 hours are choices, not measurements** (one weak measurement, above). No
+  weekends and no per-host profile: a host used around the clock alerts every night unless its operator
+  declares `work_hours`; on-call staff and service accounts alert unless named. That is why the rule is Low.
 - **On by default wherever a zone is found** (a change of #1088; it was off until the operator set an
   offset): the rule now alerts on hosts nobody configured. It stays Low, once per account per 8 hours.
 - **The zone is the host's setting.** A server left on UTC is judged in UTC; a laptop whose user travels
   is judged by the zone the OS shows at that moment.
 - A fixed `utc_offset_minutes` does not follow daylight saving: set it only to override.
 - **Windows 4624 includes service and batch logons**, so a named service account that logs on at night
-  by schedule alerts. Generic accounts are excluded, a named service account is not.
+  by schedule alerts until the operator lists it in `odd_hour_exempt_accounts`. Generic accounts are excluded.
 - The hour is read from the event's own timestamp (event time), so a replayed journal is judged by when
   the logon happened, not when it was read.
 - **No lab run is claimed**: unit tests only (`crates/rules/src/tests/logon.rs`, five hand mutations
