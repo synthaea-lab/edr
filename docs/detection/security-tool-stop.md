@@ -97,13 +97,17 @@ not `clamd.service`), and a **restarted tool's new pid for up to 5 seconds** (th
 not watched. A sender in the tool's own unit (its watchdog) is not told apart from an intruder:
 the event has no sender unit. The listed unit names were not checked on a host beyond `auditd`.
 
-**Verified** on the Fedora 43 lab VM (kernel 7.2.9): the verifier accepts the program; a
-`kill -0` raised nothing; `kill -HUP`, `kill -9`, `service auditd stop` and `pkill -x auditd` of
-`auditd` produced one signal event each naming the unit and the exe, and a restarted `auditd` (new
-pid) was watched within the rescan. Captures: `lab/captures/test-1103-20261102/`. **Not verified:**
-a kernel before 6.6 (the Rocky 9 VM, 5.14, needs the static musl build), a real vendor tool other
-than `auditd`, a `tgkill` to a worker thread, a tool in a container, and the volume of
-`signal_generate` on a busy host (the probe exits after one hash lookup for any other target).
+**Verified** on the Fedora 43 lab VM (kernel 7.2.9, the agent built from this branch, observe-only):
+the verifier accepts `raw_signal_generate`; against `auditd`, `kill -0` raised nothing, `kill -HUP`
+produced an event and no alert, `kill -9` alerted High (and escalated), and `service auditd stop`
+(sender `auditctl`), `pkill -x auditd` and a `pidfd_send_signal` (sender `python3`) each alerted
+once with the unit and the exe in the event; a `tgkill` of a **worker thread** (tid 11901 of
+process 11900) was reported under the process id; and a restarted `auditd` (new pid) was watched
+within the rescan, twice. Captures and the driver: `lab/captures/test-1103-20261102/`. **Not
+verified:** a kernel before 6.6 (the Rocky 9 VM, 5.14, needs the static musl build; the program
+is a few instructions, but the budget was not measured), a real vendor tool other than `auditd`,
+a tool in a container, the cgroup v1 layout on a live host, and the volume of `signal_generate`
+on a busy host (the probe exits after one hash lookup for any other target). One VM, one day.
 
 ## `systemctl kill`
 
