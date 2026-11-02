@@ -3,7 +3,7 @@ import { HUNT_STATEMENT_TIMEOUT_MS, HUNT_TRANSACTION_TIMEOUT_MS } from "@/lib/hu
 import { eventWindow, type EventQuery } from "@/lib/hunt-events";
 import { SEARCH_PAGE_SIZE, admitSearch } from "@/lib/hunt-search";
 import { queryLake } from "@/lib/lake-query";
-import type { LakeReader } from "@/lib/lake-store";
+import type { EventArchive } from "@/lib/lake-store";
 
 /**
  * Ad-hoc search over the raw event archive (#933, ADR-0025 point 10): the third source of the hunt
@@ -53,7 +53,7 @@ export type EventPage = {
   to: string;
 };
 
-export type EventSearchOutcome = { status: "ok"; page: EventPage } | { status: "busy" } | { status: "lake_off" };
+export type EventSearchOutcome = { status: "ok"; page: EventPage } | { status: "busy" } | { status: "lake_off" } | { status: "no_reader" };
 
 export type EventSearchOptions = {
   /** Test seam: a shorter time limit. */
@@ -65,18 +65,21 @@ export type EventSearchOptions = {
 const cut = (value: string | null): string | null => (value === null ? null : value.slice(0, FIELD_MAX));
 
 /**
- * Runs one search of the archive for `tenantId` as of `now`. `reader` is null when the archive is
- * not available (the lake is off): `lake_off`, which the API answers with a 503.
+ * Runs one search of the archive for `tenantId` as of `now`. `archive` says what can be read: `off`
+ * is `lake_off` (the API answers 503), and `no_reader` is `no_reader` (the lake is on but its store,
+ * an S3 bucket, has no reader yet: a 501). Neither opens a transaction or takes a slot.
  */
 export async function searchEventsWithinLimit(
   prisma: PrismaClient,
-  reader: LakeReader | null,
+  archive: EventArchive,
   tenantId: string,
   query: EventQuery,
   now: Date = new Date(),
   options: EventSearchOptions = {}
 ): Promise<EventSearchOutcome> {
-  if (reader === null) return { status: "lake_off" };
+  if (archive.state === "off") return { status: "lake_off" };
+  if (archive.state === "no_reader") return { status: "no_reader" };
+  const { reader } = archive;
   const timeoutMs = options.timeoutMs ?? HUNT_STATEMENT_TIMEOUT_MS;
   const { from, to } = eventWindow(query, now);
   return prisma.$transaction(

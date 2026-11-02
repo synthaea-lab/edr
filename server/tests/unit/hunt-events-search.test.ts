@@ -6,7 +6,7 @@ import type { PrismaClient } from "@prisma/client";
 import { SEARCH_PAGE_SIZE, searchFailure } from "@/lib/hunt-search";
 import { FIELD_MAX, searchEventsWithinLimit } from "@/lib/hunt-events-search";
 import { parseEventQuery } from "@/lib/hunt-events";
-import { FsLakeStore, type LakeReader } from "@/lib/lake-store";
+import { eventArchiveFromEnv, FsLakeStore, type EventArchive, type LakeReader } from "@/lib/lake-store";
 import { encodeParquet, lakeKey, lakeRow, type LakeRow as WriterRow } from "@/lib/lake-writer";
 
 const T1 = "tenant-one";
@@ -37,12 +37,19 @@ function fakePrisma(slotFree = true) {
   const prisma = { $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)) } as unknown as PrismaClient;
   return { prisma, tx };
 }
+const ready = (reader: LakeReader): EventArchive => ({ state: "ready", reader });
 const query = (over: Record<string, unknown> = {}) => parseEventQuery({ kind: "events", version: 1, lastDays: 3, ...over });
 
 describe("searchEventsWithinLimit", () => {
   it("answers lake_off, without opening a transaction, when there is no reader", async () => {
     const { prisma } = fakePrisma();
-    expect(await searchEventsWithinLimit(prisma, null, T1, query(), NOW)).toEqual({ status: "lake_off" });
+    expect(await searchEventsWithinLimit(prisma, { state: "off" }, T1, query(), NOW)).toEqual({ status: "lake_off" });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("answers no_reader, without opening a transaction, when the lake is on but its store has no reader", async () => {
+    const { prisma } = fakePrisma();
+    expect(await searchEventsWithinLimit(prisma, { state: "no_reader" }, T1, query(), NOW)).toEqual({ status: "no_reader" });
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
@@ -50,13 +57,13 @@ describe("searchEventsWithinLimit", () => {
     const list = vi.fn(async () => []);
     const reader: LakeReader = { list, get: async () => new Uint8Array() };
     const { prisma } = fakePrisma(false);
-    expect(await searchEventsWithinLimit(prisma, reader, T1, query(), NOW)).toEqual({ status: "busy" });
+    expect(await searchEventsWithinLimit(prisma, ready(reader), T1, query(), NOW)).toEqual({ status: "busy" });
     expect(list).not.toHaveBeenCalled();
   });
 
   it("takes the slot before it reads, from the same two locks as the other sources", async () => {
     const { prisma, tx } = fakePrisma();
-    await searchEventsWithinLimit(prisma, store, T1, query(), NOW);
+    await searchEventsWithinLimit(prisma, ready(store), T1, query(), NOW);
     const sql = (tx.$queryRaw.mock.calls[0] as unknown as [{ sql: string; values: unknown[] }])[0];
     expect(sql.sql).toContain("pg_try_advisory_xact_lock");
     expect(sql.values).toEqual([`hunt_search:${T1}:0`]);
@@ -67,7 +74,7 @@ describe("searchEventsWithinLimit", () => {
     await put(T1, "2026-10-30", "exec", "a", [row("a2", "2026-10-30T09:00:00Z", "exec", { path: "/tmp/x", sha256: "b".repeat(64) })]);
     await put(T1, "2026-10-20", "exec", "a", [row("a3", "2026-10-20T09:00:00Z", "exec")]); // out of a 3-day window
     const { prisma } = fakePrisma();
-    const out = await searchEventsWithinLimit(prisma, store, T1, query(), NOW);
+    const out = await searchEventsWithinLimit(prisma, ready(store), T1, query(), NOW);
     expect(out.status).toBe("ok");
     if (out.status !== "ok") return;
     expect(out.page).toMatchObject({ source: "events", truncated: false, incomplete: false, from: "2026-10-28", to: "2026-10-30" });
@@ -89,7 +96,7 @@ describe("searchEventsWithinLimit", () => {
     await put(T1, "2026-10-30", "connect", "a", [row("a1", "2026-10-30T03:00:00Z", "connect", { daddr: "203.0.113.9" })]);
     const { prisma } = fakePrisma();
     const rowsOf = async (q: ReturnType<typeof query>) => {
-      const out = await searchEventsWithinLimit(prisma, store, T1, q, NOW);
+      const out = await searchEventsWithinLimit(prisma, ready(store), T1, q, NOW);
       return out.status === "ok" ? out.page.rows.map((r) => r.agentId + ":" + r.type) : null;
     };
     expect(await rowsOf(query({ types: ["connect"] }))).toEqual(["a1:connect"]);
@@ -101,7 +108,7 @@ describe("searchEventsWithinLimit", () => {
     const rows = Array.from({ length: SEARCH_PAGE_SIZE + 10 }, (_, i) => row(`a${i}`, `2026-10-30T${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00Z`, "exec"));
     await put(T1, "2026-10-30", "exec", "a", rows);
     const { prisma } = fakePrisma();
-    const out = await searchEventsWithinLimit(prisma, store, T1, query(), NOW);
+    const out = await searchEventsWithinLimit(prisma, ready(store), T1, query(), NOW);
     if (out.status !== "ok") throw new Error("expected ok");
     expect(out.page.rows).toHaveLength(SEARCH_PAGE_SIZE);
     expect(out.page.truncated).toBe(true);
@@ -112,7 +119,7 @@ describe("searchEventsWithinLimit", () => {
   it("cuts each text field of a row to FIELD_MAX", async () => {
     await put(T1, "2026-10-30", "exec", "a", [row("a1", "2026-10-30T01:00:00Z", "exec", { path: "/x".repeat(FIELD_MAX) })]);
     const { prisma } = fakePrisma();
-    const out = await searchEventsWithinLimit(prisma, store, T1, query(), NOW);
+    const out = await searchEventsWithinLimit(prisma, ready(store), T1, query(), NOW);
     if (out.status !== "ok") throw new Error("expected ok");
     expect(out.page.rows[0].path).toHaveLength(FIELD_MAX);
   });
@@ -123,7 +130,7 @@ describe("searchEventsWithinLimit", () => {
     const asked: string[] = [];
     const wide: LakeReader = { list: async (p) => (asked.push(p), store.list("")), get: (k) => store.get(k) };
     const { prisma } = fakePrisma();
-    const out = await searchEventsWithinLimit(prisma, wide, T1, query(), NOW);
+    const out = await searchEventsWithinLimit(prisma, ready(wide), T1, query(), NOW);
     if (out.status !== "ok") throw new Error("expected ok");
     expect(out.page.rows.map((r) => r.agentId)).toEqual(["mine"]);
     // The listing is bounded one day at a time (#77): every prefix asked is inside this tenant's.
@@ -136,7 +143,7 @@ describe("searchEventsWithinLimit", () => {
     const keys = Array.from({ length: 2005 }, (_, i) => lakeKey(T1, "2026-10-30", "exec", `f${String(i).padStart(5, "0")}`));
     const many: LakeReader = { list: async () => keys.map((key) => ({ key, size: 1 })), get: async () => bytes };
     const { prisma } = fakePrisma();
-    const out = await searchEventsWithinLimit(prisma, many, T1, query(), NOW);
+    const out = await searchEventsWithinLimit(prisma, ready(many), T1, query(), NOW);
     if (out.status !== "ok") throw new Error("expected ok");
     expect(out.page.incomplete).toBe(true);
   });
@@ -152,7 +159,7 @@ describe("searchEventsWithinLimit", () => {
       },
     };
     const { prisma } = fakePrisma();
-    const failed = await searchEventsWithinLimit(prisma, slow, T1, query(), NOW, { timeoutMs: 30 }).catch((e) => e);
+    const failed = await searchEventsWithinLimit(prisma, ready(slow), T1, query(), NOW, { timeoutMs: 30 }).catch((e) => e);
     expect(failed).toMatchObject({ name: "TimeoutError" });
     expect(searchFailure(failed).status).toBe(504);
   });
@@ -163,11 +170,27 @@ describe("searchEventsWithinLimit", () => {
     const { prisma, tx } = fakePrisma();
     tx.$queryRaw.mockImplementation(async () => (order.push("lock"), [{ ok: true }]));
     const reader: LakeReader = { list: (p) => (order.push("list"), store.list(p)), get: (k) => (order.push("get"), store.get(k)) };
-    await searchEventsWithinLimit(prisma, reader, T1, query(), NOW);
+    await searchEventsWithinLimit(prisma, ready(reader), T1, query(), NOW);
     // Lock first, then the listing (one call per day of the range), then the one file read.
     expect(order[0]).toBe("lock");
     expect(order.slice(1).filter((step) => step === "get")).toHaveLength(1);
     expect(order.at(-1)).toBe("get");
     expect(order.slice(1, -1).every((step) => step === "list")).toBe(true);
+  });
+});
+
+describe("eventArchiveFromEnv", () => {
+  it("is off when neither store is configured, empty values included", () => {
+    expect(eventArchiveFromEnv({})).toEqual({ state: "off" });
+    expect(eventArchiveFromEnv({ LAKE_DIR: "", LAKE_S3_BUCKET: "" })).toEqual({ state: "off" });
+  });
+
+  it("has no reader when the lake is an S3 bucket, which is not the same as off", () => {
+    expect(eventArchiveFromEnv({ LAKE_S3_BUCKET: "telemetry" })).toEqual({ state: "no_reader" });
+  });
+
+  it("is ready with a reader on a directory lake", () => {
+    const archive = eventArchiveFromEnv({ LAKE_DIR: "/var/lake" });
+    expect(archive.state).toBe("ready");
   });
 });

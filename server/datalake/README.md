@@ -120,7 +120,10 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   the oldest first), `includeEvent: false` (the `event` column is not read from the file) and `signal`
   (an `AbortSignal` checked before each file, so a caller can bound the time).
 - **The hunt `events` source** (#933, `server/hunt/README.md`, ADR-0025 point 10) is the one caller:
-  `POST /api/hunts/search` with `source: "events"`.
+  `POST /api/hunts/search` with `source: "events"`. It needs a reader, which only `LAKE_DIR` has:
+  with `LAKE_S3_BUCKET` the lake is on and ingest and the writer work, but the search answers `501`
+  ("cannot be searched: the lake is an S3 bucket"), distinct from the `503` of a lake that is off
+  (`eventArchiveFromEnv`, #1105). The S3 reader is the remaining work.
 - **Not built:** time-of-day bounds finer than a day, filters other than equality, ordering other than
   by time, compaction-aware reading, a cursor over the archive.
 
