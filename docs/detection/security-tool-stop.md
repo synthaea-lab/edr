@@ -67,12 +67,38 @@ minute is not maintenance.
 
 - It reads the **command**, not the outcome: a stop that is refused (`sc stop WinDefend` is denied on
   a current Windows), or any stop that does not go through these commands (`kill`, `pkill`,
-  `taskkill`, D-Bus, an API call, `setenforce 0`, `aa-teardown`), is not seen. The journal
-  sensor now reports the **stop of a listed unit** (`FileOpenEvent` with `FLAG_UNIT_STOPPED`, #1085,
-  filtered at the sensor, system manager only, the record's writer checked as PID 1) but names no
-  actor, and no rule consumes it yet (stacked work); and the macOS unified-log tail emits TCC, `sudo` and Gatekeeper records.
+  `taskkill`, D-Bus, an API call, `setenforce 0`, `aa-teardown`), is not seen by this rule. On
+  Linux, the journal sensor reports the **stop of a listed unit** (`FileOpenEvent` with
+  `FLAG_UNIT_STOPPED`, #1085, filtered at the sensor, system manager only, the record's writer
+  checked as PID 1) but names no actor; UNEXPLAINED-UNIT-STOP covers it, below. The macOS
+  unified-log tail emits TCC, `sudo` and Gatekeeper records, no unit lifecycle.
 - A service-name list is a list: a tool not on it is not covered. Windows display names (`net stop
   "Windows Defender Antivirus Service"`) are not matched, only service names.
 - **Expected false positives, hence Medium**: an administrator stopping `auditd` or `clamav-daemon`
   to debug or upgrade, a package script, configuration management, an uninstall of an agent.
   Nothing is excluded by process name.
+
+## UNEXPLAINED-UNIT-STOP (T1562.001, #1085, Linux)
+
+`crates/rules/src/unitstop.rs`. The journal sensor reports a stop of a unit of
+`schema::SECURITY_SERVICES` as a `FileOpenEvent` with `FLAG_UNIT_STOPPED`; the journal names no
+actor. The rule queues each stop and judges it once the stream clock is 120 s past it, so that a
+start that follows can be seen. It alerts, Medium, unless the stop is explained:
+
+| Explained by | Window | Read from |
+| --- | --- | --- |
+| an exec that stopped the same unit (the exec rule above already alerted: no second alert) | up to 120 s before the record (a stop job can last `DefaultTimeoutStopSec`, 90 s), 5 s after for clock skew | `systemctl stop`, `disable --now`, `mask --now`, `service X stop`, `/etc/init.d/X stop` |
+| a restart or a start of the same unit | a restart exec like the one above; a start up to 120 s after the stop (a package upgrade stops in its pre-remove script and starts in post-install) | `systemctl restart|try-restart|start|reload-or-restart|enable --now`, `service`, `invoke-rc.d`, `deb-systemd-invoke` |
+| the host shutting down | up to 300 s after the exec | `shutdown` (not `-k`, `-c`), `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
+
+The windows are choices, not measurements (no fleet data), and are named constants in the module.
+
+Stated gaps: **no shutdown signal exists in the stream** (the journal sensor reports unit stops of
+the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
+exec that asks for it; one asked another way (power button, logind from a desktop session, an ACPI
+request) or delayed past the window (`shutdown +10`) has its stops alert. A start that no exec
+shows (systemd's own `Restart=` after a crash, a socket activation) is not seen as one, so the
+stop that preceded it alerts. A judged stop waits for a later exec or file-open event to move the
+clock, so on a host with none the alert is late. A stop over D-Bus by an administrator is
+indistinguishable from an intruder's, hence Medium. `systemctl stop` run by pid 1 on behalf of
+another process is likewise a record with no actor.
