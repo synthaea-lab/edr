@@ -4,6 +4,7 @@ import { verifyCronRequest } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import {
   GROUPING_BATCH_SIZE,
+  groupingTechnique,
   isRelatedTechnique,
   outranksSeverity,
   withinTimeWindow,
@@ -12,7 +13,13 @@ import {
 interface CandidateCase {
   id: string;
   severity: string;
+  /** `technique` is the grouping tag (`groupingTechnique`), not the stored column. */
   detections: { agentId: string; timestamp: Date; technique: string }[];
+}
+
+/** `meta.techniques` of a detection, if its `meta` is an object at all. */
+function listedTechniques(meta: Prisma.JsonValue): unknown {
+  return typeof meta === "object" && meta !== null && !Array.isArray(meta) ? meta.techniques : undefined;
 }
 
 // Fixed key for a transaction-scoped advisory lock, paired with a per-tenant
@@ -185,14 +192,30 @@ async function groupOneTenant(
   // a false positive here just costs one extra tick that finds nothing left.
   const moreWorkLikely = ungrouped.length === GROUPING_BATCH_SIZE;
 
-  const openCases: CandidateCase[] = await tx.case.findMany({
-    where: { tenantId, status: "open" },
-    select: {
-      id: true,
-      severity: true,
-      detections: { select: { agentId: true, timestamp: true, technique: true } },
-    },
-  });
+  // Only `meta.techniques` is read for the evidence already in open cases: the rest of
+  // `meta` (attributions, further triggering events) is not needed to group.
+  const listedRows = await tx.$queryRaw<{ id: string; techniques: unknown }[]>`
+    SELECT d.id, d.meta->'techniques' AS techniques
+    FROM detections d JOIN cases c ON c.id = d.case_id
+    WHERE c.tenant_id = ${tenantId} AND c.status = 'open'
+  `;
+  const listedById = new Map(listedRows.map((row) => [row.id, row.techniques]));
+  const openCases: CandidateCase[] = (
+    await tx.case.findMany({
+      where: { tenantId, status: "open" },
+      select: {
+        id: true,
+        severity: true,
+        detections: { select: { id: true, agentId: true, timestamp: true, technique: true } },
+      },
+    })
+  ).map((c) => ({
+    ...c,
+    detections: c.detections.map(({ id, ...d }) => ({
+      ...d,
+      technique: groupingTechnique(d.technique, listedById.get(id)),
+    })),
+  }));
 
   const agents = await tx.agent.findMany({
     where: { tenantId },
@@ -207,13 +230,14 @@ async function groupOneTenant(
   const assignments = new Map<string, string[]>();
 
   for (const detection of ungrouped) {
+    const technique = groupingTechnique(detection.technique, listedTechniques(detection.meta));
     const match = openCases.find((c) => {
       if (c.detections.length === 0) {
         return false;
       }
       const caseStart = Math.min(...c.detections.map((d) => d.timestamp.getTime()));
       const sameAgentRelatedTechnique = c.detections.some(
-        (d) => d.agentId === detection.agentId && isRelatedTechnique(d.technique, detection.technique)
+        (d) => d.agentId === detection.agentId && isRelatedTechnique(d.technique, technique)
       );
       return sameAgentRelatedTechnique && withinTimeWindow(new Date(caseStart), detection.timestamp);
     });
@@ -253,7 +277,7 @@ async function groupOneTenant(
     targetCase.detections.push({
       agentId: detection.agentId,
       timestamp: detection.timestamp,
-      technique: detection.technique,
+      technique,
     });
   }
 
