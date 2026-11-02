@@ -1,11 +1,12 @@
 import {
   DeleteObjectsCommand,
   GetBucketVersioningCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
-import { assertSafeKey, LakeNotDeletableError, type DeleteResult, type LakeStore } from "@/lib/lake-store";
+import { assertSafeKey, LakeNotDeletableError, type DeleteResult, type LakeReader, type LakeStore } from "@/lib/lake-store";
 
 /**
  * The lake on an S3-compatible object store (issue #77, ADR-0041): AWS S3, or MinIO in the
@@ -28,6 +29,79 @@ export type S3LakeConfig = {
   prefix?: string;
   client: Pick<S3Client, "send">;
 };
+
+/** Maps lake keys to object keys under the optional prefix; shared by the writer's store and the reader. */
+class S3Keys {
+  readonly prefix: string;
+  constructor(prefix: string | undefined) {
+    const p = (prefix ?? "").replace(/^\/+|\/+$/g, "");
+    if (p !== "") assertSafeKey(p);
+    this.prefix = p;
+  }
+  full(key: string): string {
+    return this.prefix === "" ? key : `${this.prefix}/${key}`;
+  }
+  /** The `Prefix` of a listing for a lake prefix, or undefined for the whole bucket. */
+  listPrefix(prefix: string): string | undefined {
+    const wanted = this.full(prefix);
+    return wanted === "" ? undefined : this.prefix !== "" && prefix === "" ? `${this.prefix}/` : wanted;
+  }
+  strip(objectKey: string): string {
+    return objectKey.slice(this.prefix === "" ? 0 : this.prefix.length + 1);
+  }
+}
+
+/**
+ * The query side of the lake on S3 (issue #1105, ADR-0041, decision 4). It is its own class, built on
+ * its own client, and can only issue `ListObjectsV2` and `GetObject`: it has no write method to
+ * misuse, and the credentials it is given should be read-only (`s3:ListBucket`, `s3:GetObject`),
+ * ideally scoped to a tenant prefix, never the writer's.
+ */
+export class S3LakeReader implements LakeReader {
+  private readonly bucket: string;
+  private readonly keys: S3Keys;
+  private readonly client: Pick<S3Client, "send">;
+
+  constructor(config: S3LakeConfig) {
+    if (!config.bucket) throw new Error("S3LakeReader needs a bucket");
+    this.bucket = config.bucket;
+    this.keys = new S3Keys(config.prefix);
+    this.client = config.client;
+  }
+
+  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
+    if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
+    const limit = opts.limit;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
+    const objectPrefix = this.keys.listPrefix(prefix);
+    const out: { key: string; size: number }[] = [];
+    let token: string | undefined;
+    do {
+      // S3 lists in key order, so with a limit the first `limit` keys are the answer: ask for no more than are still wanted.
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: objectPrefix,
+          ContinuationToken: token,
+          MaxKeys: limit === undefined ? undefined : limit - out.length,
+        })
+      );
+      for (const object of page.Contents ?? []) {
+        if (object.Key === undefined) continue;
+        out.push({ key: this.keys.strip(object.Key), size: Number(object.Size ?? 0) });
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token !== undefined && (limit === undefined || out.length < limit));
+    return out.sort((a, b) => (a.key < b.key ? -1 : 1)).slice(0, limit);
+  }
+
+  async get(key: string): Promise<Uint8Array> {
+    assertSafeKey(key);
+    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.keys.full(key) }));
+    if (res.Body === undefined) throw new Error(`Lake object ${key} has no body`);
+    return res.Body.transformToByteArray();
+  }
+}
 
 export class S3LakeStore implements LakeStore {
   private readonly bucket: string;

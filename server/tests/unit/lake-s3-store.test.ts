@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DeleteObjectsCommand, GetBucketVersioningCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, GetBucketVersioningCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { FsLakeStore, LakeNotDeletableError, lakeEnabled } from "@/lib/lake-store";
-import { S3LakeStore } from "@/lib/lake-s3-store";
-import { lakeStoreFromEnv } from "@/lib/lake-env";
+import { S3LakeReader, S3LakeStore } from "@/lib/lake-s3-store";
+import { lakeReaderFromEnv, lakeStoreFromEnv } from "@/lib/lake-env";
 
 /** An in-memory bucket behind the one method the store uses, with pages of two and injectable delete errors (per key, or a whole request failing on its nth call). */
 function fakeBucket(
@@ -22,13 +22,19 @@ function fakeBucket(
       if (command instanceof ListObjectsV2Command) {
         const keys = Array.from(objects.keys()).filter((k) => k.startsWith(c.input.Prefix ?? "")).sort();
         const start = c.input.ContinuationToken ? Number(c.input.ContinuationToken) : 0;
-        const page = keys.slice(start, start + 2);
-        const more = start + 2 < keys.length;
+        const size = Math.min(2, c.input.MaxKeys ?? 2);
+        const page = keys.slice(start, start + size);
+        const more = start + size < keys.length;
         return {
           Contents: page.map((Key) => ({ Key, Size: objects.get(Key)!.byteLength })),
           IsTruncated: more,
-          NextContinuationToken: more ? String(start + 2) : undefined,
+          NextContinuationToken: more ? String(start + size) : undefined,
         };
+      }
+      if (command instanceof GetObjectCommand) {
+        const body = objects.get(c.input.Key);
+        if (body === undefined) throw new Error("NoSuchKey");
+        return { Body: { transformToByteArray: async () => body } };
       }
       if (command instanceof DeleteObjectsCommand) {
         deleteCalls += 1;
@@ -165,6 +171,82 @@ describe("S3LakeStore.assertDeletable", () => {
   it("refuses when the status cannot be read, instead of assuming it is off", async () => {
     const { store: s } = store({ versioning: "denied" });
     await expect(s.assertDeletable()).rejects.toThrow(/s3:GetBucketVersioning/);
+  });
+});
+
+describe("S3LakeReader", () => {
+  const filled = async (prefix?: string) => {
+    const b = fakeBucket();
+    const writer = new S3LakeStore({ bucket: "lake", prefix, client: b.client });
+    for (const n of ["a", "b", "c", "d", "e"]) await writer.put(KEY("t1", "2026-10-29", n), new Uint8Array([n.charCodeAt(0)]));
+    await writer.put(KEY("t2"), new Uint8Array([9]));
+    return { ...b, reader: new S3LakeReader({ bucket: "lake", prefix, client: b.client }) };
+  };
+
+  it("lists a prefix across pages, in key order, with sizes", async () => {
+    const { reader } = await filled();
+    const files = await reader.list("tenant=t1/");
+    expect(files.map((f) => f.key)).toEqual(["a", "b", "c", "d", "e"].map((n) => KEY("t1", "2026-10-29", n)));
+    expect(files.every((f) => f.size === 1)).toBe(true);
+  });
+
+  it("with a limit asks for MaxKeys and stops at the first files", async () => {
+    const { reader, sent } = await filled();
+    sent.length = 0;
+    const files = await reader.list("tenant=t1/", { limit: 3 });
+    expect(files.map((f) => f.key)).toEqual(["a", "b", "c"].map((n) => KEY("t1", "2026-10-29", n)));
+    const lists = sent.filter((s) => s.name === "ListObjectsV2Command");
+    expect(lists.map((l) => l.input.MaxKeys)).toEqual([3, 1]);
+    expect(lists).toHaveLength(2);
+  });
+
+  it("rejects a limit that is not a positive integer", async () => {
+    const { reader } = await filled();
+    await expect(reader.list("", { limit: 0 })).rejects.toThrow(RangeError);
+    await expect(reader.list("", { limit: 1.5 })).rejects.toThrow(RangeError);
+  });
+
+  it("reads the bytes at a key, under the lake prefix, and refuses an unsafe key", async () => {
+    const { reader, sent } = await filled("lake1");
+    expect(Array.from(await reader.get(KEY("t1", "2026-10-29", "b")))).toEqual([98]);
+    expect(sent.at(-1)!.input.Key).toBe(`lake1/${KEY("t1", "2026-10-29", "b")}`);
+    await expect(reader.get("../x")).rejects.toThrow(/Unsafe lake key/);
+    await expect(reader.get(KEY("t1", "2026-10-29", "zz"))).rejects.toThrow(/NoSuchKey/);
+  });
+
+  it("hides the lake prefix from listings and never lists outside it", async () => {
+    const { reader } = await filled("lake1");
+    expect((await reader.list("")).map((f) => f.key)).toHaveLength(6);
+    expect((await reader.list("tenant=t2/")).map((f) => f.key)).toEqual([KEY("t2")]);
+  });
+
+  it("sends nothing but list and get", async () => {
+    const { reader, sent } = await filled();
+    sent.length = 0;
+    await reader.list("");
+    await reader.get(KEY("t2"));
+    expect(new Set(sent.map((s) => s.name))).toEqual(new Set(["ListObjectsV2Command", "GetObjectCommand"]));
+  });
+});
+
+describe("lakeReaderFromEnv", () => {
+  it("is null when the lake is off, a directory reader for LAKE_DIR, an S3 reader for a bucket", () => {
+    expect(lakeReaderFromEnv({})).toBeNull();
+    expect(lakeReaderFromEnv({ LAKE_DIR: "/d" })).toBeInstanceOf(FsLakeStore);
+    expect(lakeReaderFromEnv({ LAKE_S3_BUCKET: "b" })).toBeInstanceOf(S3LakeReader);
+    expect(() => lakeReaderFromEnv({ LAKE_DIR: "/d", LAKE_S3_BUCKET: "b" })).toThrow(/not both/);
+  });
+
+  it("takes its own credential pair, both or neither, never the writer's", () => {
+    expect(() => lakeReaderFromEnv({ LAKE_S3_BUCKET: "b", LAKE_S3_READER_ACCESS_KEY_ID: "k" })).toThrow(/LAKE_S3_READER_ACCESS_KEY_ID and LAKE_S3_READER_SECRET_ACCESS_KEY must be set together/);
+    // The writer's pair alone is not a reader configuration: it is neither used nor an error.
+    expect(lakeReaderFromEnv({ LAKE_S3_BUCKET: "b", LAKE_S3_ACCESS_KEY_ID: "w", LAKE_S3_SECRET_ACCESS_KEY: "w" })).toBeInstanceOf(S3LakeReader);
+  });
+
+  it("builds a different reader when the reader credentials change", () => {
+    const env = { LAKE_S3_BUCKET: "b", LAKE_S3_READER_ACCESS_KEY_ID: "r", LAKE_S3_READER_SECRET_ACCESS_KEY: "s" };
+    expect(lakeReaderFromEnv(env)).toBe(lakeReaderFromEnv({ ...env }));
+    expect(lakeReaderFromEnv({ ...env, LAKE_S3_READER_ACCESS_KEY_ID: "r2" })).not.toBe(lakeReaderFromEnv(env));
   });
 });
 

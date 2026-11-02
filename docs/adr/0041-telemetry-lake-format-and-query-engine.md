@@ -220,8 +220,21 @@ DuckDB, on a glibc worker, remains the plan if a measured hunt over a fleet's vo
 Isolation (decision 4's two layers) is met here by construction instead of by DuckDB settings: every
 listing is under the tenant's prefix, one day (and type) at a time and never past the file cap, and every
 listed key is re-checked against the tenant, the day and the type asked for. The read-only
-credentials requirement stays open for the S3 reader: `LakeReader` is its own interface so those
-credentials need not be the writer's. Not measured: query time on any volume.
+credentials requirement was open for the S3 reader: `LakeReader` is its own interface so those
+credentials need not be the writer's (built in #1105, below). Not measured: query time on any volume.
+
+## The S3 reader, 2026-11-02 (#1105)
+
+`S3LakeReader` implements `LakeReader` on an S3-compatible bucket: `get` is `GetObject`, `list` is
+`ListObjectsV2` with `MaxKeys` when a `limit` is given. Decision 4's separation of credentials is made
+structural: the reader is its own class on its own client (it cannot write or delete), and it takes its
+own pair, `LAKE_S3_READER_ACCESS_KEY_ID` / `LAKE_S3_READER_SECRET_ACCESS_KEY`. It never falls back to the
+writer's pair; with neither set the SDK's default credential chain applies, so an instance role can be the
+reader's identity. Reversible choice, taken here and not by the owner: requiring the reader pair
+whenever `LAKE_S3_BUCKET` is set would be stricter, at the cost of a lake whose search needs extra
+configuration to start. Not done: per-tenant credentials scoped by bucket policy (the second layer of
+decision 4 remains the tenant prefix and the per-key re-check of the query layer), and a run against a
+real store (MinIO or S3): the unit tests use an in-memory bucket.
 
 ## Decisions on the prevalence rebuild, 2026-10-30
 
