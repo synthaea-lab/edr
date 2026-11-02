@@ -39,7 +39,7 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    tree, quarantining the binary, and the lab acceptance run below.
 
    **Service-stop burst (built, #381).** `SERVICE-STOP-BURST` (T1489, Medium) alerts when one
-   lineage stops five distinct services inside 60 s: `systemctl stop` / `disable --now`,
+   lineage stops five distinct services inside 60 s: `systemctl stop` / `disable --now` / `kill` (with a signal that ends the unit),
    `service X stop` and `/etc/init.d/X stop` (Linux), `net stop`, `sc stop`, `Stop-Service`
    (Windows), `launchctl bootout` / `unload` / `remove` / `stop` (macOS); an exec that names
    several services counts each, and a `Get-Service | Stop-Service` pipeline counts as one. It

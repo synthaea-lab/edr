@@ -9,7 +9,7 @@ stopped.
 ## The shape
 
 An exec that stops a service of a fixed list of security tooling, as the command line says it:
-`systemctl stop|disable --now|mask --now`, `service X stop`, `sc stop`, `net stop`,
+`systemctl stop|disable --now|mask --now|kill`, `service X stop`, `sc stop`, `net stop`,
 `Stop-Service`, `launchctl bootout|unload|remove|stop`. The parser is the one of
 SERVICE-STOP-BURST (`servicestop::services_stopped`): this rule asks which service, that one
 counts how many. One alert per exec, T1562.001, **Medium**, naming the first listed service the
@@ -38,12 +38,30 @@ a wrong name costs a missed stop, never a false alert.
   the eBPF and Endpoint Security gates filter at the source. Another vendor's tool killed with
   `kill` is not seen by it. Its sender filter (#1103) reads the sender's pid only: pid 1 (the
   service manager, which delivers `systemctl stop`, a stop timeout's SIGKILL and an upgrade's
-  restart) is Low and not dropped, since `systemctl kill` arrives from pid 1 too; a process
+  restart) is Low and not dropped, since `systemctl kill` and a D-Bus stop arrive from pid 1 too.
+  `systemctl kill` of a listed tool is read by the exec rule (below), which is the High-side
+  record of who asked: before that verb was parsed, `systemctl kill -s KILL <tool>` left only this
+  Low signal and no exec alert. A process
   signalling itself raises nothing; any other sender is High. The event carries no sender unit or
   cgroup, so the watchdog or another process of the same unit is **not** told apart from an
   intruder and stays High.
 - This agent's own service is **not** on the list: its package scripts stop it on every upgrade,
   and a stopped agent cannot alert on its own stop.
+
+## `systemctl kill`
+
+`servicestop::services_stopped` reads `systemctl kill` as a stop when the signal ends or freezes
+the unit: the default (SIGTERM), `KILL`, `INT`, `QUIT`, `ABRT`, `STOP`, by name (with or without
+`SIG`) or number, in the forms `-s SIG`, `-sSIG`, `--signal=SIG` and `--signal SIG`. Not a stop:
+`HUP` (the reload idiom), `USR1`/`USR2`, signal `0`, and `--kill-whom=control` (the stop script is
+signalled, not the service). The option values are skipped, so the signal is never read as a unit.
+
+Alerts: `check_security_tool_stop` (Medium, as for every stop verb) for a listed tool, and the
+service-stop burst counts it. **Burst counts change:** a kill counts one distinct service per
+unit named, like a stop, so `systemctl kill -s KILL a b c d e` is a burst and a mix of stops and
+kills adds up; reloads add nothing. Counted on purpose: SIGKILL of a unit takes it down as a stop
+does, an intruder uses it to skip the stop job's timeout, and five distinct units killed in a
+minute is not maintenance.
 
 ## Provisional and stated gaps
 
