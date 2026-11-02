@@ -104,11 +104,39 @@ Provisional, and stated:
   by schedule alerts. Generic accounts are excluded, a named service account is not.
 - The hour is read from the event's own timestamp (event time), so a replayed journal is judged by when
   the logon happened, not when it was read.
-- **No lab run is claimed**: unit tests only (`crates/rules/src/tests/logon.rs`, five hand mutations
-  each failing a named test; `crates/config` tests for the offset). #1088 adds the zone tests: the
-  rule with a stand-in zone at fixed instants either side of both 2026 changes, the override in either
-  order, a zone with no answer; and the module's own test in the agent, the real `localtime_r` under POSIX
-  `TZ` rules either side of the EU and US changes (Unix only). Not run: the agent with a real
-  `agent.toml`, a live sshd or 4624 logon at night, **the Windows conversion (compiled for
-  `x86_64-pc-windows-gnu`, never run)**, Windows or macOS clippy beyond `enrich`. Per-OS verification
-  is #1090 (Linux), #1091 (Windows), #1092 (macOS).
+- **Linux lab run (#1090, 2026-11-02)**: the agent built from `main` at `8224d72f` (with #1088) on a Fedora 43 VM
+  (kernel 7.2.9, `Europe/Paris`, sshd 10.0), real sshd logons by public key from the host, observe-only,
+  captures in `lab/captures/test-1090-20261102/` (one directory per case: `alerts.ndjson`, `events.ndjson`,
+  `agent.out`, `logons.txt`). Verified:
+  - **The Linux logon event** is `auth`, `kind: logon`, `outcome: success`, `target_user` = the account sshd
+    names in `Accepted ... for <user>` (`lab1090`, `edr-lab`, `ubuntu`, `ec2-user`), `source_address` = the
+    client, `comm: sshd-session`. The account is the login name as typed, not a uid lookup, and carries no
+    domain. Every logon produced exactly one such event.
+  - **`[detection] utc_offset_minutes` set**: with `0` (14:5x UTC), a logon of `lab1090` raised nothing; with
+    `600` (00:xx local), `lab1090` raised ODD-HOUR-LOGON once (`T1078`, Low, "at 00:00 host-local time"); a
+    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out.
+  - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
+    `root` was not tried (no root key on the VM).
+  - **Non-generic accounts you did not mean to test alert too**: the lab's own `edr-lab` logons (the SSH
+    commands that drive the run) raised the rule in every out-of-window case.
+  - **No setting, platform zone** (the case #1088 made default): `Europe/Paris` at 15:5x raised nothing;
+    `TZ=Asia/Tokyo` (23:00 local) raised it for `lab1090` and `edr-lab`; log line
+    "platform time zone in use, odd-hour logon rule on".
+  - **No setting and no zone** (`/etc/localtime` moved away, `TZ` unset, VM clock set to 02:00 UTC so that UTC
+    would be outside the window): the agent logged "the host names no time zone; odd-hour logon rule off unless
+    utc_offset_minutes is set" and a `lab1090` logon raised nothing. The control at the same clock with
+    `Europe/Paris` (03:00 local) raised it. **The rule is therefore silent without a setting only when the host
+    names no zone**; on a host with a zone it is on.
+  
+  Not verified on Linux: the 8 h repeat after the quiet period, a daylight-saving change (the unit and
+  `localtime_r` tests cover it), `utc_offset_minutes` overriding a different platform zone on a live agent,
+  console, `su` or `sudo` logons, password logins (only public-key ones were made), a logon during a
+  failed-then-successful sequence, a root login, and journals on hosts that do not use sshd.
+  Run on one VM, on one day; the agent's `date` was moved back 12 h for the no-zone case and the VM was
+  reverted afterwards.
+- Unit tests (`crates/rules/src/tests/logon.rs`, five hand mutations each failing a named test; `crates/config`
+  tests for the offset). #1088 adds the zone tests: the rule with a stand-in zone at fixed instants either
+  side of both 2026 changes, the override in either order, a zone with no answer; and the module's own test
+  in the agent, the real `localtime_r` under POSIX `TZ` rules either side of the EU and US changes (Unix
+  only). Not run: **the Windows conversion (compiled for `x86_64-pc-windows-gnu`, never run)**, a live 4624
+  logon, Windows or macOS clippy beyond `enrich`. Windows is #1091, macOS #1092.
