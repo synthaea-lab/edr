@@ -36,7 +36,12 @@ a wrong name costs a missed stop, never a false alert.
   deliberately **not** on the list. The firewall services (T1562.004) are not either.
 - **`check_security_process_signal`** (#362) is the kill half, and only for the agent's own pid:
   the eBPF and Endpoint Security gates filter at the source. Another vendor's tool killed with
-  `kill` is not seen by it.
+  `kill` is not seen by it. Its sender filter (#1103) reads the sender's pid only: pid 1 (the
+  service manager, which delivers `systemctl stop`, a stop timeout's SIGKILL and an upgrade's
+  restart) is Low and not dropped, since `systemctl kill` arrives from pid 1 too; a process
+  signalling itself raises nothing; any other sender is High. The event carries no sender unit or
+  cgroup, so the watchdog or another process of the same unit is **not** told apart from an
+  intruder and stays High.
 - This agent's own service is **not** on the list: its package scripts stop it on every upgrade,
   and a stopped agent cannot alert on its own stop.
 
