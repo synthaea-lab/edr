@@ -320,6 +320,24 @@ enum Shutdown {
     Cancel,
 }
 
+/// Whether `arg` names the long option `full` the way `getopt_long` resolves it: the exact name,
+/// or any prefix of it at least `min` bytes long, with or without `=value`. The outer `Option`
+/// says whether it matched; the inner one carries the `=value` where there was one.
+///
+/// systemd's tools parse with `getopt_long`, which accepts any **unambiguous** abbreviation, so
+/// matching a long option by equality lets the same command through under a shorter spelling
+/// (review of #1109). Measured on systemd 258: `reboot --w --help` and `systemctl --whe=+1h
+/// --help` are both accepted, while `reboot --no-w` and `systemctl --wh` are refused as
+/// ambiguous. `min` is that shortest unambiguous prefix for the tool in question, so a spelling
+/// the tool itself rejects is not matched here either.
+fn long_option<'a>(arg: &'a str, full: &str, min: usize) -> Option<Option<&'a str>> {
+    let (name, value) = match arg.split_once('=') {
+        Some((name, value)) => (name, Some(value)),
+        None => (arg, None),
+    };
+    (name.len() >= min && full.starts_with(name)).then_some(value)
+}
+
 /// Whether this exec tells the host to shut down or reboot **now** (`Now`), or cancels one
 /// (`Cancel`). `shutdown` counts only with an immediate time (`now`, `+0`): `+N` and `HH:MM`
 /// schedule a shutdown that stops nothing yet, and a bare `shutdown` is `+1` for systemd. `-k`
@@ -329,6 +347,10 @@ enum Shutdown {
 /// wtmp record and leaves the host running (`halt(8)`, and sysvinit's `reboot(8)`): it would
 /// otherwise cloak any stop in the next five minutes without even scheduling anything.
 /// `-d`/`--no-wtmp` and `-f`/`--force` do bring the host down.
+///
+/// Both long options are matched by abbreviation ([`long_option`]), since `getopt_long` accepts
+/// one: `reboot --w` and `systemctl reboot --whe=+1h` mean the same as the full spellings, and
+/// matching only the full ones left each cloak open under a shorter name.
 fn shutdown_effect(event: &ExecEvent) -> Option<Shutdown> {
     let program = program(event);
     let args = args(event);
@@ -339,18 +361,33 @@ fn shutdown_effect(event: &ExecEvent) -> Option<Shutdown> {
     };
     match program.as_str() {
         "reboot" | "poweroff" | "halt" => {
-            let wtmp_only = short('w') || args.iter().any(|a| a == "--wtmp-only");
+            // `--wtmp-only` is the only `--w*` option these tools have, so `--w` already
+            // resolves to it.
+            let wtmp_only = short('w')
+                || args
+                    .iter()
+                    .any(|a| long_option(a, "--wtmp-only", 3).is_some());
             (!wtmp_only).then_some(Shutdown::Now)
         }
         "shutdown" => {
-            if short('c') || args.iter().any(|a| a == "--cancel") {
+            // Options come before the time; everything after it is the wall message, so
+            // `shutdown now -c` sends a message and cancels nothing. `--cancel` is matched
+            // exactly, not by prefix: systemd's `shutdown` has no such long option at all
+            // (only `-c`), so there is no abbreviation of it to resolve.
+            let time_at = args.iter().position(|a| !a.starts_with('-'));
+            let options = &args[..time_at.unwrap_or(args.len())];
+            let short_option = |flag: char| {
+                options
+                    .iter()
+                    .any(|a| !a.starts_with("--") && a.contains(flag))
+            };
+            if short_option('c') || options.iter().any(|a| a == "--cancel") {
                 return Some(Shutdown::Cancel);
             }
-            if short('k') {
+            if short_option('k') {
                 return None;
             }
-            // The first argument that is not an option is the time; the rest is the wall message.
-            let time = args.iter().find(|a| !a.starts_with('-'))?;
+            let time = args.get(time_at?)?;
             (time == "now" || time == "+0").then_some(Shutdown::Now)
         }
         "systemctl" => {
@@ -364,9 +401,12 @@ fn shutdown_effect(event: &ExecEvent) -> Option<Shutdown> {
             ) {
                 return None;
             }
+            // `--whe` is the shortest prefix systemctl accepts for `--when`: `--wh` is
+            // ambiguous with `--what`.
             let when = args.iter().enumerate().find_map(|(i, a)| {
-                a.strip_prefix("--when=")
-                    .or_else(|| (a == "--when").then(|| args.get(i + 1).map_or("", String::as_str)))
+                long_option(a, "--when", 5).map(|value| {
+                    value.unwrap_or_else(|| args.get(i + 1).map_or("", String::as_str))
+                })
             });
             match when {
                 None => Some(Shutdown::Now),

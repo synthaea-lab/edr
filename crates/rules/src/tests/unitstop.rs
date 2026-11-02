@@ -387,6 +387,79 @@ fn a_reboot_that_only_changes_how_it_is_recorded_still_explains_the_stop() {
     }
 }
 
+/// `getopt_long` takes any unambiguous abbreviation, so matching a long option by equality let
+/// the same command through under a shorter name (review of #1109).
+/// Measured on systemd 258: `reboot --w --help` and `systemctl --whe=+1h --help` are accepted,
+/// `reboot --no-w` and `systemctl --wh` are refused as ambiguous.
+#[test]
+fn an_abbreviated_long_option_is_read_like_the_full_one() {
+    // Every prefix of `--wtmp-only` down to `--w`: the host stays up, so nothing is explained.
+    for command in [
+        "reboot --w",
+        "reboot --wt",
+        "reboot --wtmp",
+        "reboot --wtmp-onl",
+        "poweroff --wtmp",
+        "halt --w",
+    ] {
+        assert_alerts_once(
+            &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
+            "auditd",
+        );
+    }
+    // `--whe` schedules, so it must not open the window either.
+    for command in [
+        "systemctl reboot --whe=+1h",
+        "systemctl poweroff --whe 23:00",
+    ] {
+        assert_alerts_once(
+            &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
+            "auditd",
+        );
+    }
+    // And an abbreviated cancel still closes a window a real shutdown opened.
+    assert_alerts_once(
+        &judged(
+            "falco",
+            &[
+                ("shutdown now", T0 - 20 * SEC),
+                ("systemctl reboot --whe=cancel", T0 - 10 * SEC),
+            ],
+        ),
+        "falco",
+    );
+    // A prefix shorter than the tool accepts is not a match: `--no-w` is ambiguous, and the
+    // option it would abbreviate (`--no-wtmp`) reboots anyway.
+    assert!(
+        judged("auditd.service", &[("reboot --no-w", T0 - 5 * SEC)]).is_empty(),
+        "an ambiguous --no-w still reads as a reboot"
+    );
+}
+
+/// After the time, `shutdown`'s arguments are the wall message, not options: `shutdown now -c`
+/// warns and cancels nothing (review of #1109).
+#[test]
+fn an_option_letter_inside_the_wall_message_is_not_an_option() {
+    // The shutdown is real and immediate, so the stop is explained despite the trailing `-c`.
+    for command in ["shutdown now -c", "shutdown now back -k soon"] {
+        assert!(
+            judged("falco", &[(command, T0 - 10 * SEC)]).is_empty(),
+            "{command}"
+        );
+    }
+    // A cancel before the time is still a cancel.
+    assert_alerts_once(
+        &judged(
+            "falco",
+            &[
+                ("shutdown now", T0 - 20 * SEC),
+                ("shutdown -c", T0 - 10 * SEC),
+            ],
+        ),
+        "falco",
+    );
+}
+
 /// A scheduled shutdown stops nothing now: it must not open the window (reviewer's repro).
 #[test]
 fn a_scheduled_shutdown_does_not_explain_a_stop() {
