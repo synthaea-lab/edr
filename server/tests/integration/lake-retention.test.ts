@@ -126,7 +126,9 @@ describe("lake retention against Postgres", () => {
     expect(await store.list(`tenant=${tenant.id}/`)).toHaveLength(1);
   });
 
-  it("keeps a record of a partition it could not delete, and still does the others", async () => {
+  // A read-only directory blocks an unlink only on POSIX; Windows ignores the mode on a directory,
+  // the partition is deleted and the test has nothing to observe (#1097).
+  it.skipIf(process.platform === "win32")("keeps a record of a partition it could not delete, and still does the others", async () => {
     const [t1, t2] = [await createTestTenant(), await createTestTenant()];
     const [a1, a2] = [await createTestAgent(t1.id), await createTestAgent(t2.id)];
     await prisma.tenant.updateMany({ where: { id: { in: [t1.id, t2.id] } }, data: { lakeRetentionDays: 1 } });
