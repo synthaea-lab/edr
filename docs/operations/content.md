@@ -131,6 +131,12 @@ staged and never listed is unreferenced until retention (#834) prunes it. `prune
 unreferenced file for 24 hours after its last write (`DEFAULT_MIN_AGE_MS`, by mtime), so that is the time
 between staging and publishing the signed release; staging the same bytes again resets it.
 
+Staging is safe to repeat and to run concurrently: each write goes through its own temporary file and a
+rename onto the hash name, so an agent never reads half a feed, and two requests for the same feed both
+answer 200 and leave one file. On Windows, a rename onto a file another rename is replacing fails with
+`EPERM`; because the name is the hash of the bytes, the handler treats that as success when the file is
+there.
+
 The request body is capped at 32 MiB (413 above), in the handler and in nginx (`location =
 /api/content/ioc-feed` in `server/nginx.conf`, `client_max_body_size 32m`; the default 1 MiB would refuse a
 feed of about 15,000 hashes). Raise both together (`MAX_STAGE_BODY_BYTES` in `server/lib/ioc-stage.ts`).
