@@ -172,6 +172,60 @@ before code exists; the ones that stop being reversible once data is written say
   one measurement on a real host over a day, since `file_open` was 90 % of the bytes in the lab run
   below, and the writer may then drop or sample it behind a per-type setting.
 
+## Findings from building the write path (2026-10-29)
+
+Building the first slice (`server/lib/lake-writer.ts`, PR stacked on this one) showed three things
+this ADR did not say.
+
+- **DuckDB's Node bindings have no Alpine (musl) build.** `@duckdb/node-bindings` ships linux-x64
+  and linux-arm64 for glibc, plus macOS and Windows; the server image is `node:20-alpine`
+  (`server/Dockerfile`). Decision 4 ("DuckDB in process, on a worker") therefore cannot run in the
+  current image. The write path does not need it (Parquet is written by `hyparquet-writer`, pure
+  JavaScript, which runs on Alpine). The query side must pick one of: a glibc base image for the
+  worker, a separate worker container, or the DuckDB CLI as a subprocess. Not decided here; it is the
+  first thing the query slice (#933) has to settle, and the engine stays an assumption until then.
+- **The writer's compression is Snappy, not zstd.** The lab measurement used zstd through DuckDB
+  (about 15x smaller than the JSON); `hyparquet-writer` writes Snappy by default and zstd needs an
+  external compressor. Files will be larger than the measured ones; the size is not measured for the
+  writer's output.
+- **The event column is not byte for byte.** Ingest reads the body with `JSON.parse`, so an integer
+  above 2^53 (a nanosecond timestamp, a process generation) is stored as the nearest double. The file
+  holds what ingest parsed, serialized again. Exactness would need ingest to keep the raw text.
+
+- **MinIO's container images could not be pulled on 2026-10-29.** `docker.io/minio/minio` and
+  `quay.io/minio/minio` both refused the pull from this machine, and `bitnami/minio` has no manifest.
+  The decision "MinIO runs in the self-hosted compose" therefore has no image to point at here; I did
+  not establish why (a registry change, or this machine). The S3 store (`lib/lake-s3-store.ts`) speaks
+  the S3 API only and was run against SeaweedFS 4.50 (`chrislusf/seaweedfs`, pulled and working),
+  which is what the integration tests used. Which store the compose ships is open again: the decision
+  stays "the S3 API is the interface", and the choice of server (SeaweedFS, Garage, RustFS, a hosted
+  one) is not made. RustFS (`rustfs/rustfs`) pulled but exited at start with the arguments I gave it,
+  and was not investigated; Garage pulled and was not run.
+
+The slice also fixes two choices this ADR left open: the queue is a table with one row per batch and
+the events as a JSON column, and the stores are a directory (`LAKE_DIR`) and an S3 bucket (`LAKE_S3_BUCKET`)
+behind the same interface (`put`, `list`, `delete`).
+
+## Decisions on the prevalence rebuild, 2026-10-30
+
+Taken under the owner's delegation ("prends les décisions que tu recommandes") by session edr-repo-81, from the
+six questions the rebuild slice (#1086) left in `issues/issue-77.md`. Reversible before an apply path exists.
+
+1. **The counters table stays authoritative; the lake rebuild is a check.** The lake is bounded by its
+   retention (90 days by default) and the table keeps 180, so the lake cannot be the source. A difference
+   between a rebuild and the table is a signal to look at, not a normal state.
+2. **No backfill is written for now.** A replace would destroy counters older than the lake's retention and a
+   merge would double count. An apply path waits for a stated need and its own decision.
+3. **A tenant whose lake window cannot cover the range is reported, not refused.** Retention 0 keeps no events,
+   and the writer drops events past retention: for such a tenant the rebuild answers `complete: false`.
+4. **The detection route keeps counting its observations.** `POST /api/ingest/detection` counts events that are
+   not in the lake, so counters can exceed a rebuild by those; this is documented. Changing what the counters
+   count is a prevalence decision, not a lake one.
+5. **Duplicates are removed in the writer, not in the rebuild.** The archive is fixed at its source, which also
+   serves the hunt (#933). Tracked in #1093.
+6. **The graph stays computed on read.** A materialised projection rebuilt from the lake would be a new store
+   with its own retention; reopen it only if a consumer needs the graph as of a past date.
+
 ## Measurements (2026-10-29, one lab run) and what is still owed
 
 One agent (`agent capture-events`, Fedora 43 lab VM, kernel 7.2.9) for 601 s under a synthetic loop
