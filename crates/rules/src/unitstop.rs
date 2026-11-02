@@ -325,17 +325,24 @@ enum Shutdown {
 /// schedule a shutdown that stops nothing yet, and a bare `shutdown` is `+1` for systemd. `-k`
 /// only warns. `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec` and
 /// `init`/`telinit 0|6` are immediate, unless `systemctl` is given `--when=` (a schedule, or
-/// `--when=cancel`).
+/// `--when=cancel`), or `reboot`/`poweroff`/`halt` is given `-w`/`--wtmp-only`, which writes the
+/// wtmp record and leaves the host running (`halt(8)`, and sysvinit's `reboot(8)`): it would
+/// otherwise cloak any stop in the next five minutes without even scheduling anything.
+/// `-d`/`--no-wtmp` and `-f`/`--force` do bring the host down.
 fn shutdown_effect(event: &ExecEvent) -> Option<Shutdown> {
     let program = program(event);
     let args = args(event);
+    // A short flag on its own or combined (`-fw`); a long option is matched by name instead.
+    let short = |flag: char| {
+        args.iter()
+            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(flag))
+    };
     match program.as_str() {
-        "reboot" | "poweroff" | "halt" => Some(Shutdown::Now),
+        "reboot" | "poweroff" | "halt" => {
+            let wtmp_only = short('w') || args.iter().any(|a| a == "--wtmp-only");
+            (!wtmp_only).then_some(Shutdown::Now)
+        }
         "shutdown" => {
-            let short = |flag: char| {
-                args.iter()
-                    .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(flag))
-            };
             if short('c') || args.iter().any(|a| a == "--cancel") {
                 return Some(Shutdown::Cancel);
             }

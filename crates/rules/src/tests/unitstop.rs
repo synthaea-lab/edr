@@ -353,10 +353,36 @@ fn a_command_that_does_not_shut_the_host_down_is_not_a_shutdown() {
         "systemctl --machine=c poweroff",
         "systemctl -M c poweroff",
         "systemctl --user reboot",
+        // `-w`/`--wtmp-only` writes the wtmp record and leaves the host running (`halt(8)`),
+        // so it explains nothing — the cloak without even a schedule to cancel.
+        "reboot -w",
+        "reboot --wtmp-only",
+        "poweroff -w",
+        "halt -w",
+        "reboot -fw",
     ] {
         assert_alerts_once(
             &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
             "auditd",
+        );
+    }
+}
+
+/// The flags next to `--wtmp-only` still bring the host down: `-d`/`--no-wtmp` only skips the
+/// wtmp record and `-f`/`--force` skips the clean stop, so both still explain a stop.
+#[test]
+fn a_reboot_that_only_changes_how_it_is_recorded_still_explains_the_stop() {
+    for command in [
+        "reboot",
+        "reboot -d",
+        "reboot --no-wtmp",
+        "reboot -f",
+        "poweroff --force",
+        "halt -d",
+    ] {
+        assert!(
+            judged("auditd.service", &[(command, T0 - 5 * SEC)]).is_empty(),
+            "{command}"
         );
     }
 }
