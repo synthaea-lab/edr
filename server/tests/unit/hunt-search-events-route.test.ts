@@ -19,6 +19,7 @@ let slotFree: boolean;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(os.tmpdir(), "hunt-events-route-"));
   delete process.env.LAKE_DIR;
+  delete process.env.LAKE_S3_BUCKET;
   slotFree = true;
   const tx = { $queryRaw: vi.fn(async () => [{ ok: slotFree }]) };
   db.$transaction.mockReset();
@@ -26,6 +27,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   delete process.env.LAKE_DIR;
+  delete process.env.LAKE_S3_BUCKET;
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -47,6 +49,21 @@ describe("POST /api/hunts/search with source events", () => {
     const res = await post({ source: "events", query: eventQuery });
     expect(res.status).toBe(503);
     expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("answers 501, not the lake-off 503, and takes no slot, when the lake is an S3 bucket", async () => {
+    process.env.LAKE_S3_BUCKET = "telemetry";
+    const res = await post({ source: "events", query: eventQuery });
+    expect(res.status).toBe(501);
+    const { error } = await res.json();
+    expect(error).toContain("S3");
+    expect(error).not.toContain("is off");
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("names the lake-off case as off", async () => {
+    const { error } = await (await post({ source: "events", query: eventQuery })).json();
+    expect(error).toContain("is off");
   });
 
   it("searches the session's tenant, whatever the body says about another one", async () => {

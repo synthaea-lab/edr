@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getTenantId } from "@/lib/tenant";
 import { MAX_CONCURRENT_SEARCHES_PER_TENANT, parseSearchRequest, searchFailure, searchWithinLimit } from "@/lib/hunt-search";
 import { searchEventsWithinLimit } from "@/lib/hunt-events-search";
-import { lakeReaderFromEnv } from "@/lib/lake-store";
+import { eventArchiveFromEnv } from "@/lib/lake-store";
 
 /**
  * POST /api/hunts/search — one page of an ad-hoc search over the detection or case store, or over the
@@ -16,7 +16,9 @@ import { lakeReaderFromEnv } from "@/lib/lake-store";
  * page, no cursor, the typed columns only. Read-only and scoped to the session's tenant, which no part
  * of the body can change. A tenant may have a few searches in flight whatever the source (429 beyond
  * that, also across server instances); a search over its time limit is a 504; the archive is a 503
- * while the lake is off.
+ * while the lake is off, and a 501 when the lake is on but its store has no reader (an S3 bucket,
+ * #1105): 503 says "try later" and an operator's monitoring reads it as an outage, whereas this
+ * stays true until the deployment uses a directory lake or a release brings an S3 reader.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -24,10 +26,16 @@ export async function POST(req: NextRequest) {
     const request = parseSearchRequest(await req.json().catch(() => null));
     const outcome =
       request.source === "events"
-        ? await searchEventsWithinLimit(prisma, lakeReaderFromEnv(), tenantId, request.query)
+        ? await searchEventsWithinLimit(prisma, eventArchiveFromEnv(), tenantId, request.query)
         : await searchWithinLimit(prisma, tenantId, request);
     if (outcome.status === "lake_off") {
       return NextResponse.json({ error: "The event archive is not available (the telemetry lake is off)" }, { status: 503 });
+    }
+    if (outcome.status === "no_reader") {
+      return NextResponse.json(
+        { error: "The event archive cannot be searched: the telemetry lake is an S3 bucket (LAKE_S3_BUCKET) and only a directory lake (LAKE_DIR) has a reader so far" },
+        { status: 501 }
+      );
     }
     if (outcome.status === "busy") {
       return NextResponse.json(
