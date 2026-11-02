@@ -114,7 +114,12 @@ Provisional, and stated:
     domain. Every logon produced exactly one such event.
   - **`[detection] utc_offset_minutes` set**: with `0` (14:5x UTC), a logon of `lab1090` raised nothing; with
     `600` (00:xx local), `lab1090` raised ODD-HOUR-LOGON once (`T1078`, Low, "at 00:00 host-local time"); a
-    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out.
+    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out, and
+    **it cannot be driven by moving the VM's clock** (second run, `edr-lab`, `utc_offset_minutes = 600`):
+    the first logon alerted, the second 4 s later did not, then the VM's wall clock was moved +9 h and two
+    more logons raised nothing, because a logon event's time is the kernel's monotonic clock plus a boot offset
+    fixed when the agent starts, not the wall clock. Only a real 8 h wait with the agent running can show the
+    repeat; until then it rests on the unit tests, which feed fabricated event times.
   - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
     `root` was not tried (no root key on the VM).
   - **Non-generic accounts you did not mean to test alert too**: the lab's own `edr-lab` logons (the SSH
