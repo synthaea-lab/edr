@@ -89,14 +89,80 @@ storage, queried in process; status **proposed**, decisions taken under the owne
   backups or versioning (ADR-0041). `LakeStore.delete` reports `{ deleted, failed }` per key instead of
   throwing, because by the time a later key fails the earlier ones are already gone.
 
+## The query side (issue #77, `lib/lake-query.ts`)
+
+`queryLake(reader, { tenantId, from, to, types?, where?, limit? })` reads events back: a tenant, a
+range of UTC days (both included, at most 366), optionally event types and exact matches on `agentId`,
+`comm`, `path`, `imagePath`, `daddr`, `query`, `sha256` (compared in lowercase), and a row limit
+(default 100, at most 1000). It lists the partitions in range **one day at a time** (and one type at a
+time when `types` is given, at most 32), so a tenant's history outside the range is never listed, and it
+asks the reader for at most the files still wanted plus one (`list(prefix, { limit })`): the writer makes a
+file per flush, so a tenant's prefix has no ceiling, and listing it whole to cut it afterwards would cost
+unbounded time and memory (a review point on #1084). At most 2000 files are listed and read; the partition
+path does the pruning (the files of a type that was not asked for are not read). It reads them with
+`hyparquet` and filters the rows. Rows come back oldest first, each with `event`, the event's source text
+as ingest received it. The result says when it was cut: `truncated` (more rows than `limit`) and
+`listingTruncated` (more than 2000 matching files exist: the answer is incomplete; `filesSkipped` is then 1,
+"at least one", not a count).
+
+- **Tenant isolation is structural, in two layers.** Every listing is under the tenant's own prefix, for
+  an id from a closed character set; and every key the store lists is parsed against the whole layout and
+  ignored unless its tenant, day and type are the ones asked for, so a store that answers a wider prefix
+  reads nothing of another tenant's. There is no query language for a compiler bug to widen.
+- **Not DuckDB, for now.** ADR-0041 decision 4 plans DuckDB, but its Node bindings have no Alpine build
+  (ADR, "Findings") and the image is Alpine. `hyparquet` is pure JavaScript, already a dependency, and
+  runs in the image. The cost is a scan of every file in range: fine for a hunt over days on one tenant,
+  not measured at fleet volume, and the result shape is what a hunt layer consumes, so the engine can
+  change under it. The ADR's other isolation requirement (read-only credentials) is a store matter:
+  `LakeReader` (`list`, `get`) is separate from `LakeStore` so the reader can be built on its own
+  credentials. Only the directory store implements it; the S3 reader waits for the S3 store (#1052).
+- **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
+  filters other than equality, ordering other than by time, compaction-aware reading.
+
+## Rebuilding prevalence from the lake (issue #77, `lib/prevalence-rebuild.ts`)
+
+`rebuildSightings(reader, { tenantId, from, to })` folds a tenant's `exec` and `dns_query` events into
+per-agent sightings with the **same two functions ingest uses** (`extractObservations`,
+`aggregateSightings`), so when the counting rules change the rebuild changes with them.
+`compareSightings(rebuilt, table)` says, per `(agent, kind, key)`, what is only in the rebuild, only in
+the table, or in both with another count or time. **It reads and compares; nothing writes the table.**
+Whether a rebuild may replace, merge into or only be checked against the counters is the owner's call
+(`issues/issue-77.md`, "Questions").
+
+- **Why a scan and not `queryLake`.** A query returns at most 1000 rows, and one host's day is far more:
+  paging by day would silently drop the rest of a busy day. `scanLake` (`lib/lake-query.ts`) reads the
+  same files with the same scope checks and the same two isolation layers, with no row limit, one file at
+  a time, and hands each file's rows to a callback. Memory is the distinct `(agent, kind, key)` triples
+  (capped at the table's own 5,000,000 per tenant), not the events.
+- **What it costs.** Every `exec` and `dns_query` file in range is read (other types are pruned by their
+  path): one `list` of the tenant's prefix plus one `get` and one Parquet decode per file, and with no
+  compaction a day is as many files as the writer flushed. A range is at most 366 days per call; a longer
+  history is several calls folded by `mergeSightings`. Not measured at fleet volume or on an object store
+  (there is no S3 reader yet). A scan lists and reads at most 50,000 files (listed one day at a time, never the whole tenant prefix); past that `complete` is false.
+- **`complete` is the only result to trust.** It is false when files were left unlisted or unread
+  (`scan.listingTruncated`, `scan.filesSkipped`), the sighting cap was reached, or any event was skipped:
+  `skipped` counts events whose text was not JSON (their observations are lost, not guessed), and a
+  comparison over a rebuild missing them would report a difference that is not one.
+- **Where it cannot equal the table, by construction:** events the lake never held (the writer drops those
+  past the tenant's retention and keeps nothing at retention 0; `prune-lake` deletes old days; the counters
+  have their own 180-day retention); observations ingest counted from `POST /api/ingest/detection`, which
+  is not a lake input; and the duplicate a crash between the file writes and the commit can leave (see
+  below), which counts twice in a rebuild. A comparison over a range that does not reach back to the
+  table's oldest sighting is expected to differ, and the diff says where.
+- **Proven:** unit tests over a hand-built lake against a model of ingest's folding, and an integration
+  test on Postgres 15 that uploads through the real ingest route (two hosts, several days, a Windows
+  path, a domain, an event with no usable time, a future one), drains the queue and finds the rebuilt
+  counters identical to the table row for row. **Not proven:** an object store, fleet volume, a lab host.
+- **The graph is not rebuilt.** `lib/graph.ts` is computed on read from detections and sightings, so a
+  pivot over rebuilt sightings is the same function over other rows; a graph projection from lake events
+  would be a new store (see `server/graph/README.md`).
+
 ## What is not built
 
 - An object store in `server/docker-compose.yml`: the compose still has only Postgres, the server and
   nginx, so `LAKE_S3_*` points at a store you run yourself. See the ADR on which one.
 - Compaction: every drain writes new small files.
-- Skipping at write time an event already older than its tenant's retention: the writer files it, and
-  the next `prune-lake` deletes it and records the deletion.
-- The query side (#933): DuckDB reading these files, and a `HuntQuery` events source.
+- A `HuntQuery` events source and a route over the query side (#933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
 - Duplicates of another kind: the same event sent twice by an agent (a lost `2xx`, then a resend) is
