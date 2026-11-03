@@ -487,28 +487,185 @@ fn a_spelling_the_tool_accepts_and_acts_on_still_explains_the_stop() {
     }
 }
 
-/// After the time, `shutdown`'s arguments are the wall message, not options: `shutdown now -c`
-/// warns and cancels nothing (review of #1109).
+/// `shutdown` reads its options wherever they stand (`getopt_long` permutes), so an option
+/// after the time is an option and not part of the wall message. Measured on systemd 258
+/// (Fedora 43): `shutdown +120 -c` cancels the schedule it follows and `shutdown +120 labtest -r`
+/// schedules a reboot. The first version of this test claimed the opposite, so `shutdown now -c`,
+/// which cancels and takes nothing down, read as a shutdown that explains any stop.
 #[test]
-fn an_option_letter_inside_the_wall_message_is_not_an_option() {
-    // The shutdown is real and immediate, so the stop is explained despite the trailing `-c`.
-    for command in ["shutdown now -c", "shutdown now back -k soon"] {
+fn shutdown_reads_its_options_after_the_time_too() {
+    // These do not take the host down now: `-c` cancels, `-k` only warns.
+    for command in [
+        "shutdown now -c",
+        "shutdown now back -k soon",
+        "shutdown now -k",
+    ] {
+        assert_alerts_once(&judged("falco", &[(command, T0 - 10 * SEC)]), "falco");
+    }
+    // A trailing option that does not change the action leaves the shutdown immediate.
+    for command in ["shutdown now -r", "shutdown now back --no-wall soon"] {
         assert!(
             judged("falco", &[(command, T0 - 10 * SEC)]).is_empty(),
             "{command}"
         );
     }
-    // A cancel before the time is still a cancel.
+    // After a real shutdown, a trailing `-c` cancels it like a leading one.
     assert_alerts_once(
         &judged(
             "falco",
             &[
                 ("shutdown now", T0 - 20 * SEC),
-                ("shutdown -c", T0 - 10 * SEC),
+                ("shutdown +5 done -c", T0 - 10 * SEC),
             ],
         ),
         "falco",
     );
+}
+
+/// The last action option wins, as in the tool (measured on systemd 258: `shutdown -c -r +120`
+/// schedules a reboot, `shutdown -r -c +120` cancels, `shutdown -P -H +120` schedules a halt).
+#[test]
+fn the_last_action_option_of_shutdown_decides() {
+    assert!(judged("falco", &[("shutdown -c -r now", T0 - 10 * SEC)]).is_empty());
+    assert_alerts_once(
+        &judged("falco", &[("shutdown -r -c now", T0 - 10 * SEC)]),
+        "falco",
+    );
+    assert!(judged("falco", &[("shutdown -P -H now", T0 - 10 * SEC)]).is_empty());
+}
+
+/// The short options of the systemd tools are case-sensitive, so the arguments must not be
+/// lowercased: `reboot -H` and `reboot --FORCE` are refused by the tool (host stays up), and
+/// `shutdown -K` is kexec where `-k` is a dry run.
+#[test]
+fn the_case_of_an_option_is_kept() {
+    for command in [
+        "reboot -H",
+        "reboot -P",
+        "reboot -F",
+        "reboot --FORCE",
+        "reboot --No-Wall",
+        "poweroff -D",
+        "systemctl reboot --DRY-RUN",
+        "systemctl reboot -Q",
+    ] {
+        assert_alerts_once(
+            &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
+            "auditd",
+        );
+    }
+    for command in ["shutdown -K now", "shutdown -P now", "shutdown -H now"] {
+        assert!(
+            judged("falco", &[(command, T0 - 10 * SEC)]).is_empty(),
+            "{command}"
+        );
+    }
+}
+
+/// `systemctl` with a power verb: the options it prints for or refuses do not take the host
+/// down. Measured on systemd 258 (Fedora 43), the host staying up in every case: `--dry-run`,
+/// `--help` and `--version` exit 0 without acting; `--bogus`, `--no-wall=1` (a value for an
+/// option that takes none), a missing value for `--type` and the ambiguous `--dr` exit 1.
+#[test]
+fn a_systemctl_power_verb_that_only_prints_or_is_refused_does_not_explain_a_stop() {
+    for command in [
+        "systemctl reboot --dry-run",
+        "systemctl poweroff --dry-run",
+        "systemctl --dry reboot",
+        "systemctl reboot --help",
+        "systemctl reboot -h",
+        "systemctl reboot --version",
+        "systemctl reboot --bogus",
+        "systemctl reboot --no-wall=1",
+        "systemctl reboot --type",
+        "systemctl --dr reboot",
+        "systemctl reboot --ver",
+    ] {
+        assert_alerts_once(
+            &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
+            "auditd",
+        );
+    }
+}
+
+/// The opposite direction: `systemctl` options that are valid and act still explain the stop,
+/// before or after the verb, with their values attached or separate, abbreviated to a unique
+/// prefix.
+#[test]
+fn a_systemctl_power_verb_with_valid_options_still_explains_the_stop() {
+    for command in [
+        "systemctl reboot --no-wall",
+        "systemctl reboot --no-wal",
+        "systemctl --force --force poweroff",
+        "systemctl reboot -f",
+        "systemctl -t service reboot",
+        "systemctl -tservice reboot",
+        "systemctl --type service reboot",
+        "systemctl --type=service reboot",
+        "systemctl halt --message=maintenance",
+        "systemctl reboot --reboot-argument=x",
+        "systemctl reboot --firmware-setup",
+    ] {
+        assert!(
+            judged("auditd.service", &[(command, T0 - 5 * SEC)]).is_empty(),
+            "{command}"
+        );
+    }
+}
+
+/// `shutdown`: the options it prints for or refuses do not take the host down (measured on
+/// systemd 258: `--help now` prints, `--show` reports, `--cancel` and `--bogus` exit 1).
+#[test]
+fn a_shutdown_that_only_prints_or_is_refused_does_not_explain_a_stop() {
+    for command in [
+        "shutdown --help now",
+        "shutdown now --help",
+        "shutdown --show",
+        "shutdown --bogus now",
+        "shutdown now --bogus",
+        "shutdown --h now",
+        "shutdown -z now",
+        "shutdown --no-wall=1 now",
+    ] {
+        assert_alerts_once(&judged("falco", &[(command, T0 - 10 * SEC)]), "falco");
+    }
+    // `--cancel` does not exist, so it cancels nothing and the shutdown goes on.
+    assert!(
+        judged(
+            "falco",
+            &[
+                ("shutdown now", T0 - 20 * SEC),
+                ("shutdown --cancel", T0 - 10 * SEC)
+            ]
+        )
+        .is_empty()
+    );
+}
+
+/// Every prefix of every long option of `systemctl` and `shutdown`, run against the real tools
+/// (`<tool> --PREFIX --help`, systemd 258, Fedora 43): resolved or refused. The resolver must
+/// agree with all of them, so a prefix the tool refuses is never read as an option.
+#[test]
+fn the_option_resolver_agrees_with_the_real_tools_on_every_prefix() {
+    let data = include_str!("data/systemd258_prefixes.txt");
+    let mut checked = 0;
+    for line in data
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+    {
+        let [tool, prefix, verdict] = line.split_whitespace().collect::<Vec<_>>()[..] else {
+            panic!("bad line: {line}");
+        };
+        let table = match tool {
+            "systemctl" => crate::unitstop::SYSTEMCTL_LONG,
+            "shutdown" => crate::unitstop::SHUTDOWN_LONG,
+            other => panic!("unknown tool {other}"),
+        };
+        let resolved = crate::unitstop::resolve_long(table, prefix).is_some();
+        assert_eq!(resolved, verdict == "resolved", "{tool} --{prefix}");
+        checked += 1;
+    }
+    assert!(checked > 400, "{checked} rows");
 }
 
 /// A scheduled shutdown stops nothing now: it must not open the window (reviewer's repro).
@@ -529,7 +686,6 @@ fn a_scheduled_shutdown_does_not_explain_a_stop() {
 fn a_cancel_closes_the_window_a_shutdown_opened() {
     for cancel in [
         "shutdown -c",
-        "shutdown --cancel",
         "shutdown -c done",
         "systemctl reboot --when=cancel",
     ] {
