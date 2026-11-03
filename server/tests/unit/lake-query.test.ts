@@ -137,6 +137,25 @@ describe("queryLake", () => {
     expect(asked[1]).toContain("event");
   });
 
+  it("stops before the next listing once its signal is aborted during a listing, throwing the reason", async () => {
+    const controller = new AbortController();
+    const listed: string[] = [];
+    const reader: LakeReader = {
+      list: async (prefix) => {
+        listed.push(prefix);
+        controller.abort(new DOMException("deadline", "TimeoutError"));
+        return [];
+      },
+      get: async () => {
+        throw new Error("no file should be read");
+      },
+    };
+    await expect(
+      queryLake(reader, { tenantId: T1, from: "2026-10-27", to: "2026-10-29", types: ["exec", "connect"], signal: controller.signal })
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(listed).toHaveLength(1);
+  });
+
   it("stops before the next file once its signal is aborted, throwing the reason", async () => {
     await put(T1, "2026-10-29", "exec", "a", [row("a", at("2026-10-29", "01:00:00"), "exec")]);
     await put(T1, "2026-10-29", "exec", "b", [row("a", at("2026-10-29", "02:00:00"), "exec")]);

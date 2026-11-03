@@ -40,6 +40,22 @@ function fakePrisma(slotFree = true) {
 const ready = (reader: LakeReader): EventArchive => ({ state: "ready", reader });
 const query = (over: Record<string, unknown> = {}) => parseEventQuery({ kind: "events", version: 1, lastDays: 3, ...over });
 
+/** Prisma whose transaction enforces its `timeout` against a virtual clock the reader advances, as the real one does. */
+function expiringPrisma(clock: { ms: number }) {
+  const tx = { $queryRaw: vi.fn(async () => [{ ok: true }]) };
+  const prisma = {
+    $transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>, opts?: { timeout?: number }) => {
+      const started = clock.ms;
+      const result = await fn(tx);
+      if (opts?.timeout !== undefined && clock.ms - started > opts.timeout) {
+        throw new Error("Transaction API error: Transaction already closed: A commit cannot be executed on an expired transaction.");
+      }
+      return result;
+    }),
+  } as unknown as PrismaClient;
+  return prisma;
+}
+
 describe("searchEventsWithinLimit", () => {
   it("answers lake_off, without opening a transaction, when there is no reader", async () => {
     const { prisma } = fakePrisma();
@@ -177,6 +193,22 @@ describe("searchEventsWithinLimit", () => {
     expect(order.at(-1)).toBe("get");
     expect(order.slice(1, -1).every((step) => step === "list")).toBe(true);
   });
+
+  it("answers a 504, not a 500, when the deadline passes while the last file is read and the transaction then expires", async () => {
+    await put(T1, "2026-10-30", "exec", "a", [row("a1", "2026-10-30T09:00:00Z", "exec")]);
+    const clock = { ms: 0 };
+    const slow: LakeReader = {
+      list: (p) => store.list(p),
+      get: async (k) => {
+        await new Promise((resolve) => setTimeout(resolve, 60)); // past the 20 ms deadline
+        clock.ms += 5000; // and past the transaction's margin
+        return store.get(k);
+      },
+    };
+    const failure = await searchEventsWithinLimit(expiringPrisma(clock), ready(slow), T1, query(), NOW, { timeoutMs: 20 }).catch((e: unknown) => e);
+    expect(failure).toMatchObject({ name: "TimeoutError" });
+    expect(searchFailure(failure).status).toBe(504);
+  });
 });
 
 describe("eventArchiveFromEnv", () => {
@@ -192,5 +224,4 @@ describe("eventArchiveFromEnv", () => {
   it("is ready with a reader on a directory lake", () => {
     const archive = eventArchiveFromEnv({ LAKE_DIR: "/var/lake" });
     expect(archive.state).toBe("ready");
-  });
 });
