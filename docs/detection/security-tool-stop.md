@@ -112,3 +112,37 @@ stop that preceded it alerts. A judged stop waits for a later exec or file-open 
 clock, so on a host with none the alert is late. A stop over D-Bus by an administrator is
 indistinguishable from an intruder's, hence Medium. `systemctl stop` run by pid 1 on behalf of
 another process is likewise a record with no actor.
+
+### Known limits
+
+**The explanations that read an exec depend on its `argv`, which is empty for most short-lived
+commands (#1118).** The Linux sensor reads `argv` from `/proc/<pid>/cmdline` when the exec event is
+drained, and a process that has already exited has no entry. This affects condition 1 ("an exec
+stopped the same unit just before") and the shutdown and start joins in the table above, because they
+all match on the command line. Measured on Fedora 43 (kernel 7.2.9) and Rocky 9.8 (kernel 5.14), with
+the agent of `main` at `81cc6c52` for the empty-`argv` rate: `systemctl` has an empty `argv` in
+97 to 100 % of its execs, idle or loaded, and `sudo` in 86 to 98 %. A `/usr/bin/true` or a
+`sleep 0.3` is read fine when idle and mostly missed with one `yes` per vCPU running. With the PR
+#1102 agent, 12 `systemctl stop` of synthetic units named like listed tools (two rounds of six) gave
+the same result on both systems: 11 of the 12 reached UNEXPLAINED-UNIT-STOP, and 1 was explained by
+the exec (the one whose `argv` was captured). **Each stop still alerted exactly once, but 11 times
+with a reason that is wrong**: the message says no `systemctl stop` of the unit was seen, although
+one ran. The rule does not miss the stop; its explanations rarely hold. Not measured: a process that
+exits more slowly than a few ms under a load other than `yes` (one per vCPU), and the effect of #1116
+(which bounds `argv` at capture) on this rate. Captures: `lab/captures/test-1118-20261103/` and
+`lab/captures/test-1085b-20261103/`; notes in `issues/issue-1085.md` and `issues/issue-1118.md`.
+
+**Decision of the owner (delegated, 2026-11-03): the long-term source for "the host is shutting
+down" is the manager's own journal record, not the exec.** That record is a pid-1 entry
+(`_PID=1`, `JOB_TYPE=start`, `JOB_RESULT=done`) for `reboot.target`, `poweroff.target`,
+`halt.target`, `kexec.target` or `shutdown.target`. Measured on Fedora 43 (systemd 258,
+`lab/captures/test-1109-20261103/`): a real `systemctl reboot` writes such records (`reboot.target`,
+`systemd-reboot.service`, `shutdown.target`, `final.target`) and a hypervisor power-off writes
+`poweroff.target` the same way, while `reboot -w`, `halt -w`, `shutdown +99` then `shutdown -c`,
+`systemctl reboot --dry-run` and `reboot --help` write none. Reading the shutdown from the exec's
+command line is therefore a **stopgap**: it has an open-ended list of tool spellings (systemd,
+sysvinit, busybox) and, per #1118, an empty `argv` for most of these commands anyway. The reasoning
+and the other options are in `issues/decisions-delegated-2026-11-03b.md`. Not built: the journal
+sensor change for the target records. Not measured: whether the target record comes after the listed
+unit's own stop in a real shutdown, and whether a shutdown on a loaded host is slow enough for the
+agent to judge the queued stops.
