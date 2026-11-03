@@ -104,7 +104,10 @@ Provisional, and stated:
   by schedule alerts. Generic accounts are excluded, a named service account is not.
 - The hour is read from the event's own timestamp (event time), so a replayed journal is judged by when
   the logon happened, not when it was read.
-- **Linux lab run (#1090, 2026-11-02)**: the agent built from `main` at `8224d72f` (with #1088) on a Fedora 43 VM
+- **Linux lab run (#1090, 2026-11-02)**: two builds were used. The first run (every case except the 8 h
+  repeat) used the agent built from `main` at `8224d72f` (with #1088). The second run (`F-expiry-8h`) used the
+  agent built from the `feat/1103-signal-generate` branch (#1103) in the VM's `~/edr-1103`; its commit was not
+  recorded, so only the branch is known. Both on a Fedora 43 VM
   (kernel 7.2.9, `Europe/Paris`, sshd 10.0), real sshd logons by public key from the host, observe-only,
   captures in `lab/captures/test-1090-20261102/` (one directory per case: `alerts.ndjson`, `events.ndjson`,
   `agent.out`, `logons.txt`). Verified:
