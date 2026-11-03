@@ -60,9 +60,9 @@ target:
 | `SIGKILL`, `SIGSTOP` from a process other than pid 1 | High | cannot be handled: the tool is ended or frozen |
 | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGABRT` from a process other than pid 1 | Medium | an administrator's `kill <pid>`, or `service auditd stop` (its helper `auditctl` sends the `SIGTERM`, not pid 1), looks the same as an attacker's, like `systemctl stop` |
 | any terminating signal from pid 1 | Low | `systemctl stop`, a stop timeout, an upgrade; the manager does not say who asked |
-| `SIGHUP` to a tool that **catches** it (`SigCgt` bit 0 at scan time) | none | a reload (logrotate, `ExecReload=`, `systemctl reload`); the event is dropped in the drain |
-| `SIGHUP` to a tool with **no handler** | Medium | the default action ends it; it is reported like the other catchable signals |
-| `kill -0`, a tool signalling itself, a signal sent by the kernel (`SEND_SIG_PRIV`), `SIGCHLD` / `SIGCONT` / `SIGURG` / `SIGWINCH` | none | dropped in the kernel (`SEND_SIG_PRIV`, a signal outside the terminating set) or by the rule (self-signal). A null `siginfo` (`SEND_SIG_NOINFO`, e.g. `echo 1 > cgroup.kill`) and a positive `si_code` (e.g. `fcntl` `F_SETSIG`) are **not** dropped: a process acted |
+| A reload signal (`SIGHUP`, `SIGUSR1`, `SIGUSR2`, real-time) to a tool that **catches** it (`SigCgt` at scan time) | none | a reload (logrotate, `ExecReload=`, `systemctl reload`, Suricata's `SIGUSR2`); dropped **in the kernel**, so a storm of them cannot fill the ring ahead of a kill |
+| the same signals to a tool with **no handler** | Medium | the default action ends it; reported like the other catchable signals (`SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGABRT` are never treated as reloads: a handler for them is how a daemon shuts down) |
+| `kill -0`, a tool signalling itself, a signal sent by the kernel (`SEND_SIG_PRIV`), `SIGCHLD` / `SIGCONT` / `SIGURG` / `SIGWINCH` | none | dropped in the kernel (`SEND_SIG_PRIV`, a signal outside the terminating set) or by the rule (self-signal). **No filter on `si_code`**: a null `siginfo` (`echo 1 > cgroup.kill`), a positive code (`fcntl` `F_SETSIG`) and a negative one are all reported, because a process picks its `si_code` with `rt_sigqueueinfo` / `pidfd_send_signal` (the kernel refuses only a non-negative one and `SI_TKILL` toward another process). For `SI_TIMER` / `SI_MESGQ` / `SI_ASYNCIO` the event is marked `sender_unreliable` and the alert says so |
 | any other signal that ends a process by default (`SIGUSR1`, `SIGPIPE`, `SIGALRM`, real-time...) from a process other than pid 1 | Medium | reported as `signal N`; the tool dies of it unless it handles it, and which ones it handles is not known |
 
 The agent's own pid keeps the older behaviour (`SIGHUP` included: the agent does not reload on it).
@@ -88,13 +88,28 @@ gone by the time its event is drained.
   (`EPERM`) from a delivered one. Permission is checked **before** the tracepoint fires, so a
   refused signal never reaches it, and `result` only says "delivered, ignored or already
   pending". `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 60).
-- *`SIGHUP` depends on the tool's handler.* It is the commonest benign signal a daemon gets
-  (reload), but its default action ends a process, so hiding it for every tool was an evasion
-  path (a reviewer's point on #1114). The probe now lets `SIGHUP` through; the drain reads the
-  tool's `SigCgt` (`/proc/<pid>/status`, taken at scan time, at most 5 s old) and drops the
-  event when the tool catches it. A tool whose `SigCgt` could not be read counts as having no
-  handler: over-reporting is the safe error. Lab: `auditd` (catches it) silent, a unit running
-  `sleep` (no handler) Medium.
+- *Reload signals depend on the tool's handler.* `SIGHUP`, `SIGUSR1`, `SIGUSR2` and the real-time
+  signals are what daemons catch to reload (logrotate, Suricata's `SIGUSR2`), but their default
+  action ends a process, so hiding them for every tool was an evasion path (review of #1114).
+  The scan reads each process's `SigCgt` (`/proc/<pid>/status`, at most 5 s old) into the value
+  of its `SIGNAL_WATCH_TOOLS` entry, and the probe drops such a signal when the tool catches it:
+  **in the kernel**, not in the drain, so a storm of them does not fill the ring ahead of a
+  `SIGKILL`. A tool whose `SigCgt` could not be read counts as catching nothing: over-reporting
+  is the safe error. Lab: `auditd` (catches `SIGHUP`, `SIGUSR1`, `SIGUSR2`) silent, a unit
+  running `sleep` (no handler) Medium.
+- *No filter on `si_code`; an unreliable sender is marked, not dropped.* The first cut dropped
+  `SI_TIMER` / `SI_MESGQ` / `SI_ASYNCIO` as "from interrupt context". A process can choose those
+  codes itself with `rt_sigqueueinfo` or `pidfd_send_signal`, so a `SIGKILL` sent with
+  `si_code = -2` was invisible (review of #1114, reproduced in the lab: the event now alerts High).
+  The probe sets a bit in the wire `signal` (`SIGNAL_SENDER_UNRELIABLE`, no layout or
+  `WIRE_VERSION` change), userspace strips it and sets `SignalEvent::sender_unreliable` (inside
+  schema 60, which this PR introduces: absent means false), and the alert adds that the sender is not
+  reliable. For the three codes `current` really is a bystander when the kernel raised them.
+- *Lost signals are an alert.* A full ring is counted per CPU (`SIGNAL_TOOL_DROPS`); when the
+  count grows the sensor emits a `FileOpenEvent` flagged `FLAG_SIGNAL_EVENTS_LOST` and the rule
+  `check_signal_events_lost` raises T1562.001 Medium: a flood of lethal signals ahead of a kill
+  is how a tool is ended unseen. The kernel drop of caught reloads removes the cheapest flood;
+  a flood of lethal signals (`SIGTERM`) can still fill the ring, and is now reported.
 - *Medium for the catchable signals.* An administrator's stop and an attacker's are the same
   command; High is kept for what cannot be handled.
 
@@ -113,8 +128,9 @@ captures under `lab/captures/test-1103-*` and `test-1114-20261103`):
   and a restarted tool was watched within the rescan.
 - **cgroup v1 (hybrid) live** on Rocky 9.8: watch list of 2, `kill -9` of `auditd`, SIGTERM from
   pid 1 and `pkill` alerted.
-- **A real vendor daemon**, Suricata 7.0.17 on Fedora: SIGUSR2 (its reload) and SIGHUP gave an
-  event and no alert; `kill -9`, SIGTERM from pid 1, `pkill` and a `tgkill` of a worker thread
+- **A real vendor daemon**, Suricata 7.0.17 on Fedora, **before** the reload signals were dropped
+  in the kernel (it then gave an event and no alert for SIGUSR2 and SIGHUP; the rule has since
+  changed, see the next item for the current behaviour): `kill -9`, SIGTERM from pid 1, `pkill` and a `tgkill` of a worker thread
   alerted with unit `suricata`.
 - **A signal storm** (about 240,000 SIGURG in 1 s) with a `kill` inside it lost nothing, on
   cgroup v2.
@@ -122,12 +138,25 @@ captures under `lab/captures/test-1103-*` and `test-1114-20261103`):
   writing shell as sender; `fcntl` `F_SETSIG=SIGKILL` High with `python3` as sender; `SIGUSR1`
   Medium; `SIGWINCH`, `SIGCHLD` no event; a tool moved to another cgroup stayed watched and a
   later `SIGTERM` alerted; `SIGHUP` silent for `auditd`, Medium for a unit with no handler.
+- **Third round of #1114** (same VM, `auditd`, captures `test-1114-20261103/run-r3`,
+  `run-storm`): a **forged `si_code`** (`rt_sigqueueinfo`, python `ctypes` syscall 129,
+  `SIGKILL` with `si_code = -2` from root) alerted High with "the sender is not reliable"; the
+  same with `si_code = -6` (`SI_TKILL`) was refused by the kernel (`EPERM`, nothing killed).
+  A **`SIGHUP` storm** to `auditd`, which catches it: 538,261 signals in 1.5 s with a `kill -9`
+  at the end, and in a first run 20,252 signals with the kill after 50 ms: not one `SIGHUP`
+  event reached userspace, the `SIGKILL` alerted High, and no loss was counted (`SIGNAL_TOOL_DROPS`
+  stayed 0, no "signals lost" event). **Caught reloads on a synthetic unit** named `osqueryd`
+  (not a real vendor tool): a python process with a `SIGUSR2` handler gave no event for
+  `SIGUSR2`; `SIGUSR1` (no handler) Medium (`signal (10)`); a `sleep` unit hit by `SIGUSR2`
+  Medium (`signal (12)`).
 
 **Not verified:** the storm on cgroup v1 (same probe and filter, only the rescan reads another
-hierarchy: accepted by argument); a full ring (the drop counter is read in the code, no run
-filled it); a `SI_TIMER` signal (the probe drops it by reading the code, no lab case: a timer
-cannot be armed on another process); a kernel older than 5.14; `falco` and `osqueryd` as real
-tools (the unit-name list is the same code path). One VM per kernel, one week.
+hierarchy: accepted by argument); a **full ring** (the storm of caught `SIGHUP` no longer reaches
+it, and no run filled it with lethal signals, so the "signals lost" event is covered by unit tests
+only); a real `SI_TIMER` signal raised by the kernel (only the forged one was run); Suricata
+**after** the reload filter (the real daemon was not reinstalled: the synthetic unit stands in for
+it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with the new probe;
+`falco` and `osqueryd` as real tools. One VM per kernel, one week.
 
 **Out of scope, by decision:** a tool in a container (ADR-0007 of the project vault).
 
@@ -146,7 +175,7 @@ tools (the unit-name list is the same code path). One VM per kernel, one week.
 - **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
   commands (issue #1118, ADR-0044 in PR #1123): until it is fixed the manager-sent stop depends on
   a rule that often cannot see the command.
-- **Signal attribution.** A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
+- **Signal attribution.** With `sender_unreliable` the `meta` of the event may be a bystander (`SI_TIMER`, `SI_MESGQ`, `SI_ASYNCIO`, or a forged code). A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
   other in-kernel callers that pass 0 to `send_sig` were not enumerated (a wrong sender is the
   safe error). `SigCgt` is as old as the last scan.
 
@@ -184,8 +213,10 @@ in `raw.rs`), so a sender cannot fill the shared ring with `SIGCONT` or `SIGWINC
 ahead of a `SIGKILL`; a full ring is counted per CPU (`SIGNAL_TOOL_DROPS`) and reported by the
 rescan. A watched tool that leaves its unit's cgroup stays watched until it exits. A drained event
 whose target left the scan is named from the previous scan too, and one that matches nothing gets
-no image and no unit (never the agent's). `SIGNAL_WATCH_TOOLS` holds 4096 entries (units times
-`MAX_PROCS_PER_UNIT`), and a unit past the cap is logged.
+no image and no unit (never the agent's). `SIGNAL_WATCH_TOOLS` holds `SIGNAL_WATCH_TOOLS_ENTRIES` (8192) entries, checked at compile time
+against `SECURITY_SERVICES.len()` (24) times `MAX_PROCS_PER_UNIT` (6144, plus headroom for moved
+tools and failed removals); a unit past the process cap, or with more cgroups than
+`MAX_CGROUPS_PER_UNIT`, is logged (the second only when a directory was left unread).
 
 A tool that left its unit's cgroup stays watched while it is the same process (same pid and start
 time, `/proc/<pid>/stat` field 22); without a start time recorded at scan it is dropped. A failed
