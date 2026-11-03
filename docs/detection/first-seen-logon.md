@@ -105,8 +105,12 @@ odd_hour_exempt_accounts = ["svc_backup", "CORP\\oncall"]
 `work_hours = [start, end]`: `start` 0 to 23, `end` 1 to 24, different; `start` greater than `end` wraps
 midnight. `odd_hour_exempt_accounts` lists the accounts whose odd-hour logons are expected (on-call staff, the
 service or batch account of a schedule): matched without case against the account **as the logon reports it**,
-so a domain account is listed as `DOMAIN\name` and a bare entry exempts only an unqualified account — it does
-not exempt the same name under a domain, which an intruder with local admin could create. At most 64.
+and the Windows logon event (4624) reports the bare account name with no domain. **A bare entry therefore exempts
+any account of that name on the host, including a local one an intruder with local admin creates under it**
+(reproduced live on a Windows 11 host, 2026-11-03: the listed local account raised nothing, an unlisted one
+raised the alert). A `DOMAIN\name` entry matches only an event that reports exactly that string, which no
+sensor does for a logon today. The SID in the event, which an intruder cannot choose, is not read yet. Keep the
+list to accounts whose name you would not mind an intruder reusing. At most 64.
 **Both are empty by default and only the
 odd-hour rule reads them**: FIRST-SEEN-LOGON still sees an exempt account, and nothing is exempt until the
 operator names it. Both fail the config load when malformed (ADR-0013); the rules refuse them too.
