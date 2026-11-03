@@ -61,7 +61,8 @@ target:
 | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGABRT` from a process other than pid 1 | Medium | an administrator's `kill <pid>`, or `service auditd stop` (its helper `auditctl` sends the `SIGTERM`, not pid 1), looks the same as an attacker's, like `systemctl stop` |
 | any terminating signal from pid 1 | Low | `systemctl stop`, a stop timeout, an upgrade; the manager does not say who asked |
 | `SIGHUP` | none | a daemon reads it as "reload your configuration" (logrotate, `ExecReload=`, `systemctl reload`) |
-| `kill -0`, a tool signalling itself, a signal sent by the kernel | none | dropped in the kernel (code `<= 0`, a null or special `siginfo`) or by the rule |
+| `kill -0`, a tool signalling itself, a signal sent by the kernel (`SEND_SIG_PRIV`), `SIGCHLD` / `SIGCONT` / `SIGURG` / `SIGWINCH` | none | dropped in the kernel (`SEND_SIG_PRIV`, a signal outside the terminating set) or by the rule (self-signal). A null `siginfo` (`SEND_SIG_NOINFO`, e.g. `echo 1 > cgroup.kill`) and a positive `si_code` (e.g. `fcntl` `F_SETSIG`) are **not** dropped: a process acted |
+| any other signal that ends a process by default (`SIGUSR1`, `SIGPIPE`, `SIGALRM`, real-time...) from a process other than pid 1 | Medium | reported as `signal N`; the tool dies of it unless it handles it, and which ones it handles is not known |
 
 The agent's own pid keeps the older behaviour (`SIGHUP` included: the agent does not reload on it).
 
@@ -138,3 +139,11 @@ minute is not maintenance.
 - **Expected false positives, hence Medium**: an administrator stopping `auditd` or `clamav-daemon`
   to debug or upgrade, a package script, configuration management, an uninstall of an agent.
   Nothing is excluded by process name.
+
+**Review fixes of PR #1114.** The kernel filter keeps only the terminating signals (`TOOL_SIGNALS`
+in `raw.rs`, `SIGHUP` left out), so a sender cannot fill the shared ring with `SIGCONT` or `SIGWINCH`
+ahead of a `SIGKILL`; a full ring is counted per CPU (`SIGNAL_TOOL_DROPS`) and reported by the
+rescan. A watched tool that leaves its unit's cgroup stays watched until it exits. A drained event
+whose target left the scan is named from the previous scan too, and one that matches nothing gets
+no image and no unit (never the agent's). `SIGNAL_WATCH_TOOLS` holds 4096 entries (units times
+`MAX_PROCS_PER_UNIT`), and a unit past the cap is logged.
