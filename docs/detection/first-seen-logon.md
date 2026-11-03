@@ -40,7 +40,30 @@ no rule on `main` fired on a successful logon, so the join joined nothing on a h
 that source: a detection whose event is a successful `AuthKind::Logon`. It inherits the join's
 limits (generic accounts excluded, `vagrant` not, never `LogonFailure`, `ExplicitCredentials` not
 counted). Because it alerts once per account, the join sees an identity only the first time the
-account logs on to a host after the window. **No lab run is claimed.**
+account logs on to a host after the window. The lab runs are recorded under "Lab runs" below.
+
+## Lab runs
+
+- **Windows (#1091, 2026-11-03)**: Windows 11 (French UI, `Romance Standard Time`), a release agent built
+  from `main` at `81cc6c52`, run elevated with `--standalone`, a real local account per case logging on
+  through `Start-Process -Credential`, captures in `lab/captures/test-1091-20261103/` (filtered to the `auth`
+  events and the T1078 alerts; its README gives the table). Verified:
+  - **The Windows logon event** is `auth`, `kind: logon`, `outcome: success`, `target_user` the bare account
+    name (no domain, no machine), `target_user_sid`, `source_address` `::1`; each logon also produced an
+    `explicit_credentials` event (4648), which the rule does not count.
+  - **Inside the window, nothing**: a logon at 16:10 local with no `[detection]` section raised nothing.
+  - **`utc_offset_minutes = 600`**: the first logon of a new account at 01:1x (as the rule saw it) raised
+    ODD-HOUR-LOGON once (T1078, Low); a second logon of the same account about 5 s later did not repeat.
+  - **The Windows time-zone conversion** (`GetDynamicTimeZoneInformation`, the part this page said was never
+    run): with no `[detection]` section and the system zone set to `Tokyo Standard Time` with `tzutil`, a
+    logon at 00:16 local raised the alert at 00:00. The message prints the hour only (`{hour:02}:00`).
+  - **A defect found**: the same run alerted on the account `Système`, the local SYSTEM account (SID
+    `S-1-5-18`) of a French Windows. The generic-account list holds English names only, and the name reaches
+    the event with its `è` already replaced by U+FFFD, so no spelling of it can match. The SID is on the
+    event; matching `S-1-5-18`, `-19` and `-20` would be language-independent. Not fixed here.
+  - **Not covered**: the 8 h quiet period on Windows (only the 5 s repeat), service and batch logons by name
+    (`SERVICE LOCAL`, `SERVICE RÉSEAU`, not run), domain accounts, the logon type, and Windows or macOS
+    clippy beyond `enrich`.
 
 ## Provisional and stated gaps
 
@@ -110,5 +133,5 @@ Provisional, and stated:
   order, a zone with no answer; and the module's own test in the agent, the real `localtime_r` under POSIX
   `TZ` rules either side of the EU and US changes (Unix only). Not run: the agent with a real
   `agent.toml`, a live sshd or 4624 logon at night, **the Windows conversion (compiled for
-  `x86_64-pc-windows-gnu`, never run)**, Windows or macOS clippy beyond `enrich`. Per-OS verification
-  is #1090 (Linux), #1091 (Windows), #1092 (macOS).
+  `x86_64-pc-windows-gnu`, never run before #1091; see "Lab runs")**, Windows or macOS clippy beyond `enrich`.
+  Per-OS verification is #1090 (Linux), #1091 (Windows, done above), #1092 (macOS).
