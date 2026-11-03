@@ -126,8 +126,14 @@ Provisional, and stated:
     local at +600 min, and +9 h makes it 09:5x local, inside `WORK_HOURS_LOCAL` (7, 20). `OddHours::observe`
     (`crates/rules/src/logon.rs`) returns `None` on the hour check before it looks at the quiet period, so the
     experiment could not tell "cooldown still active" from "cooldown elapsed". A repeat check by moving the
-    clock needs a shift that keeps the logon out of the window, for example a multiple of 24 h; it was **not
-    run**. Until it is, the repeat rests on the unit tests, which feed fabricated event times.
+    clock needs a shift that keeps the logon out of the window; that was done in a later run (next bullet).
+  - **8 h quiet period, by moving the clock (2026-11-03, a third run, not part of the 2026-11-02 captures)**:
+    Fedora 43 (`Europe/Paris`), agent of `main` at `81cc6c52`, no setting (platform zone in use), default
+    window 07-20, one fresh account, real sshd logons, `chronyd` stopped and the journald wall clock moved by
+    hand. First alert at 21:00 host-local time; a logon 4 s later silent; **7 h 30 later silent**; **8 h 30
+    later alert**; 30 min after that alert silent; **21 h later alert**. So the quiet period holds on a live
+    agent, stays silent inside it, alerts after it, and restarts at each alert. Details and the capture script:
+    `issues/issue-1090.md`, section "Update 2026-11-03".
   - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
     `root` was not tried (no root key on the VM).
   - **Non-generic accounts you did not mean to test alert too**: the lab's own `edr-lab` logons (the SSH
@@ -142,7 +148,7 @@ Provisional, and stated:
     names no zone, or its zone cannot convert the present** (the agent then logs "the platform gave no time zone
     offset"; that second case was not reproduced); on a host with a zone it is on.
   
-  Not verified on Linux: the 8 h repeat after the quiet period, a daylight-saving change (the unit and
+  Not verified on Linux: a daylight-saving change (the unit and
   `localtime_r` tests cover it), `utc_offset_minutes` overriding a different platform zone on a live agent,
   console, `su` or `sudo` logons, password logins (only public-key ones were made), a logon during a
   failed-then-successful sequence, a root login, and journals on hosts that do not use sshd.
