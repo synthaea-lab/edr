@@ -224,4 +224,5 @@ describe("eventArchiveFromEnv", () => {
   it("is ready with a reader on a directory lake", () => {
     const archive = eventArchiveFromEnv({ LAKE_DIR: "/var/lake" });
     expect(archive.state).toBe("ready");
+  });
 });
