@@ -93,6 +93,15 @@ start that follows can be seen. It alerts, Medium, unless the stop is explained:
 
 The windows are choices, not measurements (no fleet data), and are named constants in the module.
 
+A shutdown or a start is read from the **name** of the program, and each one silences an alert, so
+it counts only when the image path is a system path or unknown (`policy::name_exclusion_applies`),
+and an init script only from `/etc/init.d/`: a copy of `true` named `/tmp/reboot` or
+`/tmp/systemctl` explains nothing. A `systemctl` (or `deb-systemd-invoke`) call with `--user`,
+`--host`/`-H` or `--machine`/`-M` acts on a user manager, another host or a container, so it
+neither starts a local unit nor opens the shutdown window. A start is a **claim** the rule does not
+see succeed: a `systemctl start` that fails (a masked unit, a unit that does not exist) still
+explains the stop.
+
 Stated gaps: **no shutdown signal exists in the stream** (the journal sensor reports unit stops of
 the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
 exec that asks for it; one asked another way (power button, logind from a desktop session, an ACPI
