@@ -94,7 +94,7 @@ Provisional, and stated:
 
 - **07:00 to 20:00 and 8 hours are choices, not measurements.** No weekends, no shifts, no per-host
   profile: a host used around the clock, on-call staff and night shifts alert every night. That is why
-  the rule is Low and why it stays off by default.
+  the rule is Low.
 - **On by default wherever a zone is found** (a change of #1088; it was off until the operator set an
   offset): the rule now alerts on hosts nobody configured. It stays Low, once per account per 8 hours.
 - **The zone is the host's setting.** A server left on UTC is judged in UTC; a laptop whose user travels
@@ -114,12 +114,17 @@ Provisional, and stated:
     domain. Every logon produced exactly one such event.
   - **`[detection] utc_offset_minutes` set**: with `0` (14:5x UTC), a logon of `lab1090` raised nothing; with
     `600` (00:xx local), `lab1090` raised ODD-HOUR-LOGON once (`T1078`, Low, "at 00:00 host-local time"); a
-    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out, and
-    **it cannot be driven by moving the VM's clock** (second run, `edr-lab`, `utc_offset_minutes = 600`):
-    the first logon alerted, the second 4 s later did not, then the VM's wall clock was moved +9 h and two
-    more logons raised nothing, because a logon event's time is the kernel's monotonic clock plus a boot offset
-    fixed when the agent starts, not the wall clock. Only a real 8 h wait with the agent running can show the
-    repeat; until then it rests on the unit tests, which feed fabricated event times.
+    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out. A second
+    run (`edr-lab`, `utc_offset_minutes = 600`) tried to skip the wait: the first logon alerted, the second 4 s
+    later did not, then the VM's wall clock was moved +9 h and two more logons raised nothing. **That null
+    result says nothing about the cooldown.** The logon event's time is journald's wall clock
+    (`__REALTIME_TIMESTAMP`, `record.realtime_us` in `crates/sensors/linux/journal/src/record.rs`, copied to
+    `timestamp_ns` in `auth.rs`), so moving the clock does move it. But a logon at about 14:5x UTC is 00:5x
+    local at +600 min, and +9 h makes it 09:5x local, inside `WORK_HOURS_LOCAL` (7, 20). `OddHours::observe`
+    (`crates/rules/src/logon.rs`) returns `None` on the hour check before it looks at the quiet period, so the
+    experiment could not tell "cooldown still active" from "cooldown elapsed". A repeat check by moving the
+    clock needs a shift that keeps the logon out of the window, for example a multiple of 24 h; it was **not
+    run**. Until it is, the repeat rests on the unit tests, which feed fabricated event times.
   - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
     `root` was not tried (no root key on the VM).
   - **Non-generic accounts you did not mean to test alert too**: the lab's own `edr-lab` logons (the SSH
@@ -131,7 +136,8 @@ Provisional, and stated:
     would be outside the window): the agent logged "the host names no time zone; odd-hour logon rule off unless
     utc_offset_minutes is set" and a `lab1090` logon raised nothing. The control at the same clock with
     `Europe/Paris` (03:00 local) raised it. **The rule is therefore silent without a setting only when the host
-    names no zone**; on a host with a zone it is on.
+    names no zone, or its zone cannot convert the present** (the agent then logs "the platform gave no time zone
+    offset"; that second case was not reproduced); on a host with a zone it is on.
   
   Not verified on Linux: the 8 h repeat after the quiet period, a daylight-saving change (the unit and
   `localtime_r` tests cover it), `utc_offset_minutes` overriding a different platform zone on a live agent,
