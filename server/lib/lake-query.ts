@@ -65,8 +65,9 @@ export interface LakeQuery {
    */
   order?: "asc" | "desc";
   /**
-   * Checked before each file is read: an aborted signal ends the query by throwing its reason, so a
-   * caller can bound the time. A file already being read is not interrupted.
+   * Checked before each listing and before each file is read: an aborted signal ends the query by
+   * throwing its reason, so a caller can bound the time. A listing or a file already in progress is not
+   * interrupted, so a caller that must not return late checks the signal again once the query returns.
    */
   signal?: AbortSignal;
   /**
@@ -140,7 +141,7 @@ function dayString(dayNumber: number): string {
  *
  * Every key returned is checked against the layout, the tenant and the day that was asked for
  * (the second isolation layer), and a key that fails is ignored. Shared by {@link queryLake} and
- * {@link scanLake}.
+ * {@link scanLake}. When `signal` is aborted the listing throws its reason before the next store call.
  */
 export async function listPartitionFiles(
   reader: LakeReader,
@@ -149,7 +150,8 @@ export async function listPartitionFiles(
   last: number,
   types: string[] | null,
   maxFiles: number,
-  newestFirst = false
+  newestFirst = false,
+  signal?: AbortSignal
 ): Promise<{ files: PartitionFile[]; truncated: boolean }> {
   const files: PartitionFile[] = [];
   const wanted = types === null ? null : Array.from(new Set(types));
@@ -160,6 +162,8 @@ export async function listPartitionFiles(
     const date = dayString(day);
     const under = `tenant=${tenantId}/date=${date}/`;
     for (const prefix of wanted === null ? [under] : wanted.map((type) => `${under}type=${type}/`)) {
+      // A listing is one store call per day and type (up to MAX_RANGE_DAYS x MAX_TYPES): check the deadline before each.
+      signal?.throwIfAborted();
       for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length })) {
         const m = KEY.exec(key);
         // The second layer: whatever the store listed, only this tenant's well-formed keys of this day are read.
@@ -276,7 +280,7 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     if (typeof value !== "string") throw new RangeError(`filter ${name} must be a string`);
     tests.push([EQUALITY_COLUMNS[name as LakeFilterName], name === "sha256" ? value.toLowerCase() : value]);
   }
-  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, MAX_FILES, newestFirst);
+  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, MAX_FILES, newestFirst, q.signal);
   const files = listed.files;
   files.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.key < b.key ? -1 : 1));
   // The listing already walked the days in the order the query wants rows (newest first for "desc"),
@@ -289,7 +293,8 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
   let filesRead = 0;
 
   // One day at a time: its matches are ordered by ts before they count against the limit, so the
-  // limit keeps the oldest rows of the range and never cuts a day in file order.
+  // limit keeps the rows the order reads first (the newest for "desc", the oldest for "asc") and never
+  // cuts a day in file order.
   for (let i = 0; i < toRead.length && !truncated; ) {
     const date = toRead[i].date;
     const day: LakeRow[] = [];

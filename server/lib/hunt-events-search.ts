@@ -86,6 +86,7 @@ export async function searchEventsWithinLimit(
     async (tx) => {
       if (!(await admitSearch(tx, tenantId))) return { status: "busy" } as const;
       await options.beforeRead?.(tx);
+      const signal = AbortSignal.timeout(timeoutMs);
       const result = await queryLake(reader, {
         tenantId,
         from,
@@ -95,8 +96,12 @@ export async function searchEventsWithinLimit(
         limit: SEARCH_PAGE_SIZE,
         order: "desc",
         includeEvent: false,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal,
       });
+      // queryLake checks the deadline only before a file: a last file that ran past it (plus the
+      // transaction's margin) would return a page that the commit then loses to an expired
+      // transaction, a 500. Throw the TimeoutError here instead, which is a 504.
+      signal.throwIfAborted();
       const page: EventPage = {
         source: "events",
         truncated: result.truncated,
