@@ -60,7 +60,8 @@ target:
 | `SIGKILL`, `SIGSTOP` from a process other than pid 1 | High | cannot be handled: the tool is ended or frozen |
 | `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGABRT` from a process other than pid 1 | Medium | an administrator's `kill <pid>`, or `service auditd stop` (its helper `auditctl` sends the `SIGTERM`, not pid 1), looks the same as an attacker's, like `systemctl stop` |
 | any terminating signal from pid 1 | Low | `systemctl stop`, a stop timeout, an upgrade; the manager does not say who asked |
-| `SIGHUP` | none | a daemon reads it as "reload your configuration" (logrotate, `ExecReload=`, `systemctl reload`) |
+| `SIGHUP` to a tool that **catches** it (`SigCgt` bit 0 at scan time) | none | a reload (logrotate, `ExecReload=`, `systemctl reload`); the event is dropped in the drain |
+| `SIGHUP` to a tool with **no handler** | Medium | the default action ends it; it is reported like the other catchable signals |
 | `kill -0`, a tool signalling itself, a signal sent by the kernel (`SEND_SIG_PRIV`), `SIGCHLD` / `SIGCONT` / `SIGURG` / `SIGWINCH` | none | dropped in the kernel (`SEND_SIG_PRIV`, a signal outside the terminating set) or by the rule (self-signal). A null `siginfo` (`SEND_SIG_NOINFO`, e.g. `echo 1 > cgroup.kill`) and a positive `si_code` (e.g. `fcntl` `F_SETSIG`) are **not** dropped: a process acted |
 | any other signal that ends a process by default (`SIGUSR1`, `SIGPIPE`, `SIGALRM`, real-time...) from a process other than pid 1 | Medium | reported as `signal N`; the tool dies of it unless it handles it, and which ones it handles is not known |
 
@@ -87,9 +88,13 @@ gone by the time its event is drained.
   (`EPERM`) from a delivered one. Permission is checked **before** the tracepoint fires, so a
   refused signal never reaches it, and `result` only says "delivered, ignored or already
   pending". `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 60).
-- *`SIGHUP` is not an alert for a tool.* It is the commonest benign signal a daemon gets and the
-  issue asks for a benign test on it. The price is stated: a tool with no `SIGHUP` handler is
-  ended by it, and that is not seen here.
+- *`SIGHUP` depends on the tool's handler.* It is the commonest benign signal a daemon gets
+  (reload), but its default action ends a process, so hiding it for every tool was an evasion
+  path (a reviewer's point on #1114). The probe now lets `SIGHUP` through; the drain reads the
+  tool's `SigCgt` (`/proc/<pid>/status`, taken at scan time, at most 5 s old) and drops the
+  event when the tool catches it. A tool whose `SigCgt` could not be read counts as having no
+  handler: over-reporting is the safe error. Lab: `auditd` (catches it) silent, a unit running
+  `sleep` (no handler) Medium.
 - *Medium for the catchable signals.* An administrator's stop and an attacker's are the same
   command; High is kept for what cannot be handled.
 
@@ -98,18 +103,52 @@ not `clamd.service`), and a **restarted tool's new pid for up to 5 seconds** (th
 not watched. A sender in the tool's own unit (its watchdog) is not told apart from an intruder:
 the event has no sender unit. The listed unit names were not checked on a host beyond `auditd`.
 
-**Verified** on the Fedora 43 lab VM (kernel 7.2.9, the agent built from this branch, observe-only)
-**and on the Rocky 9.8 VM (kernel 5.14, the static musl build, `auditd` 3.1.5)**, with the same
-scenario (`lab/captures/test-1103-20261102/run-1103.sh`, `run-1103-rocky.sh`): the verifier accepts
-`raw_signal_generate` on both kernels; against `auditd`, `kill -0` raised nothing, `kill -HUP`
-produced an event and no alert, `kill -9` alerted High (and escalated), and `service auditd stop`
-(sender `auditctl`), `pkill -x auditd` and a `pidfd_send_signal` (sender `python3`) each alerted
-once with the unit and the exe in the event; a `tgkill` of a **worker thread** was reported under
-the process id; and a restarted `auditd` (new pid) was watched within the rescan, twice per
-kernel. **Not verified:** a real vendor tool other than `auditd` (none is installed in the lab),
-a tool in a container, the cgroup v1 layout on a live host, the volume of `signal_generate` on a
-busy host (the probe exits after one hash lookup for any other target), and a kernel older than
-5.14. One VM per kernel, one day.
+### Verification status
+
+**Verified** (Fedora 43, kernel 7.2.9; Rocky 9.8, kernel 5.14, static musl build; observe-only;
+captures under `lab/captures/test-1103-*` and `test-1114-20261103`):
+- The verifier accepts `raw_signal_generate` on 5.14 and 7.2.9. Against `auditd`: `kill -0`
+  nothing, `kill -9` High, `service auditd stop` (sender `auditctl`), `pkill`, `pidfd_send_signal`
+  and a `tgkill` of a worker thread (reported under the process id) alerted with unit and exe,
+  and a restarted tool was watched within the rescan.
+- **cgroup v1 (hybrid) live** on Rocky 9.8: watch list of 2, `kill -9` of `auditd`, SIGTERM from
+  pid 1 and `pkill` alerted.
+- **A real vendor daemon**, Suricata 7.0.17 on Fedora: SIGUSR2 (its reload) and SIGHUP gave an
+  event and no alert; `kill -9`, SIGTERM from pid 1, `pkill` and a `tgkill` of a worker thread
+  alerted with unit `suricata`.
+- **A signal storm** (about 240,000 SIGURG in 1 s) with a `kill` inside it lost nothing, on
+  cgroup v2.
+- **The review fixes of #1114** (Fedora 7.2.9, `auditd`): `echo 1 > cgroup.kill` High with the
+  writing shell as sender; `fcntl` `F_SETSIG=SIGKILL` High with `python3` as sender; `SIGUSR1`
+  Medium; `SIGWINCH`, `SIGCHLD` no event; a tool moved to another cgroup stayed watched and a
+  later `SIGTERM` alerted; `SIGHUP` silent for `auditd`, Medium for a unit with no handler.
+
+**Not verified:** the storm on cgroup v1 (same probe and filter, only the rescan reads another
+hierarchy: accepted by argument); a full ring (the drop counter is read in the code, no run
+filled it); a `SI_TIMER` signal (the probe drops it by reading the code, no lab case: a timer
+cannot be armed on another process); a kernel older than 5.14; `falco` and `osqueryd` as real
+tools (the unit-name list is the same code path). One VM per kernel, one week.
+
+**Out of scope, by decision:** a tool in a container (ADR-0007 of the project vault).
+
+### Known gaps
+
+- **Containers.** The rule watches the processes of the listed **host systemd units**, resolved
+  from the unit's cgroup. A tool in a container runs in a runtime scope that carries the
+  container id, not the tool's name, so it is not watched. Its own follow-up issue.
+- **A tool not run by a systemd unit**, a template instance (`clamd@scan.service` is not
+  `clamd.service`), and a restarted tool's new pid for up to 5 s are not watched.
+- **A sender in the tool's own unit** (its watchdog) is not told apart from an intruder: the
+  event has no sender unit.
+- **A stop through the service manager is Low** (sent by pid 1, which does not say who asked).
+  It is not left alone: the exec rule `check_security_tool_stop` (Medium) reads `systemctl stop`
+  and `systemctl kill`, and the journal source (#1085) reports a stop nobody explains.
+- **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
+  commands (issue #1118, ADR-0044 in PR #1123): until it is fixed the manager-sent stop depends on
+  a rule that often cannot see the command.
+- **Signal attribution.** A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
+  other in-kernel callers that pass 0 to `send_sig` were not enumerated (a wrong sender is the
+  safe error). `SigCgt` is as old as the last scan.
 
 ## `systemctl kill`
 
@@ -141,7 +180,7 @@ minute is not maintenance.
   Nothing is excluded by process name.
 
 **Review fixes of PR #1114.** The kernel filter keeps only the terminating signals (`TOOL_SIGNALS`
-in `raw.rs`, `SIGHUP` left out), so a sender cannot fill the shared ring with `SIGCONT` or `SIGWINCH`
+in `raw.rs`), so a sender cannot fill the shared ring with `SIGCONT` or `SIGWINCH`
 ahead of a `SIGKILL`; a full ring is counted per CPU (`SIGNAL_TOOL_DROPS`) and reported by the
 rescan. A watched tool that leaves its unit's cgroup stays watched until it exits. A drained event
 whose target left the scan is named from the previous scan too, and one that matches nothing gets
@@ -151,5 +190,3 @@ no image and no unit (never the agent's). `SIGNAL_WATCH_TOOLS` holds 4096 entrie
 A tool that left its unit's cgroup stays watched while it is the same process (same pid and start
 time, `/proc/<pid>/stat` field 22); without a start time recorded at scan it is dropped. A failed
 removal from the kernel set is retried at the next scan and the pid stays named until it succeeds.
-`SIGHUP` to a tool that has no handler ends it with no event (kernel filter and rule): a known gap,
-settled per tool only by reading `SigCgt` at scan time, which is not done.
