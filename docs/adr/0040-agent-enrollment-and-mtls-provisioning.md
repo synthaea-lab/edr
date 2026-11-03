@@ -10,7 +10,7 @@ that is fully built: nginx terminates TLS and forwards `X-Client-Cert-Verified`/
 `X-Client-Cert-Subject`; `server/lib/agent-auth.ts`'s `authenticateAgent` reads an
 `enrollmentId` out of the certificate's CN (`extractEnrollmentId`) and looks it up against
 `Agent.enrollmentId` (`@unique`, `server/prisma/schema.prisma`'s `Agent` model).
-`docs/architecture/ control-plane.md`'s heartbeat contract is explicit that this is the
+`docs/architecture/control-plane.md`'s heartbeat contract is explicit that this is the
 *only* identity that counts: `agent_id` in a request body is `null` today and is "never
 trusted" — correctly, since trusting a self-reported field over the verified certificate
 would be the actual vulnerability. None of that is in question here.
@@ -112,7 +112,9 @@ than ADR-0027's, not a weaker version of the same one.
    clientAuth` only, and the capped lifetime of Decision 4. No name constraint is claimed:
    the identity is a random UUID in the CN, not a DNS name or an address, so there is no
    name space for a constraint to narrow. Every issuance is logged
-   (`AuditLog`, same table and shape as every other privileged action).
+   (`AuditLog`, same table and shape as every other privileged action). Enrollment is
+   unauthenticated, so there is no user to record: its rows use `userId` `"system"` (the
+   `check-ring-health` precedent) with the token id in `details`.
 
 3. **Enrollment: a shared, time-boxed, usage-capped token; the agent generates its own
    keypair; the server, never the agent, picks the identity.** An admin (an authenticated
@@ -171,13 +173,14 @@ than ADR-0027's, not a weaker version of the same one.
    Server-side, the request first checks the CSR, outside any transaction, and refuses it
    with `400` before touching the token if it fails: the CSR's self-signature verifies
    (proof the requester holds the private key), and the key is ECDSA P-256 or RSA of at least
-   3072 bits — anything else is refused, not upgraded. Then **one database transaction**
+   3072 and at most 4096 bits (the raw request body is size-capped before anything is parsed, so
+   an oversized key costs a length check, not a parse on the event loop) — anything else is refused, not upgraded. Then **one database transaction**
    holds everything that must happen together, and the certificate is returned only after it
    commits:
 
    1. the token is consumed by a single conditional `UPDATE ... SET uses_remaining =
       uses_remaining - 1 WHERE id = $1 AND secret_hash = $2 AND uses_remaining > 0 AND
-      expires_at > now() AND NOT locked RETURNING ...` — tokens are stored hashed, never in
+      expires_at > now() AND NOT disabled RETURNING ...` — tokens are stored hashed, never in
       plaintext, and two concurrent enrollments against a one-remaining-use token cannot
       both succeed, regardless of ordering;
    2. the server generates the `enrollmentId` and inserts the `Agent` row (or, for a
@@ -194,19 +197,45 @@ than ADR-0027's, not a weaker version of the same one.
    already refuses. There is no state in which a use is consumed without a matching `Agent`
    and `AuditLog` row, or the reverse.
 
+   **A lost response must not strand the host.** That guarantee covers the server's state, not
+   the host's: the commit can succeed and the `200` be dropped, or `agent enroll` can crash
+   before it writes the certificate. So `agent enroll` writes its private key to disk *before*
+   the first request, and the server records the SHA-256 of the CSR's public key on the
+   `Agent` row it creates. A retry with the same token and the same public key finds that row,
+   consumes no further use, and re-signs a certificate for the same `enrollmentId` instead of
+   failing as exhausted or minting a second identity; a different public key presented with
+   an already-consumed token is an ordinary exhausted-token refusal. The retry window is the
+   token's own expiry.
+
    Abuse is bounded per token, not per address. A presented token whose id exists but whose
    secret does not match increments that token's failure count, outside the rolled-back
-   transaction, and the token locks after a small number of failures (an admin can unlock or
-   reissue it); an unknown id is a plain `401`. The usage cap bounds how many identities one
+   transaction, and every such failure is audited; an unknown id is a plain `401`. The count
+   never refuses a request that carries the right secret: the id half of `<token id>.<secret>`
+   is not secret (console lists, audit rows and deployment scripts show it), so a lock on wrong
+   secrets would let anyone who sees an id stall a fleet rollout, and against a 256-bit secret
+   a lock buys nothing. A token stops working only on expiry, an exhausted cap, or an admin
+   disabling it (`disabled`). The usage cap bounds how many identities one
    leaked token can mint, and the expiry bounds for how long. nginx also gets a
    `limit_req_zone` for `/api/v1/enroll`, with the existing `cron` zone as the precedent, but
    only as a coarse flood guard: its burst is sized so a golden-image fleet enrolling behind
    one NAT address is not refused, and it is not what stops a distributed attacker — the
-   token's entropy, lock, cap and expiry are.
+   token's entropy, cap and expiry are.
+
+   **The enroll client backs off on `429` and `5xx`.** The nginx flood guard answers `429`, and
+   the transport crate's `is_retryable` is `status >= 500`, so `agent enroll` does not reuse
+   that classification: it retries `429` and `5xx` with exponential backoff and jitter,
+   honouring `Retry-After`, up to a bounded number of attempts, so a golden-image fleet behind
+   one NAT address slows down instead of failing for good.
 
    The server returns the signed certificate; `agent enroll` writes it, and the private key
    it already generated, to the paths `server.mtls_cert`/`server.mtls_key` already name —
    `agent run` needs no change at all; it already loads whatever is at those paths.
+   It loads them once, at start: a running `agent run` keeps its old in-memory identity,
+   and after a reissue (which rotates `enrollmentId`) that identity is refused with
+   `403` as non-retryable until the service restarts. So `agent enroll` ends by telling the
+   operator that a running service must be restarted, and the procedure includes that
+   restart; how it is triggered (the watchdog-owned service manager) is left to the
+   implementation.
 
 4. **Concrete lifetime, renewal window, and a cheap revocation check on both.** A signed
    certificate is valid 30 days, and renewal starts with at least a 10-day lead — generous
@@ -226,8 +255,12 @@ than ADR-0027's, not a weaker version of the same one.
    enrolled the same hour spreads its renewals over five days instead of arriving at once;
    a failed attempt retries on the next tick, inside the same window. It writes the new pair
    to the same `server.mtls_cert`/`server.mtls_key` paths with the ownership and mode the old
-   pair had, each atomically (temp file and rename), and only switches the in-memory
-   identity once both are on disk.
+   pair had, through temp files (`*.new`), synced, and only switches the in-memory identity once both
+   are on disk. Two renames are not one atomic step, so the old pair is kept as `*.prev` until
+   the new pair has authenticated one request, and the loader recovers from a crash between
+   them: it accepts the first of the current, `*.new` and `*.prev` pairs whose certificate
+   public key matches its private key, newest `notAfter` first, instead of treating a
+   mismatched pair as a host that needs a manual re-enrollment.
 
    Renewal is its own route, `POST /api/v1/enroll/renew`, the reverse of `/api/v1/enroll`
    in every respect that matters: it **requires** the current, still-valid client
@@ -238,6 +271,16 @@ than ADR-0027's, not a weaker version of the same one.
    already have (`/api/v1/enroll/renew`, not a prefix, so nothing else under `/api/v1/enroll`
    inherits it). It re-signs for the same `enrollmentId`, with a fresh keypair the agent
    generated for the purpose, under the same CSR checks as Decision 3.
+
+   **Renewal has a ceiling.** A valid certificate alone must not be enough to renew forever:
+   a stolen certificate and key (a plain file on disk) would otherwise renew every 15 days
+   even after the host is decommissioned, since TLS-layer revocation is deferred. The `Agent`
+   row records when its identity chain began (enrollment or reissue), and the server refuses a
+   renewal once the chain is older than a maximum (config default 90 days): the host then
+   needs a fresh token, the same operator action as after an expiry. Every renewal writes an
+   `AuditLog` row (`userId` `"system"`, the same precedent as `check-ring-health`, with the
+   source address), and a renewal from an address other than the previous one is flagged in
+   that row.
 
    **Revocation is a flag every agent route checks.** A new `Agent.revoked` boolean is read by
    `authenticateAgent`, and a revoked agent is refused with `403` and a body that names
@@ -280,8 +323,14 @@ than ADR-0027's, not a weaker version of the same one.
    row's `enrollmentId` to the newly minted one instead of inserting a row. Every relation
    that matters (`AgentHealth`, `Detection`, cases, decoy tokens) keys off `Agent.id`, the
    stable row identity, never `enrollmentId`, so the host keeps its history. A reissue
-   token follows three rules:
+   token follows four rules:
 
+   - **Single-use.** A reissue token has a cap of exactly 1, whatever cap ordinary tokens
+     allow. It is scoped to one `Agent` and rotates its `enrollmentId` on redemption, so a
+     second redemption (a retry from another host handed the same token) would rotate the row
+     again and silently cut off the first host, whose certificate would then name an
+     `enrollmentId` no row carries. The idempotent retry above is the one exception: it
+     matches the CSR public key and returns the same identity.
    - **Same tenant, checked twice.** The token can only be created for an `Agent` in the
      admin's own tenant, and redemption re-checks that the token's tenant and the `Agent`'s
      tenant are still the same, inside the same transaction as Decision 3's.
@@ -341,8 +390,8 @@ than ADR-0027's, not a weaker version of the same one.
   client-CA bundle (existing `ca.crt` plus the new CA) that `ssl_client_certificate` now
   points at (Decision 2). `docker-compose.yml` gains the key mount for `server`.
 - A new `EnrollmentToken` model (tenant-scoped; id plus hashed 256-bit secret; expiry; usage
-  cap and count; failure count and `locked`; optional `agentId` for a reissue token) and the
-  console UI to create, list, unlock and delete them.
+  cap and count; failure count and `disabled`; optional `agentId` for a reissue token) and the
+  console UI to create, list, disable and delete them.
 - `Agent.revoked: Boolean` (default `false`) and `revokedAt`, read by `authenticateAgent`;
   console "revoke" and "un-revoke" actions, each audited.
 - `agent enroll` (token, never presents a client certificate) and `agent enroll --renew`
