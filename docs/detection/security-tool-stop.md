@@ -147,3 +147,9 @@ rescan. A watched tool that leaves its unit's cgroup stays watched until it exit
 whose target left the scan is named from the previous scan too, and one that matches nothing gets
 no image and no unit (never the agent's). `SIGNAL_WATCH_TOOLS` holds 4096 entries (units times
 `MAX_PROCS_PER_UNIT`), and a unit past the cap is logged.
+
+A tool that left its unit's cgroup stays watched while it is the same process (same pid and start
+time, `/proc/<pid>/stat` field 22); without a start time recorded at scan it is dropped. A failed
+removal from the kernel set is retried at the next scan and the pid stays named until it succeeds.
+`SIGHUP` to a tool that has no handler ends it with no event (kernel filter and rule): a known gap,
+settled per tool only by reading `SigCgt` at scan time, which is not done.
