@@ -35,6 +35,88 @@ export function truncateUtf8(value: string, maxBytes: number): string {
 const truncatedString = (maxBytes: number) =>
   z.string().min(1).transform((value) => truncateUtf8(value, maxBytes));
 
+// `events` are the serialized schema events: the trigger, then the rule's evidence. Their
+// strings are the monitored process's own (command lines, paths, names), so they are cut, never
+// refused, for the same reason as the title (#1060). Bounds from what the agent emits:
+// - one event per detection, except the ransomware damage manifest: the trigger plus at most
+//   100 renames and deletions (`DAMAGE_MANIFEST_MAX`, agent/src/sink.rs), so 101;
+// - a string carries at most a command line, which the title already bounds at 64 KiB;
+// - the longest array is a Linux argv, at most 32,768 tokens once the sensor bounds it at
+//   capture (`schema::ARGV_CAPTURE_BUDGET`, #1112; an empty token costs one byte).
+// Depth is the one shape no monitored process controls (the Rust types fix it, 4 levels today),
+// so an event nested past `MAX_EVENT_DEPTH` is a forged payload and is refused.
+export const MAX_EVENTS = 128;
+export const MAX_EVENT_STRING_BYTES = 64 * 1024;
+export const MAX_EVENT_ARRAY_ITEMS = 32 * 1024;
+export const MAX_EVENT_DEPTH = 16;
+
+/** What bounding a detection's events cut, stored in `meta.events_cut` when anything was. */
+export type EventsCut = { droppedEvents: number; cutStrings: number; cutArrays: number };
+
+class TooDeep extends Error {}
+
+function boundValue(value: unknown, depth: number, cut: EventsCut): unknown {
+  if (typeof value === "string") {
+    const bounded = truncateUtf8(value, MAX_EVENT_STRING_BYTES);
+    if (bounded !== value) cut.cutStrings++;
+    return bounded;
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (depth >= MAX_EVENT_DEPTH) {
+    throw new TooDeep();
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_EVENT_ARRAY_ITEMS) cut.cutArrays++;
+    return value.slice(0, MAX_EVENT_ARRAY_ITEMS).map((item) => boundValue(item, depth + 1, cut));
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, boundValue(item, depth + 1, cut)]),
+  );
+}
+
+/**
+ * `events` with every string cut to `MAX_EVENT_STRING_BYTES`, every array to
+ * `MAX_EVENT_ARRAY_ITEMS` and the list to its first `MAX_EVENTS` (the trigger always kept),
+ * and what that cut. Throws on nesting past `MAX_EVENT_DEPTH`.
+ */
+export function boundEvents(events: Record<string, unknown>[]): {
+  events: Record<string, unknown>[];
+  cut: EventsCut;
+} {
+  const cut: EventsCut = { droppedEvents: Math.max(0, events.length - MAX_EVENTS), cutStrings: 0, cutArrays: 0 };
+  const bounded = events
+    .slice(0, MAX_EVENTS)
+    .map((event) => boundValue(event, 1, cut) as Record<string, unknown>);
+  return { events: bounded, cut };
+}
+
+const BoundedEventsSchema = z.array(z.record(z.any())).transform((events, ctx) => {
+  try {
+    return boundEvents(events);
+  } catch (error) {
+    if (!(error instanceof TooDeep)) throw error;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `events nested deeper than ${MAX_EVENT_DEPTH}` });
+    return z.NEVER;
+  }
+});
+
+const BoundedEventSchema = z.record(z.any()).transform((event, ctx) => {
+  try {
+    const { events, cut } = boundEvents([event]);
+    return { event: events[0], cut };
+  } catch (error) {
+    if (!(error instanceof TooDeep)) throw error;
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `event nested deeper than ${MAX_EVENT_DEPTH}` });
+    return z.NEVER;
+  }
+});
+
+function cutSummary(cut: EventsCut): EventsCut | undefined {
+  return cut.droppedEvents + cut.cutStrings + cut.cutArrays > 0 ? cut : undefined;
+}
+
 // The agent cuts feed names and versions at 64 Rust `char`s (`label`, agent/src/ioc.rs), which are
 // code points; zod's `.max` counts UTF-16 units, so a non-BMP name the agent let through would be
 // refused here and its detection lost.
@@ -98,7 +180,7 @@ const StructuredDetectionSchema = z.object({
     contribution: z.number().finite(),
   })).max(64).default([]),
   techniques: z.array(TechniqueIdSchema).max(MAX_TECHNIQUES).default([]),
-  events: z.array(z.record(z.any())),
+  events: BoundedEventsSchema,
 });
 
 // Keep the original API contract for enrolled agents that have not upgraded.
@@ -106,7 +188,8 @@ const LegacyDetectionSchema = z.object({
   timestamp_ns: z.number().finite().positive(),
   technique: LegacyTechniqueSchema,
   severity: SeveritySchema,
-  event: z.record(z.any()),
+  // The pre-structured agents sent the same event, so it is bounded the same way.
+  event: BoundedEventSchema,
   meta: z.record(z.any()),
 });
 
@@ -138,7 +221,9 @@ function sourceIdentity(source: z.infer<typeof SourceSchema>): Record<string, st
 export function parseDetectionPayload(body: unknown): StoredDetectionPayload {
   if (typeof body === "object" && body !== null && "source" in body) {
     const detection = StructuredDetectionSchema.parse(body);
-    const { source, attributions, techniques, events } = detection;
+    const { source, attributions, techniques } = detection;
+    const { events, cut } = detection.events;
+    const eventsCut = cutSummary(cut);
     return {
       timestamp: new Date(detection.timestamp_ns / 1_000_000),
       technique: techniques[0] ?? source.engine.toUpperCase(),
@@ -155,16 +240,19 @@ export function parseDetectionPayload(body: unknown): StoredDetectionPayload {
         // Preserve further triggering events until Detection has a dedicated
         // relation for them. The first event stays in the existing event column.
         additional_events: events.slice(1),
+        // Present only when bounding cut something, so an analyst knows the evidence is partial.
+        ...(eventsCut ? { events_cut: eventsCut } : {}),
       },
     };
   }
 
   const detection = LegacyDetectionSchema.parse(body);
+  const eventsCut = cutSummary(detection.event.cut);
   return {
     timestamp: new Date(detection.timestamp_ns / 1_000_000),
     technique: detection.technique,
     severity: detection.severity,
-    event: detection.event,
-    meta: detection.meta,
+    event: detection.event.event,
+    meta: eventsCut ? { ...detection.meta, events_cut: eventsCut } : detection.meta,
   };
 }

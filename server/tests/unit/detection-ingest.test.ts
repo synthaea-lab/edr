@@ -12,7 +12,14 @@ const db = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST } from "@/app/api/ingest/detection/route";
-import { MAX_TITLE_BYTES, truncateUtf8 } from "@/lib/detection-payload";
+import {
+  MAX_EVENTS,
+  MAX_EVENT_ARRAY_ITEMS,
+  MAX_EVENT_DEPTH,
+  MAX_EVENT_STRING_BYTES,
+  MAX_TITLE_BYTES,
+  truncateUtf8,
+} from "@/lib/detection-payload";
 
 const headers = {
   "X-Proxy-Secret": "test-proxy-secret",
@@ -258,6 +265,64 @@ describe("POST /api/ingest/detection", () => {
       db.detection.create.mockRejectedValueOnce({ code: "P2002" });
       db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash });
       expect((await post(first, key)).status, "a true retry is still accepted").toBe(200);
+    });
+
+    it("keeps an event whose command line is padded, cut and marked, so the padding cannot erase it", async () => {
+      const cmdline = `sh -c ${"\u0001".repeat(3 * MAX_EVENT_STRING_BYTES)}`;
+      const exec = { type: "exec", cmdline, argv: ["sh", "-c", cmdline.slice(6)] };
+      expect((await post(structured({ events: [exec] }))).status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.cmdline.startsWith("sh -c \u0001")).toBe(true);
+      expect(event.cmdline).toMatch(/… \[truncated, \d+ bytes\]$/);
+      expect(Buffer.byteLength(event.cmdline)).toBeLessThan(MAX_EVENT_STRING_BYTES + 64);
+      expect(event.argv.slice(0, 2)).toEqual(["sh", "-c"]);
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 2, cutArrays: 0 });
+    });
+
+    it("keeps the trigger and the first evidence when a detection carries more events than any rule emits", async () => {
+      const events = Array.from({ length: MAX_EVENTS + 50 }, (_, i) => ({ type: "file_rename", n: i }));
+      expect((await post(structured({ events }))).status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.n).toBe(0);
+      expect(meta.additional_events).toHaveLength(MAX_EVENTS - 1);
+      expect(meta.events_cut).toEqual({ droppedEvents: 50, cutStrings: 0, cutArrays: 0 });
+    });
+
+    it("keeps a ransomware damage manifest whole: 101 events is within the bound", async () => {
+      const events = Array.from({ length: 101 }, (_, i) => ({ type: "file_rename", n: i }));
+      expect((await post(structured({ events }))).status).toBe(200);
+      const { meta } = db.detection.create.mock.calls[0][0].data;
+      expect(meta.additional_events).toHaveLength(100);
+      expect(meta.events_cut).toBeUndefined();
+    });
+
+    it("cuts an argv flood to its bound instead of refusing the event", async () => {
+      const argv = Array.from({ length: MAX_EVENT_ARRAY_ITEMS + 10 }, () => "");
+      expect((await post(structured({ events: [{ type: "exec", argv }] }))).status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.argv).toHaveLength(MAX_EVENT_ARRAY_ITEMS);
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 0, cutArrays: 1 });
+    });
+
+    it("refuses an event nested deeper than any schema event, which no monitored process can cause", async () => {
+      let deep: Record<string, unknown> = { leaf: 1 };
+      for (let i = 0; i < MAX_EVENT_DEPTH; i++) deep = { deep };
+      expect((await post(structured({ events: [deep] }))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("bounds the legacy shape's event the same way", async () => {
+      const response = await post({
+        timestamp_ns: 1_700_000_000_000_000_000,
+        technique: "T1059",
+        severity: "medium",
+        event: { type: "exec", cmdline: "A".repeat(2 * MAX_EVENT_STRING_BYTES) },
+        meta: { hostname: "host-a" },
+      });
+      expect(response.status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.cmdline).toMatch(/… \[truncated, \d+ bytes\]$/);
+      expect(meta).toEqual({ hostname: "host-a", events_cut: { droppedEvents: 0, cutStrings: 1, cutArrays: 0 } });
     });
 
     it("never splits a character when it cuts", () => {
