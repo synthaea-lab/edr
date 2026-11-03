@@ -99,21 +99,34 @@ a choice with one weak measurement behind it (below), and is named `WORK_HOURS_L
 ```toml
 [detection]
 work_hours = [22, 6]                          # a night shift: 22:00 to 06:00 is ordinary, the day is not
-odd_hour_exempt_accounts = ["svc_backup", "CORP\\oncall"]
+odd_hour_exempt_accounts = ["svc_backup|S-1-5-21-1111-2222-3333-1004", "svc_batch", "CORP\\oncall"]
 ```
 
 `work_hours = [start, end]`: `start` 0 to 23, `end` 1 to 24, different; `start` greater than `end` wraps
-midnight. `odd_hour_exempt_accounts` lists the accounts whose odd-hour logons are expected (on-call staff, the
-service or batch account of a schedule): matched without case against the account **as the logon reports it**,
-and the Windows logon event (4624) reports the bare account name with no domain. **A bare entry therefore exempts
-any account of that name on the host, including a local one an intruder with local admin creates under it**
-(reproduced live on a Windows 11 host, 2026-11-03: the listed local account raised nothing, an unlisted one
-raised the alert). A `DOMAIN\name` entry matches only an event that reports exactly that string, which no
-sensor does for a logon today. The SID in the event, which an intruder cannot choose, is not read yet. Keep the
-list to accounts whose name you would not mind an intruder reusing. At most 64.
-**Both are empty by default and only the
-odd-hour rule reads them**: FIRST-SEEN-LOGON still sees an exempt account, and nothing is exempt until the
-operator names it. Both fail the config load when malformed (ADR-0013); the rules refuse them too.
+midnight; `[0, 24]` makes every hour ordinary, so the rule never alerts (the agent says so in its log).
+`odd_hour_exempt_accounts` lists the accounts whose odd-hour logons are expected (on-call staff, the service or
+batch account of a schedule). Each entry is `NAME` or `NAME|SID`:
+
+- **`NAME`** is matched without case against the account **as the logon reports it**, and the Windows logon event
+  (4624) reports the bare account name with no domain. **A bare entry therefore exempts any account of that name
+  on the host, including a local one an intruder with local admin creates under it** (reproduced live on a
+  Windows 11 host, 2026-11-03: the listed local account raised nothing, an unlisted one raised the alert). A
+  `DOMAIN\name` entry matches only an event that reports exactly that string, which no sensor does for a logon
+  today; a UPN (`name@corp.com`) or `corp/name` is another string and a bare entry does not match it (the logon
+  alerts, which is the safe side).
+- **`NAME|SID`** binds the entry to the account's SID, which the Windows event carries and an intruder cannot
+  choose: `svc_backup|S-1-5-21-1111-2222-3333-1004` exempts that account only, and
+  `svc_backup|S-1-5-21-1111-2222-3333-*` any account of that name below that domain (or machine) SID prefix. An
+  event that carries no SID (Linux and macOS logons) is **not** exempt under such an entry. An entry whose part
+  after `|` is not a SID or a `-*` prefix fails the config load.
+
+At most 64 entries, each at most 256 bytes. A logon an exemption suppresses is **counted and logged** once per
+account per 8 hours (`odd-hour logon not reported: the account is on the exempt list`), so the list is not an
+invisible suppression path. **Both settings are empty by default and only the odd-hour rule reads them**:
+FIRST-SEEN-LOGON still sees an exempt account, and nothing is exempt until the operator names it. A malformed
+window or list fails the config load (ADR-0013), and the error names the first bad entry. The rules apply the
+same bounds themselves: a window that is not one is refused and the previous one kept; a list over 64 entries is
+cut to 64, and a blank, over-long or malformed entry is dropped, not read as something broader.
 
 **Measurement (one host, stated with its limits).** `last -F` on a Linux workstation (Fedora 43, Europe/Paris),
 2026-10-10 to 2026-11-02: 148 login records of **one account**, 124 on pseudo-terminals and 24 on consoles.
