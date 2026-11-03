@@ -123,20 +123,27 @@ without change. It does not revisit any Linux decision.
 2. **Manifest shape and signature: unchanged, reused as-is.** The same
    `ReleaseManifest` envelope (`schema_version`, monotone `release_version`,
    `entries: BTreeMap<PathBuf, String>`, Ed25519 signature via `ring`) that
-   ADR-0015 Decision 2 defined. One difference: normalization happens once, at
-   **build time**, in `release-tool` — never at verify time, and never
-   per-platform. A manifest key is always relative (ADR-0015 Decision 2), so
+   ADR-0015 Decision 2 defined. The per-segment path rules below
+   are not a build-time-only concern: `ReleaseManifest::validate_entry_paths`
+   (`crates/updater/src/manifest.rs`, over `content::is_safe_path_segment`)
+   already rejects a backslash, NUL, a colon, a trailing dot or space and a
+   reserved device name at verify time, so a manifest signed by any other
+   path (the production signing keys of ADR-0027, the PKCS#11 signer) is
+   checked too. The rules this ADR adds (drive prefixes, ASCII-only,
+   case-insensitive and 8.3 sibling collisions) extend that same shared
+   validator, behind a Windows-target profile so a Linux release is not
+   refused for names that are legal there, and `release-tool` calls the
+   validator rather than keeping a second copy. Normalization of the key
+   itself still happens once, at **build time**, never at verify time. A manifest key is always relative (ADR-0015 Decision 2), so
    `release-tool` rejects a candidate entry outright (refuses to build the
    manifest, not a warning) if its path contains a `..` segment, a backslash
    (a legal filename character on Linux, so rewriting it to forward slash on
    read could make two different signed-over paths collide or resolve
    differently from what was actually signed), **any colon at all** — not
    only an alternate-data-stream name but a drive letter too, since a
-   relative key has no legitimate reason to carry one: an earlier version of
-   this rule exempted a colon at a drive letter's second character, which let
-   `C:evil.dll` straight through — `versions\vN\` joined with it is a
-   drive-relative path that lands outside the staged directory entirely.
-   That exemption is removed; any entry starting with a drive letter or a
+   relative key has no legitimate reason to carry one (`C:evil.dll`
+   joined onto `versions\vN\` is a drive-relative path that lands outside
+   the staged directory entirely); any entry starting with a drive letter or a
    backslash (an absolute or rooted path) is rejected the same way, alongside
    a `\\?\`-prefixed or UNC form, or a component that is (case-insensitively,
    with or without an extension) one of the Windows reserved device names
@@ -191,8 +198,7 @@ without change. It does not revisit any Linux decision.
    extension, both case-folded. Short names only collide between entries of
    one directory, so the comparison is per parent directory, not across the
    whole manifest: `models/config.json` and `plugins/config.json` never
-   collide and are accepted (an earlier draft compared basenames globally and
-   would have rejected that layout, review of #1012). It applies at every
+   collide and are accepted. It applies at every
    level of the tree, to directory names as well as file names, since a
    directory gets a short name the same way a file does: the manifest's paths
    are grouped by parent, and each group's child names (the leaf files plus
@@ -295,7 +301,19 @@ without change. It does not revisit any Linux decision.
      reader never observes a half-written or missing value mid-promotion —
      unlike a directory-symlink swap, file-over-file `MoveFileExW(...,
      MOVEFILE_REPLACE_EXISTING)` has no window where `current` names
-     nothing. This also makes `current` readable without ever calling `sc
+     nothing. That replace fails with `ACCESS_DENIED` while *any* handle is
+     open on `current`, even one opened with `FILE_SHARE_DELETE`
+     (measured on Windows 11 with `[IO.File]::Move(src, dst, overwrite)`,
+     which calls `MoveFileExW(REPLACE_EXISTING)`: no handle succeeds; a
+     read handle fails whatever the share mode), so an unprivileged reader
+     or an antivirus scan can make a flip fail. Every flip therefore
+     retries a bounded number of times with backoff, readers open `current`
+     only for the duration of one read, and exhausting the retries is a
+     failed step with the undo each step already defines. Only `current`
+     is world-readable: `banned_versions.json` and `max_release_version`
+     carry a protected DACL with read for `SYSTEM` and
+     `BUILTIN\Administrators` only, since no unprivileged reader needs
+     them. This also makes `current` readable without ever calling `sc
      qc`: reading it is an ordinary filesystem read governed by the base
      directory's own DACL (above), not by the service's security
      descriptor — the hardened SDDL (Context, Decision 4 step 3) denies
@@ -489,10 +507,16 @@ without change. It does not revisit any Linux decision.
       - **Not stopped in time (a slow or hung *old* watchdog):** this proves
         nothing about `vN`, which has not run. `apply-release` does **not**
         ban `vN`. It reverts `binPath`/`current` to the prior target (steps
-        2 and 4 reversed, still inside the ACL bracket), leaves the old
-        service to finish stopping and come back through its normal restart
-        path, and exits with a distinct "previous version did not stop" error
-        so the operator or timer can retry the same release later.
+        2 and 4 reversed, still inside the ACL bracket), then waits a
+        further bounded interval for the old service to reach
+        `SERVICE_STOPPED` and starts it again itself (`sc start` on the
+        reverted `binPath`). It cannot rely on the restart ladder: the old
+        watchdog's stop handler reports `ERROR_SUCCESS` (above), and with
+        `failureflag= 1` only a non-zero stop queues a failure action, so
+        nothing else would relaunch it. It exits with a distinct "previous
+        version did not stop" error so the operator or timer can retry the
+        same release later; if the second wait also times out it logs at
+        error level that the sensor is down until an operator acts.
       - **Stopped, then `sc start` fails:** the case below, the only one that
         is about `vN` itself.
       **The SCM reads the exit code from `SetServiceStatus`, not the
@@ -540,7 +564,7 @@ without change. It does not revisit any Linux decision.
    `binPath` on the freshly-reinstalled MSI actually runs.
    **Decided here: `cmd_install` clears the updater's binary-lineage
    bookkeeping on every install path it runs on, but never touches the ban
-   list.** `versions\`, `current`, and `.healthy` markers under
+   list or the release-version floor.** `versions\`, `current`, and `.healthy` markers under
    `%ProgramData%\Synthaea\` are removed before recreating the directory
    and its DACL (Decision 3), on true first install, major upgrade, and a
    fresh install over a previous uninstall alike (it already runs fresh on
@@ -549,16 +573,22 @@ without change. It does not revisit any Linux decision.
    running from `Program Files\Synthaea`, no staged versions") instead of
    asking every reader of that state to separately reason about how stale
    it might be.
+   **Release-version floor.** The ban list only records failed versions,
+   so it cannot stand in for a high-water mark: with `versions\` wiped,
+   `check_release_version(None)` would accept any validly signed release,
+   including an older vulnerable one that was never banned. `apply-release`
+   therefore persists `%ProgramData%\Synthaea\max_release_version` (the
+   highest `release_version` it has verified, written before the promotion
+   it belongs to and replaced like `current`) and passes it as `current` to
+   `check_release_version`. `cmd_install` never removes it, same as the ban
+   list; absent means no release was ever staged.
    **Sequencing, so this wipe never races a running image inside
    `versions\`:** a major upgrade's old service, if it is currently running
    from a staged `versions\vN\watchdog.exe` rather than from `Program
    Files\Synthaea`, must already be stopped and its binaries' handles
    released before `cmd_install`'s wipe step ever runs — otherwise deleting
    `versions\` can hit `ERROR_SHARING_VIOLATION` against a file the running
-   process still has open. An earlier draft said MSI sequencing alone
-   guaranteed this, because `RemoveExistingProducts` "carries the old
-   product's own `ServiceControl` stop". That was wrong (review of #1012):
-   `Product.wxs` has no `ServiceControl`/`ServiceInstall`. It manages the
+   process still has open. MSI sequencing alone does not guarantee it: `Product.wxs` has no `ServiceControl`/`ServiceInstall`. It manages the
    service through custom actions, and the old product's uninstall runs its
    `UninstallService` action, i.e. the *old* `watchdog.exe uninstall`, whose
    `cmd_uninstall` on `main` runs `sc stop`, ignores the result, and goes
@@ -673,9 +703,14 @@ without change. It does not revisit any Linux decision.
      count back to 0; at `0` that happens effectively immediately, so the SCM
      never sees "the 2nd failure" or "the 3rd failure" — every failure is
      "the 1st," and the actions list never advances past its first entry.
-     This changes to `reset= 60` (comfortably longer than three 5-second
-     restart delays), matching Microsoft's own documented example above, so
-     three failures inside that window actually exhaust the list and reach
+     This changes to `reset= 180`. The window must exceed both the three
+     5-second restart delays and the 120 s probation deadline of Decision 5:
+     the SCM zeroes the count after `reset=` seconds with no failure, so
+     with a shorter window a release that crashes between `reset=` and 120 s
+     after each start would have its count zeroed every time, never leave
+     the first `restart` entry, never reach `recover`, and restart its own
+     probation timer on every launch. With 180 s, three failures inside
+     that window actually exhaust the list and reach
      the fourth, newly-appended slot:
      `restart/5000/restart/5000/restart/5000/run/5000`, with `command=
      "<Program Files\Synthaea\watchdog.exe> recover"` — **the
@@ -736,22 +771,23 @@ without change. It does not revisit any Linux decision.
    starts the service.
    **Loop guard**: `sc failure`'s action list repeats its last entry
    (`run/5000`) for every failure after the list is exhausted, within the
-   same `reset=` window (Decision 6's `reset= 60`) — so a transient
+   same `reset=` window (Decision 6's `reset= 180`) — so a transient
    condition unrelated to any specific release (a brief disk-full spell,
    say) that causes several failures in a row would otherwise have
    `recover` ban-and-roll-back once per failure, potentially burning
    through every staged healthy version in one bad stretch regardless of
-   whether any of them were actually broken. `recover` writes a small
-   marker (the version number it just banned, plus a timestamp) under the
-   base directory each time it bans-and-rolls-back; on a later invocation
-   within `reset=` seconds of that marker, it does **not** ban or roll back
-   again — it logs this as a terminal condition for the current failure
+   whether any of them were actually broken. `recover` keeps a small
+   marker under the base directory: the version number it last banned, and
+   the time of its **latest invocation**, refreshed on every run, suppressed
+   ones included, because a failure is what the SCM's own counter measures
+   from. On an invocation less than `reset=` seconds after the previous
+   one, it does **not** ban or roll back again — it logs this as a terminal condition for the current failure
    cycle ("already recovered once this window; not cascading a second
    automatic rollback") and re-attempts starting whatever `binPath`
    already names, the same posture as the no-older-target terminal case
-   below. Once `reset=` seconds pass with the service reporting no further
-   failures, the SCM's own failure count resets and `recover` treats its
-   marker as stale, so a genuinely new problem later still gets one fresh
+   below. Once `reset=` seconds pass with no invocation (so no failure), the
+   SCM's own failure count resets and `recover` treats its marker as stale,
+   whether it was left by a completed run or by a crashed one, so a genuinely new problem later still gets one fresh
    recovery attempt.
    **When `binPath` already points at `Program Files\Synthaea` itself** —
    the install-directory copy is the one crashing, from antivirus
@@ -791,7 +827,7 @@ without change. It does not revisit any Linux decision.
   Linux-first slice and says Windows "need[s] its own design" first — the
   exception's own text should name this ADR's job once it exists, rather
   than leaving a future reader to wonder whether the Windows module it names
-  is actually sanctioned. This PR amends that paragraph; the scope stays
+  is actually sanctioned. The paragraph names this ADR as proposed; the scope stays
   narrow — this ADR's own
   layout/promotion logic, not a general invitation for `updater` to grow
   unrelated platform branches.
@@ -812,7 +848,7 @@ without change. It does not revisit any Linux decision.
   `updater`, not the owner of these two functions — the only direction
   `tools/check-deps.py`'s LEAF tier allows, since `updater` cannot depend on
   a binary. `cmd_install` itself also changes behaviorally, not just by
-  relocation: `reset= 60` instead of `0`, a new `sc failureflag SynthaEDR 1`
+  relocation: `reset= 180` instead of `0`, a new `sc failureflag SynthaEDR 1`
   call (Decision 6), and rehardening failure becomes a hard error on the
   normal path, and a logged `sc stop` fail-safe attempt (never just a logged
   warning) on the early-return path, instead of today's bare best-effort
