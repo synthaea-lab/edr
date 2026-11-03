@@ -149,11 +149,20 @@ captures under `lab/captures/test-1103-*` and `test-1114-20261103`):
   (not a real vendor tool): a python process with a `SIGUSR2` handler gave no event for
   `SIGUSR2`; `SIGUSR1` (no handler) Medium (`signal (10)`); a `sleep` unit hit by `SIGUSR2`
   Medium (`signal (12)`).
+- **Real kernel-raised `SI_TIMER` and `SI_MESGQ`** (same VM and agent, synthetic unit `osqueryd`
+  running a python process with no `SIGUSR1` handler, captures `run-timer`): a one-shot POSIX
+  timer (`timer_create`, `SIGEV_SIGNAL`, `SIGUSR1`) armed by the process on itself ended it and
+  was reported with `sender_unreliable: true`; the sender in `meta` was **pid 0, comm
+  `swapper/5`**, the idle task of the CPU that took the timer interrupt: a bystander, neither the
+  tool nor an attacker. The alert was Medium and said "the sender is not reliable". A real
+  `SI_MESGQ` (`mq_notify` with `SIGEV_SIGNAL`, a forked child calling `mq_send`) was reported the
+  same way, but the sender was the child (pid 1133, `python3`), the real sender, because the send
+  runs in process context; it is flagged unreliable anyway.
 
 **Not verified:** the storm on cgroup v1 (same probe and filter, only the rescan reads another
 hierarchy: accepted by argument); a **full ring** (the storm of caught `SIGHUP` no longer reaches
 it, and no run filled it with lethal signals, so the "signals lost" event is covered by unit tests
-only); a real `SI_TIMER` signal raised by the kernel (only the forged one was run); Suricata
+only); `SI_ASYNCIO` (an AIO completion with `SIGEV_SIGNAL`: only the forged code was run for it) and a timer signal the tool handles; Suricata
 **after** the reload filter (the real daemon was not reinstalled: the synthetic unit stands in for
 it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with the new probe;
 `falco` and `osqueryd` as real tools. One VM per kernel, one week.
@@ -175,7 +184,7 @@ it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with th
 - **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
   commands (issue #1118, ADR-0044 in PR #1123): until it is fixed the manager-sent stop depends on
   a rule that often cannot see the command.
-- **Signal attribution.** With `sender_unreliable` the `meta` of the event may be a bystander (`SI_TIMER`, `SI_MESGQ`, `SI_ASYNCIO`, or a forged code). A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
+- **Signal attribution.** With `sender_unreliable` the `meta` of the event may be a bystander (`SI_TIMER`, `SI_MESGQ`, `SI_ASYNCIO`, or a forged code). Measured: for `SI_TIMER` the sender is a bystander (the idle task, `swapper/N`, or whatever ran when the interrupt fired); for `SI_MESGQ` it was the real sender in the run, so the marker is cautious there. `SI_ASYNCIO` was not run. A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
   other in-kernel callers that pass 0 to `send_sig` were not enumerated (a wrong sender is the
   safe error). `SigCgt` is as old as the last scan.
 
