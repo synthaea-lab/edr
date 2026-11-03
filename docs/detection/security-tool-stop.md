@@ -182,7 +182,7 @@ it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with th
   It is not left alone: the exec rule `check_security_tool_stop` (Medium) reads `systemctl stop`
   and `systemctl kill`, and the journal source (#1085) reports a stop nobody explains.
 - **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
-  commands (issue #1118, ADR-0044 in PR #1123): until it is fixed the manager-sent stop depends on
+  commands (issue #1118, ADR-0045 in PR #1123): until it is fixed the manager-sent stop depends on
   a rule that often cannot see the command.
 - **Signal attribution.** With `sender_unreliable` the `meta` of the event may be a bystander (`SI_TIMER`, `SI_MESGQ`, `SI_ASYNCIO`, or a forged code). Measured: for `SI_TIMER` the sender is a bystander (the idle task, `swapper/N`, or whatever ran when the interrupt fired); for `SI_MESGQ` it was the real sender in the run, so the marker is cautious there. `SI_ASYNCIO` was not run. A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
   other in-kernel callers that pass 0 to `send_sig` were not enumerated (a wrong sender is the
