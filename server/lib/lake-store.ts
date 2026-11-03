@@ -44,11 +44,13 @@ export interface LakeReader {
   /**
    * The files under `prefix` in key order. With `limit`, at most that many, the first ones: the
    * store stops listing there instead of materialising the whole prefix (an S3 reader asks for
-   * `MaxKeys`). Without it, every file.
+   * `MaxKeys`). Without it, every file. With `signal`, a store that goes over the network abandons
+   * the request when it is aborted and rejects with the signal's reason (a directory is local and
+   * only checks it before it starts).
    */
-  list(prefix: string, opts?: { limit?: number }): Promise<{ key: string; size: number }[]>;
-  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. */
-  get(key: string): Promise<Uint8Array>;
+  list(prefix: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<{ key: string; size: number }[]>;
+  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. Honors `signal` as {@link LakeReader.list} does. */
+  get(key: string, opts?: { signal?: AbortSignal }): Promise<Uint8Array>;
 }
 
 export type DeleteResult = { deleted: string[]; failed: { key: string; error: string }[] };
@@ -77,13 +79,15 @@ export class FsLakeStore implements LakeStore, LakeReader {
     await rename(tmp, target);
   }
 
-  async get(key: string): Promise<Uint8Array> {
+  async get(key: string, opts: { signal?: AbortSignal } = {}): Promise<Uint8Array> {
     assertSafeKey(key);
-    return new Uint8Array(await readFile(path.join(this.root, key)));
+    opts.signal?.throwIfAborted();
+    return new Uint8Array(await readFile(path.join(this.root, key), { signal: opts.signal }));
   }
 
-  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
+  async list(prefix: string, opts: { limit?: number; signal?: AbortSignal } = {}): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
+    opts.signal?.throwIfAborted();
     const limit = opts.limit;
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
     const out: { key: string; size: number }[] = [];

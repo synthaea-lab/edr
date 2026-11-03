@@ -1,20 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeleteObjectsCommand, GetBucketVersioningCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { FsLakeStore, LakeNotDeletableError, lakeEnabled } from "@/lib/lake-store";
 import { S3LakeReader, S3LakeStore } from "@/lib/lake-s3-store";
-import { lakeReaderFromEnv, lakeStoreFromEnv } from "@/lib/lake-env";
+import { lakeReaderFromEnv, lakeStoreFromEnv, s3Settings } from "@/lib/lake-env";
+import { queryLake } from "@/lib/lake-query";
 
 /** An in-memory bucket behind the one method the store uses, with pages of two and injectable delete errors (per key, or a whole request failing on its nth call). */
 function fakeBucket(
-  opts: { deleteErrors?: { Key: string; Code: string }[]; failDeleteCall?: number; versioning?: string | "denied" } = {}
+  opts: { deleteErrors?: { Key: string; Code: string }[]; failDeleteCall?: number; versioning?: string | "denied"; delayMs?: number } = {}
 ) {
   let deleteCalls = 0;
   const objects = new Map<string, Uint8Array>();
   const sent: { name: string; input: Record<string, unknown> }[] = [];
   const client = {
-    async send(command: unknown) {
+    async send(command: unknown, options?: { abortSignal?: AbortSignal }) {
       const c = command as { constructor: { name: string }; input: Record<string, any> };
       sent.push({ name: c.constructor.name, input: c.input });
+      // A slow store: the call takes `delayMs`, and is abandoned (rejecting with the signal's reason) when `abortSignal` fires, as the SDK does.
+      if (opts.delayMs !== undefined) {
+        const signal = options?.abortSignal;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, opts.delayMs);
+          signal?.addEventListener("abort", () => (clearTimeout(timer), reject(signal.reason)), { once: true });
+        });
+      }
       if (command instanceof PutObjectCommand) {
         objects.set(c.input.Key, c.input.Body);
         return {};
@@ -229,6 +238,39 @@ describe("S3LakeReader", () => {
   });
 });
 
+describe("the search deadline over a slow S3 store", () => {
+  it("a reader abandons a listing and a read in flight when its signal fires", async () => {
+    const b = fakeBucket({ delayMs: 400 });
+    const reader = new S3LakeReader({ bucket: "lake", client: b.client });
+    const started = Date.now();
+    await expect(reader.list("tenant=t1/", { signal: AbortSignal.timeout(30) })).rejects.toThrow();
+    await expect(reader.get(KEY("t1"), { signal: AbortSignal.timeout(30) })).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(300);
+  });
+
+  it("refuses to start a request once the signal is already aborted", async () => {
+    const b = fakeBucket();
+    const reader = new S3LakeReader({ bucket: "lake", client: b.client });
+    const controller = new AbortController();
+    controller.abort(new Error("deadline"));
+    await expect(reader.list("", { signal: controller.signal })).rejects.toThrow("deadline");
+    await expect(reader.get(KEY("t1"), { signal: controller.signal })).rejects.toThrow("deadline");
+    expect(b.sent).toHaveLength(0);
+  });
+
+  it("a search over 90 days and many types stops at its deadline, not after every listing", async () => {
+    const b = fakeBucket({ delayMs: 300 });
+    const reader = new S3LakeReader({ bucket: "lake", client: b.client });
+    const started = Date.now();
+    await expect(
+      queryLake(reader, { tenantId: "t1", from: "2026-08-01", to: "2026-10-29", types: ["exec", "connect", "dns"], signal: AbortSignal.timeout(40) })
+    ).rejects.toThrow();
+    // Unbounded, one listing alone takes 300 ms and 270 of them 81 s.
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(b.sent.filter((s) => s.name === "ListObjectsV2Command").length).toBeLessThanOrEqual(1);
+  });
+});
+
 describe("lakeReaderFromEnv", () => {
   it("is null when the lake is off, a directory reader for LAKE_DIR, an S3 reader for a bucket", () => {
     expect(lakeReaderFromEnv({})).toBeNull();
@@ -241,6 +283,41 @@ describe("lakeReaderFromEnv", () => {
     expect(() => lakeReaderFromEnv({ LAKE_S3_BUCKET: "b", LAKE_S3_READER_ACCESS_KEY_ID: "k" })).toThrow(/LAKE_S3_READER_ACCESS_KEY_ID and LAKE_S3_READER_SECRET_ACCESS_KEY must be set together/);
     // The writer's pair alone is not a reader configuration: it is neither used nor an error.
     expect(lakeReaderFromEnv({ LAKE_S3_BUCKET: "b", LAKE_S3_ACCESS_KEY_ID: "w", LAKE_S3_SECRET_ACCESS_KEY: "w" })).toBeInstanceOf(S3LakeReader);
+  });
+
+  it("pins the credentials the reader is built with: its own pair, and the writer's never", () => {
+    const writer = { LAKE_S3_BUCKET: "b", LAKE_S3_ACCESS_KEY_ID: "w-id", LAKE_S3_SECRET_ACCESS_KEY: "w-secret" };
+    const READER = { id: "LAKE_S3_READER_ACCESS_KEY_ID", secret: "LAKE_S3_READER_SECRET_ACCESS_KEY" };
+    // The writer's pair alone: the reader gets no explicit credentials (the default chain), not the writer's.
+    const alone = s3Settings(writer, READER);
+    expect(alone.accessKeyId).toBeUndefined();
+    expect(alone.secretAccessKey).toBeUndefined();
+    // Both pairs: the reader's wins, the writer's does not leak in.
+    const both = s3Settings({ ...writer, LAKE_S3_READER_ACCESS_KEY_ID: "r-id", LAKE_S3_READER_SECRET_ACCESS_KEY: "r-secret" }, READER);
+    expect(both.accessKeyId).toBe("r-id");
+    expect(both.secretAccessKey).toBe("r-secret");
+    // And the writer's own settings still read the writer's pair.
+    expect(s3Settings(writer).accessKeyId).toBe("w-id");
+  });
+
+  describe("the default credential chain", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("warns once that the query side may run with the writer's identity when no pair is set at all", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const env = { LAKE_S3_BUCKET: "warn-default-chain" };
+      lakeReaderFromEnv(env);
+      lakeReaderFromEnv({ ...env });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/default credential chain.*writer's identity/);
+    });
+
+    it("does not warn when the reader has its own pair, or when the writer has an explicit pair of its own", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      lakeReaderFromEnv({ LAKE_S3_BUCKET: "warn-reader-pair", LAKE_S3_READER_ACCESS_KEY_ID: "r", LAKE_S3_READER_SECRET_ACCESS_KEY: "s" });
+      lakeReaderFromEnv({ LAKE_S3_BUCKET: "warn-writer-pair", LAKE_S3_ACCESS_KEY_ID: "w", LAKE_S3_SECRET_ACCESS_KEY: "w" });
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   it("builds a different reader when the reader credentials change", () => {

@@ -5,7 +5,7 @@ import { S3LakeReader, S3LakeStore } from "@/lib/lake-s3-store";
 type Env = Record<string, string | undefined>;
 
 /** The S3 settings, from the environment. Documented in `server/datalake/README.md`. */
-function s3Settings(env: Env, creds: { id: string; secret: string } = { id: "LAKE_S3_ACCESS_KEY_ID", secret: "LAKE_S3_SECRET_ACCESS_KEY" }) {
+export function s3Settings(env: Env, creds: { id: string; secret: string } = { id: "LAKE_S3_ACCESS_KEY_ID", secret: "LAKE_S3_SECRET_ACCESS_KEY" }) {
   const bucket = env.LAKE_S3_BUCKET ?? "";
   const endpoint = env.LAKE_S3_ENDPOINT || undefined;
   const forcePath = env.LAKE_S3_FORCE_PATH_STYLE;
@@ -77,6 +77,12 @@ let cachedReader: { key: string; reader: LakeReader } | null = null;
  * (`LAKE_S3_READER_ACCESS_KEY_ID` / `LAKE_S3_READER_SECRET_ACCESS_KEY`, both or neither), never the
  * writer's `LAKE_S3_ACCESS_KEY_ID` pair (ADR-0041, decision 4): with neither set the SDK's default
  * credential chain applies. Same refusals as `lakeStoreFromEnv` (both stores set, bad settings).
+ *
+ * With no reader pair and no writer pair either, both clients resolve the same default chain (an
+ * instance role, IRSA), so the query side runs with the writer's identity and its bucket-wide write
+ * and delete rights: decision 4 is not met in that configuration. This logs a warning once per
+ * configuration rather than refusing to start; set the reader pair, or give the reader a role of its
+ * own, to meet it.
  */
 export function lakeReaderFromEnv(env: Env = process.env): LakeReader | null {
   if (!lakeEnabled(env)) return null;
@@ -88,6 +94,11 @@ export function lakeReaderFromEnv(env: Env = process.env): LakeReader | null {
   const s = s3Settings(env, READER_CREDS);
   const key = JSON.stringify(s);
   if (cachedReader?.key === key) return cachedReader.reader;
+  if (s.accessKeyId === undefined && !env.LAKE_S3_ACCESS_KEY_ID && !env.LAKE_S3_SECRET_ACCESS_KEY) {
+    console.warn(
+      "Lake reader: neither LAKE_S3_READER_ACCESS_KEY_ID/LAKE_S3_READER_SECRET_ACCESS_KEY nor the writer's pair is set, so the reader and the writer both use the SDK's default credential chain: the query side may run with the writer's identity (ADR-0041, decision 4). Set the reader pair, or give the reader its own role."
+    );
+  }
   const reader = new S3LakeReader({ bucket: s.bucket, prefix: s.prefix, client: s3Client(s) });
   cachedReader = { key, reader };
   return reader;
@@ -96,7 +107,8 @@ export function lakeReaderFromEnv(env: Env = process.env): LakeReader | null {
 /**
  * What the archive search can read from, as the environment says (#1105): a reader exists, or the
  * lake is off. `no_reader` stays in the type for a store that has no read side; no configurable
- * store is in that case now.
+ * store is in that case now, so the `no_reader` branch below is unreachable today (`lakeEnabled`
+ * implies a reader) and kept only so a future store without one is a 501 and not a silent `off`.
  */
 export function eventArchiveFromEnv(env: Env = process.env): EventArchive {
   const reader = lakeReaderFromEnv(env);

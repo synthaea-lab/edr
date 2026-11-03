@@ -164,7 +164,7 @@ export async function listPartitionFiles(
     for (const prefix of wanted === null ? [under] : wanted.map((type) => `${under}type=${type}/`)) {
       // A listing is one store call per day and type (up to MAX_RANGE_DAYS x MAX_TYPES): check the deadline before each.
       signal?.throwIfAborted();
-      for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length })) {
+      for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length, signal })) {
         const m = KEY.exec(key);
         // The second layer: whatever the store listed, only this tenant's well-formed keys of this day are read.
         if (m === null || m[1] !== tenantId || m[2] !== date) continue;
@@ -195,9 +195,10 @@ async function readPartition(
   reader: LakeReader,
   file: PartitionFile,
   tests: [string, string][],
-  withEvent = true
+  withEvent = true,
+  signal?: AbortSignal
 ): Promise<LakeRow[]> {
-  const bytes = await reader.get(file.key);
+  const bytes = await reader.get(file.key, { signal });
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const rows: LakeRow[] = [];
   for (const r of (await parquetReadObjects({ file: buffer, columns: withEvent ? COLUMNS : COLUMNS.filter((c) => c !== "event") })) as Record<string, unknown>[]) {
@@ -301,7 +302,7 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     for (; i < toRead.length && toRead[i].date === date; i++) {
       q.signal?.throwIfAborted();
       filesRead++;
-      day.push(...(await readPartition(reader, toRead[i], tests, withEvent)));
+      day.push(...(await readPartition(reader, toRead[i], tests, withEvent, q.signal)));
     }
     day.sort((a, b) => (newestFirst ? b.ts.getTime() - a.ts.getTime() : a.ts.getTime() - b.ts.getTime()));
     for (const row of day) {

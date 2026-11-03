@@ -132,6 +132,13 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   |---|---|
   | `LAKE_S3_READER_ACCESS_KEY_ID`, `LAKE_S3_READER_SECRET_ACCESS_KEY` | The reader's pair, both or neither. Give it read-only rights (`s3:ListBucket`, `s3:GetObject`), ideally limited to a tenant prefix by a bucket policy. Neither set: the SDK's default credential chain. |
 
+  **The default chain may be the writer's identity.** With neither pair set (here and for the writer), both
+  clients resolve the same chain, typically one instance role, and the query side then holds the writer's
+  bucket-wide write and delete rights. Decision 4 is met only when the reader pair is set or the reader runs
+  under a role of its own; the server logs a warning at startup when it can tell that neither is the case
+  (it cannot see a role the environment hides). The reader never falls back to the writer's *variables*, but
+  that is not the same as a different identity.
+
   The reader shares `LAKE_S3_BUCKET`, `_ENDPOINT`, `_REGION`, `_PREFIX` and `_FORCE_PATH_STYLE` with the
   writer, and **never falls back to `LAKE_S3_ACCESS_KEY_ID`**: the writer's bucket-wide write and delete
   must not be the query side's. Not run against MinIO or S3 here (the unit tests use an in-memory bucket).

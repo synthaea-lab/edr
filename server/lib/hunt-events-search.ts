@@ -66,8 +66,8 @@ const cut = (value: string | null): string | null => (value === null ? null : va
 
 /**
  * Runs one search of the archive for `tenantId` as of `now`. `archive` says what can be read: `off`
- * is `lake_off` (the API answers 503), and `no_reader` is `no_reader` (the lake is on but its store,
- * an S3 bucket, has no reader yet: a 501). Neither opens a transaction or takes a slot.
+ * is `lake_off` (the API answers 503), and `no_reader` is `no_reader` (the lake is on but its store
+ * has no read side: a 501). Neither opens a transaction or takes a slot.
  */
 export async function searchEventsWithinLimit(
   prisma: PrismaClient,

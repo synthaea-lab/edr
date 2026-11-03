@@ -69,22 +69,25 @@ export class S3LakeReader implements LakeReader {
     this.client = config.client;
   }
 
-  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
+  async list(prefix: string, opts: { limit?: number; signal?: AbortSignal } = {}): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
-    const limit = opts.limit;
+    const { limit, signal } = opts;
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
     const objectPrefix = this.keys.listPrefix(prefix);
     const out: { key: string; size: number }[] = [];
     let token: string | undefined;
     do {
+      signal?.throwIfAborted();
       // S3 lists in key order, so with a limit the first `limit` keys are the answer: ask for no more than are still wanted.
+      // `abortSignal` abandons the request in flight, so a slow store cannot hold the caller past its deadline.
       const page = await this.client.send(
         new ListObjectsV2Command({
           Bucket: this.bucket,
           Prefix: objectPrefix,
           ContinuationToken: token,
           MaxKeys: limit === undefined ? undefined : limit - out.length,
-        })
+        }),
+        { abortSignal: signal }
       );
       for (const object of page.Contents ?? []) {
         if (object.Key === undefined) continue;
@@ -95,9 +98,10 @@ export class S3LakeReader implements LakeReader {
     return out.sort((a, b) => (a.key < b.key ? -1 : 1)).slice(0, limit);
   }
 
-  async get(key: string): Promise<Uint8Array> {
+  async get(key: string, opts: { signal?: AbortSignal } = {}): Promise<Uint8Array> {
     assertSafeKey(key);
-    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.keys.full(key) }));
+    opts.signal?.throwIfAborted();
+    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.keys.full(key) }), { abortSignal: opts.signal });
     if (res.Body === undefined) throw new Error(`Lake object ${key} has no body`);
     return res.Body.transformToByteArray();
   }
@@ -105,21 +109,19 @@ export class S3LakeReader implements LakeReader {
 
 export class S3LakeStore implements LakeStore {
   private readonly bucket: string;
-  private readonly prefix: string;
+  private readonly keys: S3Keys;
   private readonly client: Pick<S3Client, "send">;
 
   constructor(config: S3LakeConfig) {
     if (!config.bucket) throw new Error("S3LakeStore needs a bucket");
-    const prefix = (config.prefix ?? "").replace(/^\/+|\/+$/g, "");
-    if (prefix !== "") assertSafeKey(prefix);
     this.bucket = config.bucket;
-    this.prefix = prefix;
+    this.keys = new S3Keys(config.prefix);
     this.client = config.client;
   }
 
   /** The object key for a lake key. */
   private full(key: string): string {
-    return this.prefix === "" ? key : `${this.prefix}/${key}`;
+    return this.keys.full(key);
   }
 
   async put(key: string, body: Uint8Array): Promise<void> {
@@ -138,10 +140,8 @@ export class S3LakeStore implements LakeStore {
 
   async list(prefix: string): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
-    const wanted = this.full(prefix);
     // With no lake prefix and no wanted prefix, list the whole bucket.
-    const objectPrefix = wanted === "" ? undefined : this.prefix !== "" && prefix === "" ? `${this.prefix}/` : wanted;
-    const strip = this.prefix === "" ? 0 : this.prefix.length + 1;
+    const objectPrefix = this.keys.listPrefix(prefix);
     const out: { key: string; size: number }[] = [];
     let token: string | undefined;
     do {
@@ -150,7 +150,7 @@ export class S3LakeStore implements LakeStore {
       );
       for (const object of page.Contents ?? []) {
         if (object.Key === undefined) continue;
-        out.push({ key: object.Key.slice(strip), size: Number(object.Size ?? 0) });
+        out.push({ key: this.keys.strip(object.Key), size: Number(object.Size ?? 0) });
       }
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token !== undefined);
