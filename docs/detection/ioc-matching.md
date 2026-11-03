@@ -83,7 +83,7 @@ was the control plane's, the finding came from the `apply-content-manifest` proc
 test loop's connections then fell inside the cooldown. So the run shows that a delivered address indicator
 is loaded and matches, not that a listed address a test process connects to raises a finding; that needs
 another run with a listed address that is not the control plane. The same run showed the agent alerting on its
-own control-plane connection (#1061). The publish step refused, with 422, a `rule` entry under `ioc/`, an
+own control-plane connection (#1061), which it no longer does (see "The agent's own traffic" below). The publish step refused, with 422, a `rule` entry under `ioc/`, an
 `ioc` entry outside `ioc/` and a feed with an invalid line. Not covered: a delivery to an agent that is not
 running, the production key path, and the file-write hash (above, still not wired).
 
@@ -110,6 +110,32 @@ The same indicator raises one finding per 10 minutes (**provisional**); a repeat
 window is counted (`IocStats::cooled_down`) and dropped, so a hash run in a loop or an address
 polled every second is one finding. The cooldown remembers 4,096 indicators, least recently seen
 forgotten first.
+
+### The agent's own traffic (#1061)
+
+An address or domain match made by the agent itself is not raised. Decided on #1061 after the lab run
+above: a feed that lists the control plane's address (an artifact there, but a shared-hosting or CDN
+address the control plane sits behind would do the same) made every agent alert on itself at each fetch
+and upload. Worse, that finding started the indicator's 10-minute cooldown, so a real process reaching the
+same address inside it was absorbed without a trace. The skip is therefore made before the cooldown.
+
+"The agent" is the process itself (its pid), or another process whose executable, read from
+`/proc/<pid>/exe`, is the agent's own (`agent apply-content-manifest`, a second process on the same
+binary). Never `comm`, which any process sets. The skip is scoped to the process, not to the destination:
+every other process connecting to that address or resolving that domain still raises, so malware behind
+the same CDN address is not hidden. Hash matches are not affected.
+
+Each skip is counted (`IocStats::by_agent`) and the first one is logged as a warning, because a feed that
+lists the agent's own destination is a feed problem the operator should see. The counter is not on the
+health beacon yet.
+
+Residue, each failing toward raising: on Windows and macOS `/proc` names nothing, so only the agent
+process itself is skipped and `apply-content-manifest` still raises; a second process started after the
+updater swapped the binary runs a different file than the running agent's (now `(deleted)`) and raises
+until the agent restarts; a process in another mount namespace is never resolved. Trusting the agent's
+executable means a user who can run it with their own configuration can make it connect to a listed
+address unreported; the agent's network behaviour is its control-plane protocol only, so this is not a
+general-purpose channel.
 
 A `NetworkFlow` peer address is checked like a connect destination: conntrack reports every live
 flow on each poll, and the cooldown makes that one finding.
