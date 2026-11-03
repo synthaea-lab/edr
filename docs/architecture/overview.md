@@ -65,14 +65,17 @@ kernel ──► sensor ──► DetectionSink ──► engines (rules/sigma/c
 Store-and-forward with at-least-once delivery: the spool's two-phase
 drain/ack survives crashes and outages, sheds-oldest past its byte cap
 (counted), and skips a permanently-rejected poison segment rather than
-blocking newer data. A detection over the server's 8 MiB body limit is shortened to fit
-(its event strings are cut, the title says by how much) and sent, never dropped: a process that pads
-its own command line must not be able to erase its detection on the host. A detection the server
-refuses for good (`400 Invalid payload`, `409`, `413`, `422`) is dropped on its own and counted, and
-the rest of its segment still goes. The agent writes one detection per segment today, so this is
-what keeps a refusal from taking neighbours with it should a segment hold several (a different
-spool setting, a future change); a refusal about the agent itself (`401`, `403`, a certificate
-`400`) keeps the whole-segment skip. Detection is entirely local — nothing in the alert path
+blocking newer data. A detection over the server's 8 MiB body limit is shortened to fit and sent, never dropped and
+never sent over the limit (the strings and arrays of its events are cut, the image hash, paths and
+pids are not, then events are dropped from the end, then the first is reduced to its identity; the
+title says by how much, in front, so the note survives a long title): a process that pads its own
+command line must not be able to erase its detection on the host. A detection the server refuses
+for good (`400 Invalid payload`, `409`, `413`, `422`) is dropped on its own and counted, and the
+rest of its segment still goes. The agent writes one detection per segment today, so this is what
+keeps a refusal from taking neighbours with it should a segment hold several (a different spool
+setting, a future change). An error that is not about the detection (`401`, `403`, a certificate
+`400`, a route or TLS problem) leaves the segment spooled and the loop backs off, so a certificate
+rotation does not erase a backlog; the spool's byte cap sheds the oldest if it lasts. Detection is entirely local — nothing in the alert path
 waits on the network, ever.
 
 **Health (control plane, agent → server):** `schema::HealthBeacon` — sensor
