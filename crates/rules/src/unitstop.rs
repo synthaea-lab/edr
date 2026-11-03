@@ -261,12 +261,17 @@ fn verb_touch(verb: &str) -> Option<Touch> {
 /// a container). Such a call neither starts a local unit nor shuts the local host down.
 fn targets_another_manager(args: &[String]) -> bool {
     args.iter().any(|a| {
-        a == "--user"
-            || a.starts_with("--host")
-            || a.starts_with("--machine")
-            // `-H`/`-M`, lowercased by `recon::args` (`-h` is `--help`, which acts on nothing).
-            || a.starts_with("-h")
-            || a.starts_with("-m")
+        // A long option is read by prefix, as `systemctl_effect` reads it: `--us`, `--mach=c` and
+        // `--ho=h` mean `--user`, `--machine` and `--host` (measured on systemd 258).
+        if let Some(long) = a.strip_prefix("--").filter(|long| !long.is_empty()) {
+            let name = long.split('=').next().unwrap_or(long);
+            return matches!(
+                resolve_long(SYSTEMCTL_LONG, name),
+                Some(("user" | "host" | "machine" | "capsule", _))
+            );
+        }
+        // `-H`/`-M`, lowercased by `recon::args` (`-h` is `--help`, which acts on nothing).
+        a.starts_with("-h") || a.starts_with("-m")
     })
 }
 

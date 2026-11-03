@@ -181,6 +181,11 @@ fn a_start_on_another_manager_does_not_explain_the_stop() {
         "systemctl --machine=c restart auditd",
         "systemctl -M c start auditd",
         "deb-systemd-invoke --user start auditd.service",
+        // Abbreviations `getopt_long` resolves to the same options (systemd 258: `--us --help`,
+        // `--mach=c --help` and `--ho=h --help` all exit 0).
+        "systemctl --us start auditd",
+        "systemctl --mach=c start auditd",
+        "systemctl --ho=h restart auditd",
     ] {
         assert_alerts_once(
             &judged("auditd.service", &[(command, T0 + 30 * SEC)]),
