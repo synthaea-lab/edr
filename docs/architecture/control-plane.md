@@ -63,7 +63,7 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `agent_version` | agent crate version |
 | `sensors[]` | one entry per heartbeat registered on the silence monitor: `name` (`linux-ebpf`, `windows-etw`, `windows-eventlog:<target>`, …), `pulse_count` (cumulative since start) and `silent` (past its deadline without a pulse). It's the same snapshot `cli health` shows. |
 | `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
-| `spool_dropped` | cumulative records shed by the spool's byte cap |
+| `spool_dropped` | cumulative records shed by the spool: the byte cap, a skipped poison segment, and a detection the server refused for good (`400`, `413`, `422`) or that is over its 8 MiB body limit, which is left out on its own while the rest of its segment is uploaded (#1119) |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
 | `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
 | `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
