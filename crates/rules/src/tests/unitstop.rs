@@ -428,12 +428,63 @@ fn an_abbreviated_long_option_is_read_like_the_full_one() {
         ),
         "falco",
     );
-    // A prefix shorter than the tool accepts is not a match: `--no-w` is ambiguous, and the
-    // option it would abbreviate (`--no-wtmp`) reboots anyway.
-    assert!(
-        judged("auditd.service", &[("reboot --no-w", T0 - 5 * SEC)]).is_empty(),
-        "an ambiguous --no-w still reads as a reboot"
-    );
+}
+
+/// A spelling the tool refuses exits with an error and the host stays up, so reading it as an
+/// immediate reboot would open the window with nothing going down (review of #1109: `reboot
+/// --no-w`, then stop the tool). Each of these was measured on systemd 258 (Fedora 43) with
+/// `<tool> <option> --help`: rc 1 for the refused ones, and `--help` itself only prints.
+#[test]
+fn a_spelling_the_tool_refuses_or_that_only_prints_does_not_explain_a_stop() {
+    for command in [
+        "reboot --no-w",
+        "reboot --h",
+        "reboot --n",
+        "poweroff --no-",
+        "reboot --version",
+        "poweroff --version",
+        "halt --when=+1h",
+        "reboot --dry-run",
+        "reboot -k",
+        "reboot -fk",
+        "reboot --force=x",
+        "reboot --help",
+        "halt --help",
+        "poweroff --he",
+        "reboot -w",
+        "reboot -fw",
+        "reboot --wtmp-only",
+    ] {
+        assert_alerts_once(
+            &judged("auditd.service", &[(command, T0 - 5 * SEC)]),
+            "auditd",
+        );
+    }
+}
+
+/// The opposite direction: every spelling the tool accepts and that acts still explains the
+/// stop, abbreviated to the shortest prefix it resolves, and in a short cluster.
+#[test]
+fn a_spelling_the_tool_accepts_and_acts_on_still_explains_the_stop() {
+    for command in [
+        "reboot --no-wt",
+        "reboot --no-wa",
+        "reboot --no-s",
+        "reboot --ha",
+        "reboot --po",
+        "reboot --r",
+        "reboot --f",
+        "reboot -fn",
+        "reboot -nid",
+        "poweroff -p",
+        "halt --no-wall -f",
+        "reboot --",
+    ] {
+        assert!(
+            judged("auditd.service", &[(command, T0 - 5 * SEC)]).is_empty(),
+            "{command}"
+        );
+    }
 }
 
 /// After the time, `shutdown`'s arguments are the wall message, not options: `shutdown now -c`

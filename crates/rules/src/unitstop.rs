@@ -338,37 +338,73 @@ fn long_option<'a>(arg: &'a str, full: &str, min: usize) -> Option<Option<&'a st
     (name.len() >= min && full.starts_with(name)).then_some(value)
 }
 
+/// The long options `reboot`, `poweroff` and `halt` accept, each with the shortest prefix
+/// `getopt_long` resolves for it (the floors for [`long_option`]), and whether it still leaves
+/// the host going down. Measured on systemd 258 with `<tool> <option> --help` on Fedora 43: the
+/// three tools share one parser, `--h`, `--n` and `--no-w` are ambiguous, and `--version`,
+/// `--when`, `--message` and `--dry-run` do not exist for them.
+const HALT_LONG_OPTIONS: [(&str, usize, bool); 9] = [
+    ("--help", 4, false),
+    ("--halt", 4, true),
+    ("--poweroff", 3, true),
+    ("--reboot", 3, true),
+    ("--force", 3, true),
+    ("--wtmp-only", 3, false),
+    ("--no-wtmp", 7, true),
+    ("--no-sync", 6, true),
+    ("--no-wall", 7, true),
+];
+
+/// The short options the same parser accepts. `-w` is `--wtmp-only`; `-i` and `-h` are legacy
+/// no-ops it still takes.
+const HALT_SHORT_OPTIONS: &str = "nihpfdw";
+
+/// Whether this argument of `reboot`/`poweroff`/`halt` leaves the host going down. Fail-closed:
+/// only an option the tool really accepts, and that really acts, counts. Anything it refuses
+/// (an ambiguous or unknown spelling, a value on an option that takes none) makes the command
+/// exit with an error and the host stays up, and `--help` and `-w`/`--wtmp-only` print or write
+/// wtmp and exit; none of those may explain a stop (review of #1109: `reboot --no-w` then
+/// `stop` would cloak the stop for the whole window). Over-alerting on an odd spelling is the
+/// safe error here.
+fn halt_arg_lets_host_go_down(arg: &str) -> bool {
+    if !arg.starts_with('-') || arg == "-" || arg == "--" {
+        return true; // an operand or the end of the options, not an option
+    }
+    if arg.starts_with("--") {
+        return HALT_LONG_OPTIONS
+            .iter()
+            .find_map(|&(full, min, acts)| {
+                // `Some(None)`: matched with no `=value`; a value is an error for all of them.
+                (long_option(arg, full, min) == Some(None)).then_some(acts)
+            })
+            .unwrap_or(false);
+    }
+    arg.chars()
+        .skip(1)
+        .all(|c| HALT_SHORT_OPTIONS.contains(c) && c != 'w')
+}
+
 /// Whether this exec tells the host to shut down or reboot **now** (`Now`), or cancels one
 /// (`Cancel`). `shutdown` counts only with an immediate time (`now`, `+0`): `+N` and `HH:MM`
 /// schedule a shutdown that stops nothing yet, and a bare `shutdown` is `+1` for systemd. `-k`
 /// only warns. `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec` and
 /// `init`/`telinit 0|6` are immediate, unless `systemctl` is given `--when=` (a schedule, or
-/// `--when=cancel`), or `reboot`/`poweroff`/`halt` is given `-w`/`--wtmp-only`, which writes the
-/// wtmp record and leaves the host running (`halt(8)`, and sysvinit's `reboot(8)`): it would
-/// otherwise cloak any stop in the next five minutes without even scheduling anything.
-/// `-d`/`--no-wtmp` and `-f`/`--force` do bring the host down.
+/// `--when=cancel`). `reboot`/`poweroff`/`halt` are fail-closed ([`halt_arg_lets_host_go_down`]):
+/// a `-w`/`--wtmp-only` (writes the wtmp record, host stays up), `--help`, or any spelling the
+/// tool refuses would otherwise cloak any stop in the next five minutes without bringing the
+/// host down. `-d`/`--no-wtmp` and `-f`/`--force` do bring the host down.
 ///
-/// Both long options are matched by abbreviation ([`long_option`]), since `getopt_long` accepts
-/// one: `reboot --w` and `systemctl reboot --whe=+1h` mean the same as the full spellings, and
+/// Long options are matched by abbreviation ([`long_option`]), since `getopt_long` accepts one:
+/// `reboot --w` and `systemctl reboot --whe=+1h` mean the same as the full spellings, and
 /// matching only the full ones left each cloak open under a shorter name.
 fn shutdown_effect(event: &ExecEvent) -> Option<Shutdown> {
     let program = program(event);
     let args = args(event);
-    // A short flag on its own or combined (`-fw`); a long option is matched by name instead.
-    let short = |flag: char| {
-        args.iter()
-            .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(flag))
-    };
     match program.as_str() {
-        "reboot" | "poweroff" | "halt" => {
-            // `--wtmp-only` is the only `--w*` option these tools have, so `--w` already
-            // resolves to it.
-            let wtmp_only = short('w')
-                || args
-                    .iter()
-                    .any(|a| long_option(a, "--wtmp-only", 3).is_some());
-            (!wtmp_only).then_some(Shutdown::Now)
-        }
+        "reboot" | "poweroff" | "halt" => args
+            .iter()
+            .all(|a| halt_arg_lets_host_go_down(a))
+            .then_some(Shutdown::Now),
         "shutdown" => {
             // Options come before the time; everything after it is the wall message, so
             // `shutdown now -c` sends a message and cancels nothing. `--cancel` is matched
