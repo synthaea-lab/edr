@@ -99,7 +99,7 @@ a choice with one weak measurement behind it (below), and is named `WORK_HOURS_L
 ```toml
 [detection]
 work_hours = [22, 6]                          # a night shift: 22:00 to 06:00 is ordinary, the day is not
-odd_hour_exempt_accounts = ["svc_backup|S-1-5-21-1111-2222-3333-1004", "svc_batch", "CORP\\oncall"]
+odd_hour_exempt_accounts = ["svc_backup|S-1-5-21-1111-2222-3333-1004", "svc_batch"]
 ```
 
 `work_hours = [start, end]`: `start` 0 to 23, `end` 1 to 24, different; `start` greater than `end` wraps
@@ -121,8 +121,11 @@ batch account of a schedule). Each entry is `NAME` or `NAME|SID`:
   after `|` is not a SID or a `-*` prefix fails the config load.
 
 At most 64 entries, each at most 256 bytes. A logon an exemption suppresses is **counted and logged** once per
-account per 8 hours (`odd-hour logon not reported: the account is on the exempt list`), so the list is not an
-invisible suppression path. **Both settings are empty by default and only the odd-hour rule reads them**:
+(name, SID) per 8 hours (`odd-hour logon not reported: the account is on the exempt list`, with the running count at
+info and the account and the SID at debug, since they come from the event): a look-alike account under an exempt name
+leaves its own line even within the quiet period of the real one. The count has no health beacon field (that needs a
+schema and a server change for one counter), so the log line is how it is read. An entry that contains a backslash is
+warned about at start: it exempts nothing today. **Both settings are empty by default and only the odd-hour rule reads them**:
 FIRST-SEEN-LOGON still sees an exempt account, and nothing is exempt until the operator names it. A malformed
 window or list fails the config load (ADR-0013), and the error names the first bad entry. The rules apply the
 same bounds themselves: a window that is not one is refused and the previous one kept; a list over 64 entries is
