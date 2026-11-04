@@ -240,6 +240,26 @@ describe("POST /api/ingest/detection", () => {
       expect(stored().case_id).toMatch(/^12345:x+… \[truncated, 5006 bytes\]$/);
     });
 
+    it("refuses a key reused for a different title that cuts to the same stored one", async () => {
+      // Same length, same head, different tail past the cut: both store the same title, so only a
+      // hash of the body as sent tells a retry from different evidence.
+      const head = `T1059 cmdline=${"A".repeat(MAX_TITLE_BYTES)}`;
+      const first = structured({ title: `${head}-first` });
+      const other = structured({ title: `${head}-other` });
+      const key = { "Idempotency-Key": "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a" };
+      expect((await post(first, key)).status).toBe(200);
+      const { ingestPayloadHash, meta } = db.detection.create.mock.calls[0][0].data;
+
+      db.detection.create.mockRejectedValueOnce({ code: "P2002" });
+      db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash });
+      expect((await post(other, key)).status).toBe(409);
+      expect(db.detection.create.mock.calls[1][0].data.meta.title).toBe(meta.title);
+
+      db.detection.create.mockRejectedValueOnce({ code: "P2002" });
+      db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash });
+      expect((await post(first, key)).status, "a true retry is still accepted").toBe(200);
+    });
+
     it("never splits a character when it cuts", () => {
       // "é" is two bytes, "😀" four: a cut at 5 bytes lands inside one of them.
       expect(truncateUtf8("éé😀", 5)).toBe("éé… [truncated, 8 bytes]");

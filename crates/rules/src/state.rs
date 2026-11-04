@@ -30,18 +30,18 @@ use crate::{
         CREATE_UNLINK_PID_CAP, CREDENTIAL_READ_ALERT_WINDOW_NS, DNS_CLASS_WINDOW_NS,
         DOWNLOAD_EXEC_WINDOW_NS, DOWNLOADER_COMMS, EGRESS_BYTES_THRESHOLD,
         EGRESS_CLASSED_BYTES_THRESHOLD, EGRESS_DOMAIN_BROWSER_COMMS, EGRESS_WINDOW_NS,
-        IN_PLACE_EDIT_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MAILDIR_FLAG_LETTERS,
-        MEMFD_EXEC_WINDOW_NS, PACKAGE_MANAGER_COMMS, PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES,
-        POLICY_DENIAL_ALERT_CAP, POLICY_DENIAL_SUBJECT_CAP, QUARANTINE_EXEC_WINDOW_NS,
-        RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX, RANSOMWARE_RENAME_THRESHOLD,
-        RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD, SCAN_SPREAD_WINDOW_NS,
-        SCAN_VERTICAL_THRESHOLD, SCAN_VERTICAL_WINDOW_NS, SELF_SPAWN_EXCLUSIONS,
-        SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_SCRIPT_HOSTS, SELF_SPAWN_THRESHOLD,
-        SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS, SELINUX_POLICY_TOOL_COMMS,
-        SERVICE_COMM_PREFIXES, SERVICE_COMMS, SHELL_COMMS, STAGING_PID_CAP, STAGING_READ_DIRS,
-        STAGING_READ_FILES, STAGING_WINDOW_NS, STAGING_WRITE_FILES, STANDARD_PORTS,
-        SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN, TASK_REGISTRATION_DEDUP_WINDOW_NS,
-        TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
+        IN_PLACE_EDIT_COMMS, LOLBIN_LEGIT_PARENTS, LOLBINS, MAIL_CLIENT_QUARANTINE_AGENTS,
+        MAILDIR_FLAG_LETTERS, MEMFD_EXEC_WINDOW_NS, PACKAGE_MANAGER_COMMS,
+        PACKAGE_MANAGER_TEMP_RENAME_SUFFIXES, POLICY_DENIAL_ALERT_CAP, POLICY_DENIAL_SUBJECT_CAP,
+        QUARANTINE_EXEC_WINDOW_NS, RANSOMWARE_EXCLUDED_PATH_PREFIXES, RANSOMWARE_LOOP_CHILD_MAX,
+        RANSOMWARE_RENAME_THRESHOLD, RANSOMWARE_RENAME_WINDOW_NS, SCAN_SPREAD_THRESHOLD,
+        SCAN_SPREAD_WINDOW_NS, SCAN_VERTICAL_THRESHOLD, SCAN_VERTICAL_WINDOW_NS,
+        SELF_SPAWN_EXCLUSIONS, SELF_SPAWN_PARENT_EXCLUSIONS, SELF_SPAWN_SCRIPT_HOSTS,
+        SELF_SPAWN_THRESHOLD, SELF_SPAWN_TRUSTED_THRESHOLD, SELF_SPAWN_WINDOW_NS,
+        SELINUX_POLICY_TOOL_COMMS, SERVICE_COMM_PREFIXES, SERVICE_COMMS, SHELL_COMMS,
+        STAGING_PID_CAP, STAGING_READ_DIRS, STAGING_READ_FILES, STAGING_WINDOW_NS,
+        STAGING_WRITE_FILES, STANDARD_PORTS, SUSPECT_CHILDREN_WIN, SUSPECT_PARENTS_WIN,
+        TASK_REGISTRATION_DEDUP_WINDOW_NS, TOUCHED_FILES_PER_PID, TOUCHED_FILES_PID_CAP,
     },
     has_write_intent,
     logon::{LogonBaseline, Observation},
@@ -133,6 +133,11 @@ struct RecentWrite {
     comm: String,
     timestamp_ns: u64,
 }
+
+/// `check_quarantined_exec`'s tags: the plain join, and the one a mail client's
+/// mark gets (#376).
+const USER_EXECUTION_TECHNIQUE: &str = "T1204.002";
+const MAIL_ATTACHMENT_TECHNIQUE: &str = "T1566.001/T1204.002";
 
 /// One exec of a pid, for the as-of-time image lookup of SETUID-ROOT-REQUEST (#1041).
 struct ExecRecord {
@@ -855,8 +860,21 @@ impl RuleState {
             return None;
         }
         mark.alerted = true;
+        // A mail client's mark is the one thing that says how the file arrived:
+        // the finding names the attachment vector as well, and still only says
+        // "marked by", since a person who saved an attachment on purpose and
+        // ran it looks the same.
+        let by_mail_client = mark.agent.as_deref().is_some_and(|agent| {
+            MAIL_CLIENT_QUARANTINE_AGENTS
+                .iter()
+                .any(|client| agent.eq_ignore_ascii_case(client))
+        });
         Some(SignatureGatedAlert::new(Alert {
-            technique: "T1204.002",
+            technique: if by_mail_client {
+                MAIL_ATTACHMENT_TECHNIQUE
+            } else {
+                USER_EXECUTION_TECHNIQUE
+            },
             severity: Severity::High,
             message: format!(
                 "pid={} comm={} executes {}, downloaded {} earlier (origin: {}, marked by {})",
@@ -2087,10 +2105,11 @@ impl RuleState {
         if event.outcome != AuthOutcome::Success || event.kind != AuthKind::Logon {
             return None;
         }
-        match self
-            .logon_baseline
-            .observe(&event.target_user, event.meta.timestamp_ns)
-        {
+        match self.logon_baseline.observe(
+            &event.target_user,
+            event.target_user_sid.as_deref(),
+            event.meta.timestamp_ns,
+        ) {
             Observation::FirstSeen => {}
             Observation::Quiet | Observation::Known => return None,
         }
@@ -2109,10 +2128,20 @@ impl RuleState {
 
     /// Tells the rules the host's local time as minutes east of UTC (`120` for UTC+2,
     /// `-300` for UTC-5), which turns ODD-HOUR-LOGON on. False when the offset is outside
-    /// -720..=840, and the rule keeps what it had. A fixed offset: a host that changes its
-    /// offset with daylight saving is an hour out for half the year.
+    /// -720..=840, and the rule keeps what it had. A fixed offset, and it overrides the
+    /// platform zone ([`Self::set_local_zone`]): a host that changes its offset with daylight
+    /// saving is an hour out for half the year under this one.
     pub fn set_local_utc_offset_minutes(&mut self, minutes: i32) -> bool {
         self.odd_hours.set_offset_minutes(minutes)
+    }
+
+    /// Gives the rules the host's platform time zone (#1088): `zone` maps an instant (seconds
+    /// since the Unix epoch) to minutes east of UTC at that instant, so a logon either side of a
+    /// daylight-saving change is judged by the hour the host's clock showed. Turns ODD-HOUR-LOGON
+    /// on. A fixed offset from [`Self::set_local_utc_offset_minutes`] overrides it whichever is
+    /// set first. False, and the rule keeps what it had, when `zone` has no answer for `now_secs`.
+    pub fn set_local_zone(&mut self, zone: crate::LocalOffsetAt, now_secs: i64) -> bool {
+        self.odd_hours.set_zone(zone, now_secs)
     }
 
     /// ODD-HOUR-LOGON (T1078, #376): a successful [`AuthKind::Logon`] of a non-generic
@@ -2121,17 +2150,21 @@ impl RuleState {
     /// Same event gate and generic-account list as FIRST-SEEN-LOGON, so the two share the
     /// identity join's limits; they are independent and a first logon at night raises both.
     ///
-    /// **Off until the operator sets the host's UTC offset** (`[detection]` in `agent.toml`):
-    /// the event's timestamp is UTC and nothing else in the agent knows the local time.
+    /// **Off until the host's local time is known**: the platform's zone (the agent asks it at
+    /// startup, [`Self::set_local_zone`]) or the operator's fixed UTC offset (`[detection]` in
+    /// `agent.toml`, which overrides the zone). The event's timestamp is UTC and nothing else
+    /// in the agent knows the local time.
     /// Expected false positives: on-call staff, night shifts, a host in use around the clock,
     /// and on Windows the service and batch logons (4624) of a named account.
     fn check_odd_hour_logon(&mut self, event: &AuthEvent) -> Option<Alert> {
         if event.outcome != AuthOutcome::Success || event.kind != AuthKind::Logon {
             return None;
         }
-        let hour = self
-            .odd_hours
-            .observe(&event.target_user, event.meta.timestamp_ns)?;
+        let hour = self.odd_hours.observe(
+            &event.target_user,
+            event.target_user_sid.as_deref(),
+            event.meta.timestamp_ns,
+        )?;
         let source = event
             .source_address
             .map_or_else(String::new, |address| format!(" from {address}"));

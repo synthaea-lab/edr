@@ -55,6 +55,21 @@ pub(crate) fn is_generic_account(user: &str) -> bool {
         )
 }
 
+/// Whether `sid` is one of the well-known identities a Windows host logs on by itself:
+/// `S-1-5-7` (anonymous), `S-1-5-18` (local system), `S-1-5-19` (local service) and `S-1-5-20`
+/// (network service). The account *name* of these is localized (SYSTEM has an accented
+/// name on a French Windows, and the event can carry it with a character already lost), so only
+/// the SID is the same on every host; a name list can never be complete.
+pub(crate) fn is_well_known_service_sid(sid: &str) -> bool {
+    matches!(sid, "S-1-5-7" | "S-1-5-18" | "S-1-5-19" | "S-1-5-20")
+}
+
+/// Whether the account of a logon is generic: by its name ([`is_generic_account`]) or by its SID
+/// when the event carries one ([`is_well_known_service_sid`]).
+fn is_generic_logon(user: &str, sid: Option<&str>) -> bool {
+    is_generic_account(user) || sid.is_some_and(is_well_known_service_sid)
+}
+
 /// `dwm-<n>` and `umfd-<n>`: the desktop-window-manager and font-driver accounts Windows
 /// creates per session.
 fn is_session_helper(name: &str) -> bool {
@@ -94,12 +109,12 @@ impl LogonBaseline {
     }
 
     /// Records a successful logon of `user` at `ts` and says what it is.
-    pub(crate) fn observe(&mut self, user: &str, ts: u64) -> Observation {
+    pub(crate) fn observe(&mut self, user: &str, sid: Option<&str>, ts: u64) -> Observation {
         // The clock starts at the first logon of any account, a generic one included: a host
         // only `root` logs on to for days must not leave an intruder's first account inside
         // a window that never began.
         let started = *self.started_ns.get_or_insert(ts);
-        if user.is_empty() || is_generic_account(user) {
+        if user.is_empty() || is_generic_logon(user, sid) {
             return Observation::Quiet;
         }
         let key = user.to_lowercase();
@@ -122,11 +137,19 @@ const MAX_UTC_OFFSET_MINUTES: i32 = 14 * 60;
 /// Most minutes west of UTC (UTC-12).
 const MIN_UTC_OFFSET_MINUTES: i32 = -12 * 60;
 
-/// ODD-HOUR-LOGON's clock: the host's local time as a fixed offset from UTC, and the accounts
-/// already reported tonight. With no offset the rule is off: the event's timestamp is UTC
-/// and "outside working hours" means nothing without the host's own time.
+/// The host's zone as a function: minutes east of UTC at an instant (seconds since the Unix
+/// epoch), or `None` when it cannot say. Supplied by the agent from the platform
+/// (`agent/src/commands/localzone.rs`), so a logon is converted with the zone's rules **at that instant**,
+/// daylight saving included.
+pub type LocalOffsetAt = fn(i64) -> Option<i32>;
+
+/// ODD-HOUR-LOGON's clock: the host's local time, and the accounts already reported tonight.
+/// Two sources, the operator's fixed offset first: it is an override, so a host whose platform
+/// zone is wrong (or absent) can be corrected. With neither the rule is off: the event's
+/// timestamp is UTC and "outside working hours" means nothing without the host's own time.
 pub(crate) struct OddHours {
     offset_minutes: Option<i32>,
+    zone: Option<LocalOffsetAt>,
     /// Lowercased account → timestamp of its last alert.
     last_alert_ns: BoundedMap<String, u64>,
 }
@@ -135,6 +158,7 @@ impl OddHours {
     pub(crate) fn new() -> Self {
         Self {
             offset_minutes: None,
+            zone: None,
             last_alert_ns: BoundedMap::new(COUNTER_CAP),
         }
     }
@@ -149,20 +173,45 @@ impl OddHours {
         true
     }
 
-    /// The local hour (0..24) at `ts`, or `None` while no offset is set.
+    /// Sets the platform's zone, used where no fixed offset is set. False, and nothing changes,
+    /// when `zone` cannot convert the present: a source that answers nothing now is not a zone
+    /// the rule can rely on, and the rule stays as it was (off, unless an offset is set).
+    pub(crate) fn set_zone(&mut self, zone: LocalOffsetAt, now_secs: i64) -> bool {
+        if zone(now_secs)
+            .is_none_or(|m| !(MIN_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES).contains(&m))
+        {
+            return false;
+        }
+        self.zone = Some(zone);
+        true
+    }
+
+    /// Minutes east of UTC at `secs`: the operator's offset if set, else the platform zone's at
+    /// that instant. `None` when there is neither, or the zone has no answer or one no zone has.
+    fn offset_minutes_at(&self, secs: i64) -> Option<i32> {
+        if let Some(fixed) = self.offset_minutes {
+            return Some(fixed);
+        }
+        let minutes = (self.zone?)(secs)?;
+        (MIN_UTC_OFFSET_MINUTES..=MAX_UTC_OFFSET_MINUTES)
+            .contains(&minutes)
+            .then_some(minutes)
+    }
+
+    /// The local hour (0..24) at `ts`, or `None` while there is no zone.
     fn local_hour(&self, ts: u64) -> Option<u32> {
-        let offset = i64::from(self.offset_minutes?);
         let secs = i64::try_from(ts / 1_000_000_000).ok()?;
+        let offset = i64::from(self.offset_minutes_at(secs)?);
         let local = (secs + offset * 60).rem_euclid(86_400);
         u32::try_from(local / 3_600).ok()
     }
 
     /// The local hour of a logon of `user` at `ts` when it is outside the working hours and
     /// this account has not been reported within [`ODD_HOUR_QUIET_NS`]; remembers it.
-    pub(crate) fn observe(&mut self, user: &str, ts: u64) -> Option<u32> {
+    pub(crate) fn observe(&mut self, user: &str, sid: Option<&str>, ts: u64) -> Option<u32> {
         let hour = self.local_hour(ts)?;
         let (start, end) = WORK_HOURS_LOCAL;
-        if (start..end).contains(&hour) || user.is_empty() || is_generic_account(user) {
+        if (start..end).contains(&hour) || user.is_empty() || is_generic_logon(user, sid) {
             return None;
         }
         let key = user.to_lowercase();
@@ -180,7 +229,7 @@ impl OddHours {
 
 #[cfg(test)]
 mod tests {
-    use super::is_generic_account;
+    use super::{is_generic_account, is_well_known_service_sid};
 
     #[test]
     fn accounts_every_host_has_are_generic_in_any_case_and_with_a_domain() {
@@ -202,6 +251,24 @@ mod tests {
             "NT AUTHORITY\\NETWORK SERVICE",
         ] {
             assert!(is_generic_account(user), "{user}");
+        }
+    }
+
+    #[test]
+    fn the_well_known_service_sids_are_recognised_and_nothing_near_them() {
+        for sid in ["S-1-5-7", "S-1-5-18", "S-1-5-19", "S-1-5-20"] {
+            assert!(is_well_known_service_sid(sid), "{sid}");
+        }
+        // A user's SID, a prefix of a listed one, and an `Administrators` group SID are not.
+        for sid in [
+            "S-1-5-21-1-2-3-1001",
+            "S-1-5-1",
+            "S-1-5-180",
+            "S-1-5-32-544",
+            "s-1-5-18",
+            "",
+        ] {
+            assert!(!is_well_known_service_sid(sid), "{sid:?}");
         }
     }
 

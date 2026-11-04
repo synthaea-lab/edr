@@ -44,7 +44,8 @@ afterAll(async () => {
 async function filesUnder(root: string): Promise<string[]> {
   const out: string[] = [];
   for (const entry of await readdir(root, { withFileTypes: true, recursive: true })) {
-    if (entry.isFile()) out.push(path.relative(root, path.join(entry.parentPath, entry.name)));
+    // As store keys, `/`-separated: `path.relative` uses `\` on Windows (#1097).
+    if (entry.isFile()) out.push(path.relative(root, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"));
   }
   return out.sort();
 }
