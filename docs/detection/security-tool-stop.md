@@ -84,10 +84,11 @@ gone by the time its event is drained.
   raw one hands over the task, whose `tgid` is exact. The cost is one BTF offset
   (`task_struct.tgid`), and the program is in `RAW_TRACEPOINTS`, so the agent's preflight loads it
   through the verifier with the others.
-- *No `result` field, no wire change.* The delivery `result` was meant to tell a refused `kill`
-  (`EPERM`) from a delivered one. Permission is checked **before** the tracepoint fires, so a
-  refused signal never reaches it, and `result` only says "delivered, ignored or already
-  pending". `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 60).
+- *No `result` field for permission, no wire change.* The delivery `result` was meant to tell a
+  refused `kill` (`EPERM`) from a delivered one. Permission is checked **before** the tracepoint
+  fires, so a refused signal never reaches it, and `result` only says "delivered, ignored or
+  already pending". The probe reads it only to drop ignored and already-pending signals (see
+  below). `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 60).
 - *Reload signals depend on the tool's handler.* `SIGHUP`, `SIGUSR1`, `SIGUSR2` and the real-time
   signals are what daemons catch to reload (logrotate, Suricata's `SIGUSR2`), but their default
   action ends a process, so hiding them for every tool was an evasion path (review of #1114).
@@ -113,9 +114,8 @@ gone by the time its event is drained.
   while the first is pending is dropped too: the first one was reported or counted as lost. Not
   seen: a process's `SIGSTOP` while a kernel-sent one (`PTRACE_ATTACH`) is pending; the `ptrace`
   is its own evidence. A tool that blocks its reload signal for a `signalfd` (not in `SigCgt`) is covered too:
-  the repeats are already pending. **Not verified**: the eBPF crate was not built here (no
-  `bpf-linker`), only type-checked on the host, and the `SIGPIPE` storm re-run on a VM is for the
-  reviewer.
+  the repeats are already pending. Verified live: see the Verification status list (the eBPF
+  crate built with `bpf-linker`, the `SIGPIPE` storm).
 - *Lost signals are an alert.* A full ring is counted per CPU (`SIGNAL_TOOL_DROPS`); when the
   count grows the sensor emits a `SignalEvent` with `signals_lost` set (no signal, no target:
   `signal` and `target_pid` are 0) and the rule `check_signal_events_lost` raises T1562.001
@@ -128,8 +128,8 @@ gone by the time its event is drained.
   (measured on Fedora 43, uid 1000 and root, `flags 0x490002`). `openat` ignores unknown flag bits
   and the probe reads the flags raw, so any bit of that field can be set by an unprivileged open:
   the loss moved to `SignalEvent::signals_lost` (inside schema 60), which only the sensor's report
-  sets. Regression test: an `O_TMPFILE | O_RDWR` open gives no alert. **Not verified live**: the
-  `O_TMPFILE` re-check on a VM is for the reviewer. `FLAG_UNIT_STOPPED` (`0x8000_0000`, #1085) has
+  sets. Regression test: an `O_TMPFILE | O_RDWR` open gives no alert. Verified live (see the
+  Verification status list). `FLAG_UNIT_STOPPED` (`0x8000_0000`, #1085) has
   the same exposure to a raw `open` flag and is not changed here.
 - *Medium for the catchable signals.* An administrator's stop and an attacker's are the same
   command; High is kept for what cannot be handled.
@@ -180,10 +180,20 @@ captures under `lab/captures/test-1103-*` and `test-1114-20261103`):
   same way, but the sender was the child (pid 1133, `python3`), the real sender, because the send
   runs in process context; it is flagged unreliable anyway.
 
+- **Fourth round of #1114** (Fedora 43 VM, `auditd` and a synthetic unit `osqueryd`, not a real
+  vendor tool). Run by the PR author on head `bbf25848` (kernel 7.2.9): the eBPF crate built with
+  `bpf-linker` and loaded (`watched=1`, the verifier accepts the `result` read); `O_TMPFILE |
+  O_RDWR` as uid 1000 and root (`flags 0x490002`) gives no alert; 20,000 `SIGPIPE` to `auditd`
+  (it ignores them) then `kill -9`: no signal-13 event, no loss event, `SIGKILL` High. Run by
+  Jihair54 on the same head (kernel 7.2.10, real `auditd`): the same two checks reproduced, and
+  the loss event end to end, with a synthetic `osqueryd` unit (`SigBlk: fffffffe00000000`) hit
+  by 30,000 `kill -39` then `kill -9`: 819 signal-39 events, then one event with `signals_lost:
+  29182` and a High T1562.001 alert; the `SIGKILL` itself was among the lost.
+
 **Not verified:** the storm on cgroup v1 (same probe and filter, only the rescan reads another
-hierarchy: accepted by argument); a **full ring** (the storm of caught `SIGHUP` no longer reaches
-it, and no run filled it with lethal signals, so the "signals lost" event is covered by unit tests
-only); `SI_ASYNCIO` (an AIO completion with `SIGEV_SIGNAL`: only the forged code was run for it) and a timer signal the tool handles; Suricata
+hierarchy: accepted by argument); a full ring with **lethal** signals
+(the "signals lost" event was triggered with real-time signal 39 on a synthetic unit, see above);
+the moved-out eviction and the map overfill (read in the code and unit-tested only); `SI_ASYNCIO` (an AIO completion with `SIGEV_SIGNAL`: only the forged code was run for it) and a timer signal the tool handles; Suricata
 **after** the reload filter (the real daemon was not reinstalled: the synthetic unit stands in for
 it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with the new probe;
 `falco` and `osqueryd` as real tools. One VM per kernel, one week.
@@ -202,6 +212,16 @@ it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with th
 - **A stop through the service manager is Low** (sent by pid 1, which does not say who asked).
   It is not left alone: the exec rule `check_security_tool_stop` (Medium) reads `systemctl stop`
   and `systemctl kill`, and the journal source (#1085) reports a stop nobody explains.
+- **Kernel-mediated stops.** A process can make the kernel end or freeze a tool without any
+  signal the probe reports. `SEND_SIG_PRIV` signals are dropped (the sender is not a process), and
+  three paths use them or need no signal at all: `prlimit --cpu=1:1 --pid <tool>` (root or same
+  uid; at the next CPU tick `check_rlimit` sends `SIGKILL` as `SEND_SIG_PRIV`, to `current`, the
+  tool itself), `echo 1M > .../<unit>.service/memory.max` (root; the memcg OOM kill sends
+  `SIGKILL` as `SEND_SIG_PRIV`), and `echo 1 > .../<unit>.service/cgroup.freeze` (no signal, the
+  same effect as the `SIGSTOP` this rule grades High). Traced in the kernel source (v6.12,
+  `kernel/time/posix-cpu-timers.c`, `mm/oom_kill.c`), not run on a VM. Candidate detections, not
+  done here: `prlimit64` with `RLIMIT_CPU` or `RLIMIT_AS` on a watched tgid, and a write to
+  `memory.max`, `memory.high`, `cgroup.freeze` or `pids.max` under a listed unit's cgroup. Follow-up issue to open.
 - **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
   commands (issue #1118, ADR-0045 in PR #1123): until it is fixed the manager-sent stop depends on
   a rule that often cannot see the command.
@@ -257,5 +277,8 @@ failed; a per-unit cap would still double the worst case, since root can create 
 listed unit that is not installed). Past the cap the extra ones are no longer watched, with one
 warning each. Those kept at the last scan keep their place, then the oldest (start time) win: a
 moved-out tool is not displaced by processes moved out after it, nor by younger ones moved out with
-it, whatever their pids. The move itself still raises no finding, only `warn!` lines; raising it is
-not done here.
+it, whatever their pids. Residual: a process kept at an earlier scan keeps its place, so root can
+fill the cap with 256 live processes first, then move the tool out; the tool is then evicted, with
+a warning, and its kills are no longer seen (pinned by
+`a_tool_moved_out_after_the_cap_is_full_is_evicted`; the ranking is not redesigned). The move
+itself still raises no finding, only `warn!` lines; raising it is not done here.
