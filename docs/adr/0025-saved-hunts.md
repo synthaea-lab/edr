@@ -100,7 +100,7 @@ saved hunt exists. Three things in #61 cross a boundary and need a decision befo
     first, with no cursor**: when more matched the answer says `truncated`, and when the archive had
     more files than one search reads (2000, the oldest days left) it says `incomplete`; the way on is
     a narrower window or a filter. It is a scan of every file in range on one tenant, not an index
-    (ADR-0041 "Findings"). The archive is a 503 while the lake is off, and a 501 when the lake is on but its store is S3, which has no reader yet.
+    (ADR-0041 "Findings"). The archive is a 503 while the lake is off; a directory or an S3 bucket both have a reader (#1105).
     **Not decided here:** saved hunts over events, their runs and a "new match" for them (a saved
     hunt stays on detections), a cursor, showing the event's text, and a console page; each is a
     separate decision.

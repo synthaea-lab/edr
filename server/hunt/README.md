@@ -25,8 +25,8 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
   `sha256`; no tenant field). `lib/hunt-events-search.ts` reads the telemetry lake through
   `queryLake`: the newest 50 events, typed columns only (never the event's text), no cursor
   (`truncated` and `incomplete` say when the answer is cut), a 10 s deadline (a 504), the same two
-  searches in flight per tenant as the other sources (a 429), a 503 while the lake is off, and a 501 when the lake is on but is an S3
-  bucket (only `LAKE_DIR` has a reader so far, #1105; the S3 reader is #1052's read side). The tenant is the session's alone. No console page, no saved hunt over
+  searches in flight per tenant as the other sources (a 429), a 503 while the lake is off, and a 501 when the lake is on but its store has no reader
+  (none is in that case now: `LAKE_DIR` and `LAKE_S3_BUCKET` both have one, #1105). The tenant is the session's alone. No console page, no saved hunt over
   events.
 - **Server-only part** (`lib/hunt-runner.ts`): `runHunt`, `runHuntWithinLimit`, `dueHunts`, `pruneHuntRuns`. They reach the notification outbox (`node:crypto`), so they live apart from `lib/hunt.ts`, which client components import (the form, `lib/hunt-view.ts`). `tests/unit/client-bundle-imports.test.ts` fails when a `"use client"` file reaches a Node built-in or Prisma (#926).
 - **Scheduler**: `GET /api/cron/run-hunts` (CRON_SECRET) runs the due scheduled hunts and
@@ -54,7 +54,7 @@ detection stores, saved hunts, and scheduled hunts that page an analyst on new m
 
 - Notification on new matches (a run records `newMatchCount`; nothing is sent).
 - Over the raw event archive (the ad-hoc search above exists): saved hunts and their runs, a cursor,
-  the event's text in a row, a console page, an S3 reader.
+  the event's text in a row, a console page.
 - Graduation beyond the assisted drafts: the PR opened from the server, a YARA draft, a selection built from the raw archive.
 - Live endpoint queries (ask one host "what is running right now?") ride the
   `response::live` channel with its policy gates, not a separate mechanism.

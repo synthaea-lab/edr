@@ -6,7 +6,9 @@ import type { PrismaClient } from "@prisma/client";
 import { SEARCH_PAGE_SIZE, searchFailure } from "@/lib/hunt-search";
 import { FIELD_MAX, searchEventsWithinLimit } from "@/lib/hunt-events-search";
 import { parseEventQuery } from "@/lib/hunt-events";
-import { eventArchiveFromEnv, FsLakeStore, type EventArchive, type LakeReader } from "@/lib/lake-store";
+import { FsLakeStore, type EventArchive, type LakeReader } from "@/lib/lake-store";
+import { eventArchiveFromEnv } from "@/lib/lake-env";
+import { S3LakeReader } from "@/lib/lake-s3-store";
 import { encodeParquet, lakeKey, lakeRow, type LakeRow as WriterRow } from "@/lib/lake-writer";
 
 const T1 = "tenant-one";
@@ -217,8 +219,10 @@ describe("eventArchiveFromEnv", () => {
     expect(eventArchiveFromEnv({ LAKE_DIR: "", LAKE_S3_BUCKET: "" })).toEqual({ state: "off" });
   });
 
-  it("has no reader when the lake is an S3 bucket, which is not the same as off", () => {
-    expect(eventArchiveFromEnv({ LAKE_S3_BUCKET: "telemetry" })).toEqual({ state: "no_reader" });
+  it("is ready with an S3 reader when the lake is a bucket", () => {
+    const archive = eventArchiveFromEnv({ LAKE_S3_BUCKET: "telemetry" });
+    expect(archive.state).toBe("ready");
+    if (archive.state === "ready") expect(archive.reader).toBeInstanceOf(S3LakeReader);
   });
 
   it("is ready with a reader on a directory lake", () => {

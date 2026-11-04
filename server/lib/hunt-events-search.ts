@@ -11,9 +11,10 @@ import type { EventArchive } from "@/lib/lake-store";
  *
  * The same bounds as the Postgres sources, in the form this source can take:
  * - **Time.** A search runs under `HUNT_STATEMENT_TIMEOUT_MS`. There is no SQL statement to cancel,
- *   so the deadline is an `AbortSignal` that `queryLake` checks before every file; a file already
- *   being read is not interrupted, so a search can overrun by the time of one file. Past the
- *   deadline it throws a `TimeoutError`, which `searchFailure` maps to a 504.
+ *   so the deadline is an `AbortSignal` that `queryLake` checks before every file and that the
+ *   readers pass on to the store, so a read in flight is abandoned too (a directory read may still
+ *   finish). Past the deadline it throws the signal's `TimeoutError`, which `searchFailure` maps to a
+ *   504: the readers rethrow the signal's reason, not the SDK's `AbortError`, which would be a 500.
  * - **In flight.** It takes one of the tenant's two slots (`admitSearch`), the same slots as a
  *   detection or case search, held for the whole read (the advisory lock lives in the transaction
  *   that wraps it). `busy` is a 429.
@@ -66,8 +67,8 @@ const cut = (value: string | null): string | null => (value === null ? null : va
 
 /**
  * Runs one search of the archive for `tenantId` as of `now`. `archive` says what can be read: `off`
- * is `lake_off` (the API answers 503), and `no_reader` is `no_reader` (the lake is on but its store,
- * an S3 bucket, has no reader yet: a 501). Neither opens a transaction or takes a slot.
+ * is `lake_off` (the API answers 503), and `no_reader` is `no_reader` (the lake is on but its store
+ * has no read side: a 501). Neither opens a transaction or takes a slot.
  */
 export async function searchEventsWithinLimit(
   prisma: PrismaClient,

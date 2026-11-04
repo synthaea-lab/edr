@@ -6,6 +6,12 @@ import { NextRequest } from "next/server";
 
 const db = vi.hoisted(() => ({ $transaction: vi.fn() }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
+// A store without a reader no longer exists in the configuration (S3 has one, #1105), so the route's answer for it is reached through the environment seam.
+const archive = vi.hoisted(() => ({ noReader: false }));
+vi.mock("@/lib/lake-env", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/lake-env")>();
+  return { ...actual, eventArchiveFromEnv: (env?: Record<string, string | undefined>) => (archive.noReader ? { state: "no_reader" as const } : actual.eventArchiveFromEnv(env)) };
+});
 
 import { POST } from "@/app/api/hunts/search/route";
 import { FsLakeStore } from "@/lib/lake-store";
@@ -21,6 +27,7 @@ beforeEach(async () => {
   delete process.env.LAKE_DIR;
   delete process.env.LAKE_S3_BUCKET;
   slotFree = true;
+  archive.noReader = false;
   const tx = { $queryRaw: vi.fn(async () => [{ ok: slotFree }]) };
   db.$transaction.mockReset();
   db.$transaction.mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx));
@@ -51,12 +58,12 @@ describe("POST /api/hunts/search with source events", () => {
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
-  it("answers 501, not the lake-off 503, and takes no slot, when the lake is an S3 bucket", async () => {
-    process.env.LAKE_S3_BUCKET = "telemetry";
+  it("answers 501, not the lake-off 503, and takes no slot, when the lake is on but its store has no reader", async () => {
+    archive.noReader = true;
     const res = await post({ source: "events", query: eventQuery });
     expect(res.status).toBe(501);
     const { error } = await res.json();
-    expect(error).toContain("S3");
+    expect(error).toContain("no reader");
     expect(error).not.toContain("is off");
     expect(db.$transaction).not.toHaveBeenCalled();
   });
