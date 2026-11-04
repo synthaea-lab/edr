@@ -81,7 +81,7 @@ minute is not maintenance.
 ## UNEXPLAINED-UNIT-STOP (T1562.001, #1085, Linux)
 
 `crates/rules/src/unitstop.rs`. The journal sensor reports a stop of a unit of
-`schema::SECURITY_SERVICES` as a `FileOpenEvent` with `FLAG_UNIT_STOPPED`; the journal names no
+`schema::SECURITY_SERVICES` as a `FileOpenEvent` with `FLAG_UNIT_STOPPED`, and only one from **pid 1** counts: the flag is also a bit of `openat`'s `flags` that any process can set on a file it names, so a flagged open from another pid is a forgery and is ignored (a stopgap; #1127 replaces the flag with `Event::UnitStop`, and this rule moves to it after that merges). The journal names no
 actor. The rule queues each stop and judges it once the stream clock is 120 s past it, so that a
 start that follows can be seen. It alerts, Medium, unless the stop is explained:
 
@@ -89,14 +89,14 @@ start that follows can be seen. It alerts, Medium, unless the stop is explained:
 | --- | --- | --- |
 | an exec that stopped the same unit (the exec rule above already alerted: no second alert) | up to 120 s before the record (a stop job can last `DefaultTimeoutStopSec`, 90 s), 5 s after for clock skew | `systemctl stop`, `disable --now`, `mask --now`, `service X stop`, `/etc/init.d/X stop` |
 | a restart or a start of the same unit | a restart exec like the one above; a start up to 120 s after the stop (a package upgrade stops in its pre-remove script and starts in post-install) | `systemctl restart|try-restart|start|reload-or-restart|enable --now`, `service`, `invoke-rc.d`, `deb-systemd-invoke` |
-| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt` (not with `-w`/`--wtmp-only`, which only writes wtmp), `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
+| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt` (only with argv captured and every option one of `-f -d -n -p`, `--force --no-wtmp --no-sync --no-wall --poweroff --reboot --halt`; `-w`, `--help`, a bad option or no argv gives no window), `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
 
 The windows are choices, not measurements (no fleet data), and are named constants in the module.
 
 A shutdown or a start is read from the **name** of the program, and each one silences an alert, so
 it counts only when the image path is a system path or unknown (`policy::name_exclusion_applies`),
 and an init script only from `/etc/init.d/`: a copy of `true` named `/tmp/reboot` or
-`/tmp/systemctl` explains nothing. A `systemctl` (or `deb-systemd-invoke`) call with `--user`,
+`/tmp/systemctl` explains nothing. A `systemctl` (or `deb-systemd-invoke`) call with `--help`, `--version` or `--dry-run` only prints, so it neither starts a unit nor opens the window. A `systemctl` (or `deb-systemd-invoke`) call with `--user`,
 `--host`/`-H` or `--machine`/`-M` acts on a user manager, another host or a container, so it
 neither starts a local unit nor opens the shutdown window. A start is a **claim** the rule does not
 see succeed: a `systemctl start` that fails (a masked unit, a unit that does not exist) still
@@ -106,6 +106,7 @@ Stated gaps: **no shutdown signal exists in the stream** (the journal sensor rep
 the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
 exec that asks for it; one asked another way (power button, logind from a desktop session, an ACPI
 request) has its stops alert.
+A `reboot`, `poweroff` or `halt` whose argv was not captured (the usual case, #1118) opens no window: its options are unknown and `reboot -w` cannot be told from a real reboot, so a real reboot whose argv was missed has its stops alert, the same cost as a scheduled shutdown, until the pid-1 target record below replaces this parsing.
 A **scheduled** shutdown (`shutdown +60`, `shutdown 23:00`, a bare `shutdown` which is `+1`, `systemctl reboot --when=…`) stops nothing yet and does not open the window, so it cannot cloak a stop; `shutdown -c`/`--cancel` (and `--when=cancel`) closes a window already open. The cloak `shutdown +99`, stop the tool, `shutdown -c` is therefore handled, and a scheduled shutdown that does fire has the stops of its own run alert (the cost of not trusting a command that only promises one). A start that no exec
 shows (systemd's own `Restart=` after a crash, a socket activation) is not seen as one, so the
 stop that preceded it alerts. A judged stop waits for a later exec or file-open event to move the
