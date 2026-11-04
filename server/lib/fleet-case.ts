@@ -86,10 +86,23 @@ const GENERIC_ACCOUNT_PATTERN = /^(?:.*\$|dwm-\d+|umfd-\d+|anonymous logon|local
 
 /** Whether `user` (`name` or `DOMAIN\name`, any case) is an account every host has. Only the name
  * counts: `HOST\Administrator` is as generic as `Administrator`. */
-export function isGenericIdentity(user: string): boolean {
+export function isGenericIdentity(user: string, sid?: string): boolean {
+  if (sid !== undefined && isGenericSid(sid)) return true;
   const lower = user.toLowerCase();
   const name = lower.slice(lower.lastIndexOf("\\") + 1);
   return GENERIC_IDENTITIES.has(lower) || GENERIC_IDENTITIES.has(name) || GENERIC_ACCOUNT_PATTERN.test(name);
+}
+
+/**
+ * Windows accounts every host has, by SID, because their names are translated: a French host logs
+ * `AUTORITE NT\Système` and `Administrateur`, which no name above matches. Anonymous (`S-1-5-7`),
+ * local system, local service and network service (`S-1-5-18`..`20`, as `rules/src/logon.rs`),
+ * and the built-in Administrator and Guest of any machine or domain (relative id 500 and 501).
+ */
+const GENERIC_SID_PATTERN = /^s-1-5-(?:7|18|19|20|21-\d+-\d+-\d+-50[01])$/;
+
+function isGenericSid(sid: string): boolean {
+  return GENERIC_SID_PATTERN.test(sid.toLowerCase());
 }
 
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -132,7 +145,7 @@ export function joinKeys(hostKey: string, event: unknown, at: Date): JoinKey[] {
       keys.set(node.key, { kind: "sha256", key: node.key.slice("sha256:".length) });
     } else if (node.kind === "identity") {
       const user = node.key.toLowerCase();
-      if (!isGenericIdentity(user)) keys.set(`identity:${user}`, { kind: "identity", key: user });
+      if (!isGenericIdentity(user, node.attrs.sid)) keys.set(`identity:${user}`, { kind: "identity", key: user });
     }
   }
   return Array.from(keys.values());

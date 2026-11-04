@@ -97,6 +97,34 @@ describe("joinKeys", () => {
     expect(joinKeys("a1", logon("vagrant"), T0)).toEqual([{ kind: "identity", key: "vagrant" }]);
   });
 
+  it.each([
+    ["AUTORITE NT\\Système", "S-1-5-18"],
+    ["AUTORITE NT\\SERVICE LOCAL", "S-1-5-19"],
+    ["AUTORITE NT\\SERVICE RÉSEAU", "S-1-5-20"],
+    ["OUVERTURE DE SESSION ANONYME", "S-1-5-7"],
+    ["PC-01\\Administrateur", "S-1-5-21-1004336348-1177238915-682003330-500"],
+    ["CORP\\Invité", "S-1-5-21-1004336348-1177238915-682003330-501"],
+  ])("a successful logon of the localized generic account %s (%s) gives no key: the SID says what the name does not", (user, sid) => {
+    expect(joinKeys("a1", { ...logon(user), target_user_sid: sid }, T0)).toEqual([]);
+  });
+
+  it("two French hosts' logons of the built-in Administrateur do not join", () => {
+    const admin = (machine: string) => ({
+      ...logon("Administrateur"),
+      target_user_sid: `S-1-5-21-${machine}-1177238915-682003330-500`,
+    });
+    expect(joinDetections([detection("a1", admin("1")), detection("a2", admin("2"), minutes(3))])).toEqual([]);
+  });
+
+  it.each([
+    "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "S-1-5-21-1004336348-1177238915-682003330-5001",
+    "S-1-5-180",
+    "S-1-5-32-544",
+  ])("a logon whose SID %s is not a built-in account is still keyed by its user", (sid) => {
+    expect(joinKeys("a1", { ...logon("Alice"), target_user_sid: sid }, T0)).toEqual([{ kind: "identity", key: "alice" }]);
+  });
+
   it.each(["alice", "CORP\\alice", "svc-backup", "dollar$sign"])(
     "a successful logon of %s is not mistaken for a generic account",
     (user) => {
