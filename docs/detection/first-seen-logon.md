@@ -65,7 +65,8 @@ account logs on to a host after the window. The lab runs are recorded under "Lab
   - **A defect found**: the same run alerted on the account `Système`, the local SYSTEM account (SID
     `S-1-5-18`) of a French Windows. The generic-account list holds English names only, and the name reaches
     the event with its `è` already replaced by U+FFFD, so no spelling of it can match. The SID is on the
-    event; matching `S-1-5-18`, `-19` and `-20` would be language-independent. Not fixed here.
+    event, and since #1125 the rule treats `S-1-5-7`, `-18`, `-19` and `-20` as generic whatever the
+    name. The name loss itself is #1126.
   - **Not covered**: the 8 h quiet period on Windows (only the 5 s repeat), service and batch logons by name
     (`SERVICE LOCAL`, `SERVICE RÉSEAU`, not run), domain accounts, the logon type, and Windows or macOS
     clippy beyond `enrich`.
