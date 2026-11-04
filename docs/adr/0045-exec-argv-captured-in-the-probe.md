@@ -83,9 +83,18 @@ its total length, and keep the `/proc` read as the fallback when the probe read 
   in its message; the technique id is chosen at implementation. The severity is fixed here from those two
   samples. Neither sample is committed in the repository (they are figures from #1112 and from lab captures
   that are not in the tree), both are small and from lab hosts, and they were not re-derived for this ADR.
-- **What userspace builds, and what consumers read.** `argv` holds only the **whole** tokens of the head and
-  of the tail, in order; a token cut by a window edge is dropped from `argv` and counted in
-  `argv_omitted_bytes`, never fused with its neighbour at the join. `cmdline` stays the whole tokens joined by
+- **What userspace builds, and what consumers read.** `argv` holds the tokens of the head and of the tail,
+  in order. A token cut by a window edge is **kept as a partial token** with the bytes that were read: the
+  last token of the head, and the first token of the tail (the sensor cannot tell whether the tail starts on a
+  token boundary, so it is treated as partial when the block is over the window). The head and the tail stay
+  separate tokens, never fused at the join. This matters for the common shape of one long argument
+  (`bash -c "<script>"`, `python3 -c`, `sh -c "<blob> | base64 -d | sh"`): dropping the cut tokens would leave
+  `cmdline` as `bash -c` and blind the content rules to the script; keeping them gives the first 768 bytes
+  of it and the last bytes. The flag and `argv_omitted_bytes` already say that the argument is incomplete, and
+  the count stays `total - 1,024` because the visible bytes of a partial token are not counted as omitted.
+  Reading the `/proc` argument of a still-living process instead, when the block is over the window, is not
+  retained: it reintroduces the race and the rewrite of the region described in Consequences, and the probe
+  read is the exec-time one. `cmdline` stays the tokens joined by
   one space, **with no marker in it**: the loss is carried by the flag and the number, which a process cannot
   forge by writing a marker string into its own arguments. Argument strings cannot contain a NUL, so the
   windows split cleanly on NUL; an empty argument stays an empty token. The consumers of `cmdline` (the
