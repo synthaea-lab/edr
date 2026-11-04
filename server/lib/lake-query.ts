@@ -22,7 +22,7 @@
  * volume. DuckDB stays the planned engine for that (not measured, ADR "Measurements owed"); the
  * result shape is what a hunt layer consumes, so the engine can change under it.
  *
- * Rows come back oldest first (by `ts`, then by file) and carry `event`, the event's source text as
+ * Rows come back oldest first (by `ts`, then by file), or newest first with `order: "desc"`, and carry `event`, the event's source text as
  * ingest received it, never re-serialised.
  */
 
@@ -59,6 +59,23 @@ export interface LakeQuery {
   /** Exact matches, all of which must hold. `sha256` is compared in lowercase. */
   where?: Partial<Record<LakeFilterName, string>>;
   limit?: number;
+  /**
+   * "asc" (the default): the oldest rows of the range, oldest first. "desc": the newest rows, newest
+   * first, so a hunt over a wide window sees what happened last, and `limit` cuts the oldest.
+   */
+  order?: "asc" | "desc";
+  /**
+   * Checked before each listing and before each file is read: an aborted signal ends the query by
+   * throwing its reason, so a caller can bound the time. A listing or a file already in progress is not
+   * interrupted, so a caller that must not return late checks the signal again once the query returns.
+   */
+  signal?: AbortSignal;
+  /**
+   * Read the `event` column (the event's whole source text; the largest column). Default true. With
+   * false the column is not read from the file at all (Parquet is columnar) and `event` is "": for a
+   * caller that shows only the typed columns.
+   */
+  includeEvent?: boolean;
 }
 
 export interface LakeRow {
@@ -124,7 +141,7 @@ function dayString(dayNumber: number): string {
  *
  * Every key returned is checked against the layout, the tenant and the day that was asked for
  * (the second isolation layer), and a key that fails is ignored. Shared by {@link queryLake} and
- * {@link scanLake}.
+ * {@link scanLake}. When `signal` is aborted the listing throws its reason before the next store call.
  */
 export async function listPartitionFiles(
   reader: LakeReader,
@@ -132,14 +149,21 @@ export async function listPartitionFiles(
   first: number,
   last: number,
   types: string[] | null,
-  maxFiles: number
+  maxFiles: number,
+  newestFirst = false,
+  signal?: AbortSignal
 ): Promise<{ files: PartitionFile[]; truncated: boolean }> {
   const files: PartitionFile[] = [];
   const wanted = types === null ? null : Array.from(new Set(types));
-  for (let day = first; day <= last; day++) {
+  // Days oldest first, or newest first when the caller wants the newest rows: the listing stops at the
+  // cap, so the direction decides which files a capped query keeps.
+  for (let n = 0; n <= last - first; n++) {
+    const day = newestFirst ? last - n : first + n;
     const date = dayString(day);
     const under = `tenant=${tenantId}/date=${date}/`;
     for (const prefix of wanted === null ? [under] : wanted.map((type) => `${under}type=${type}/`)) {
+      // A listing is one store call per day and type (up to MAX_RANGE_DAYS x MAX_TYPES): check the deadline before each.
+      signal?.throwIfAborted();
       for (const { key } of await reader.list(prefix, { limit: maxFiles + 1 - files.length })) {
         const m = KEY.exec(key);
         // The second layer: whatever the store listed, only this tenant's well-formed keys of this day are read.
@@ -167,11 +191,16 @@ function checkScope(q: { tenantId: string; from: string; to: string; types?: str
 }
 
 /** One file's rows that pass `tests` (typed-column equality, ANDed). */
-async function readPartition(reader: LakeReader, file: PartitionFile, tests: [string, string][]): Promise<LakeRow[]> {
+async function readPartition(
+  reader: LakeReader,
+  file: PartitionFile,
+  tests: [string, string][],
+  withEvent = true
+): Promise<LakeRow[]> {
   const bytes = await reader.get(file.key);
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const rows: LakeRow[] = [];
-  for (const r of (await parquetReadObjects({ file: buffer, columns: COLUMNS })) as Record<string, unknown>[]) {
+  for (const r of (await parquetReadObjects({ file: buffer, columns: withEvent ? COLUMNS : COLUMNS.filter((c) => c !== "event") })) as Record<string, unknown>[]) {
     if (!tests.every(([column, value]) => r[column] === value)) continue;
     rows.push({
       type: file.type,
@@ -184,7 +213,7 @@ async function readPartition(reader: LakeReader, file: PartitionFile, tests: [st
       daddr: (r.daddr as string | null) ?? null,
       query: (r.query as string | null) ?? null,
       sha256: (r.sha256 as string | null) ?? null,
-      event: String(r.event),
+      event: withEvent ? String(r.event) : "",
     });
   }
   return rows;
@@ -240,6 +269,8 @@ export async function scanLake(
  */
 export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeResult> {
   const { first, last, types } = checkScope(q);
+  if (q.order !== undefined && q.order !== "asc" && q.order !== "desc") throw new RangeError('order must be "asc" or "desc"');
+  const newestFirst = q.order === "desc";
   const limit = q.limit ?? DEFAULT_ROWS;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_ROWS) throw new RangeError(`limit must be 1 to ${MAX_ROWS}`);
 
@@ -249,24 +280,30 @@ export async function queryLake(reader: LakeReader, q: LakeQuery): Promise<LakeR
     if (typeof value !== "string") throw new RangeError(`filter ${name} must be a string`);
     tests.push([EQUALITY_COLUMNS[name as LakeFilterName], name === "sha256" ? value.toLowerCase() : value]);
   }
-  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, MAX_FILES);
+  const listed = await listPartitionFiles(reader, q.tenantId, first, last, types, MAX_FILES, newestFirst, q.signal);
   const files = listed.files;
   files.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : a.key < b.key ? -1 : 1));
+  // The listing already walked the days in the order the query wants rows (newest first for "desc"),
+  // so the files kept are the ones that order reads first.
+  if (newestFirst) files.reverse();
   const toRead = files;
+  const withEvent = q.includeEvent !== false;
   const rows: LakeRow[] = [];
   let truncated = false;
   let filesRead = 0;
 
   // One day at a time: its matches are ordered by ts before they count against the limit, so the
-  // limit keeps the oldest rows of the range and never cuts a day in file order.
+  // limit keeps the rows the order reads first (the newest for "desc", the oldest for "asc") and never
+  // cuts a day in file order.
   for (let i = 0; i < toRead.length && !truncated; ) {
     const date = toRead[i].date;
     const day: LakeRow[] = [];
     for (; i < toRead.length && toRead[i].date === date; i++) {
+      q.signal?.throwIfAborted();
       filesRead++;
-      day.push(...(await readPartition(reader, toRead[i], tests)));
+      day.push(...(await readPartition(reader, toRead[i], tests, withEvent)));
     }
-    day.sort((a, b) => a.ts.getTime() - b.ts.getTime());
+    day.sort((a, b) => (newestFirst ? b.ts.getTime() - a.ts.getTime() : a.ts.getTime() - b.ts.getTime()));
     for (const row of day) {
       if (rows.length === limit) {
         truncated = true;

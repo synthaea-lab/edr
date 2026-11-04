@@ -116,8 +116,16 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   change under it. The ADR's other isolation requirement (read-only credentials) is a store matter:
   `LakeReader` (`list`, `get`) is separate from `LakeStore` so the reader can be built on its own
   credentials. Only the directory store implements it; the S3 reader waits for the S3 store (#1052).
-- **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
-  filters other than equality, ordering other than by time, compaction-aware reading.
+- **Two options for a caller** (#933): `order: "desc"` (the newest rows, newest first; the default is
+  the oldest first), `includeEvent: false` (the `event` column is not read from the file) and `signal`
+  (an `AbortSignal` checked before each file, so a caller can bound the time).
+- **The hunt `events` source** (#933, `server/hunt/README.md`, ADR-0025 point 10) is the one caller:
+  `POST /api/hunts/search` with `source: "events"`. It needs a reader, which only `LAKE_DIR` has:
+  with `LAKE_S3_BUCKET` the lake is on and ingest and the writer work, but the search answers `501`
+  ("cannot be searched: the lake is an S3 bucket"), distinct from the `503` of a lake that is off
+  (`eventArchiveFromEnv`, #1105). The S3 reader is the remaining work.
+- **Not built:** time-of-day bounds finer than a day, filters other than equality, ordering other than
+  by time, compaction-aware reading, a cursor over the archive.
 
 ## Rebuilding prevalence from the lake (issue #77, `lib/prevalence-rebuild.ts`)
 
@@ -162,7 +170,7 @@ Whether a rebuild may replace, merge into or only be checked against the counter
 - An object store in `server/docker-compose.yml`: the compose still has only Postgres, the server and
   nginx, so `LAKE_S3_*` points at a store you run yourself. See the ADR on which one.
 - Compaction: every drain writes new small files.
-- A `HuntQuery` events source and a route over the query side (#933), and DuckDB for fleet volume.
+- Saved hunts over events (the ad-hoc search is #933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
 - Duplicates of another kind: the same event sent twice by an agent (a lost `2xx`, then a resend) is
