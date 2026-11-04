@@ -106,10 +106,20 @@ gone by the time its event is drained.
   schema 60, which this PR introduces: absent means false), and the alert adds that the sender is not
   reliable. For the three codes `current` really is a bystander when the kernel raised them.
 - *Lost signals are an alert.* A full ring is counted per CPU (`SIGNAL_TOOL_DROPS`); when the
-  count grows the sensor emits a `FileOpenEvent` flagged `FLAG_SIGNAL_EVENTS_LOST` and the rule
-  `check_signal_events_lost` raises T1562.001 Medium: a flood of lethal signals ahead of a kill
-  is how a tool is ended unseen. The kernel drop of caught reloads removes the cheapest flood;
-  a flood of lethal signals (`SIGTERM`) can still fill the ring, and is now reported.
+  count grows the sensor emits a `SignalEvent` with `signals_lost` set (no signal, no target:
+  `signal` and `target_pid` are 0) and the rule `check_signal_events_lost` raises T1562.001
+  **High**: what was lost may be the `SIGKILL`, and nothing after the fact says which signals they
+  were (review of #1114: 20,000 ignored `SIGPIPE` ahead of a `kill -9` left only the loss report).
+  The kernel drop of caught reloads and of ignored or already-pending signals removes the cheapest
+  floods; a flood of lethal signals (`SIGTERM`) can still fill the ring, and is reported.
+- *The loss has its own field, not a bit of `FileOpenEvent::flags`.* The first cut flagged a
+  `FileOpenEvent` with `0x0040_0000`, which is `O_TMPFILE`'s bit: every `tmpfile()` open alerted
+  (measured on Fedora 43, uid 1000 and root, `flags 0x490002`). `openat` ignores unknown flag bits
+  and the probe reads the flags raw, so any bit of that field can be set by an unprivileged open:
+  the loss moved to `SignalEvent::signals_lost` (inside schema 60), which only the sensor's report
+  sets. Regression test: an `O_TMPFILE | O_RDWR` open gives no alert. **Not verified live**: the
+  `O_TMPFILE` re-check on a VM is for the reviewer. `FLAG_UNIT_STOPPED` (`0x8000_0000`, #1085) has
+  the same exposure to a raw `open` flag and is not changed here.
 - *Medium for the catchable signals.* An administrator's stop and an attacker's are the same
   command; High is kept for what cannot be handled.
 
