@@ -68,8 +68,10 @@ minute is not maintenance.
 - It reads the **command**, not the outcome: a stop that is refused (`sc stop WinDefend` is denied on
   a current Windows), or any stop that does not go through these commands (`kill`, `pkill`,
   `taskkill`, D-Bus, an API call, `setenforce 0`, `aa-teardown`), is not seen. The journal
-  sensor now reports the **stop of a listed unit** (`FileOpenEvent` with `FLAG_UNIT_STOPPED`, #1085,
-  filtered at the sensor, system manager only, the record's writer checked as PID 1) but names no
+  sensor now reports the **stop of a listed unit** (`schema::UnitStopEvent`, #1085,
+  filtered at the sensor, system manager only, the record's writer checked as PID 1; an event of its
+  own, not a flag on a `FileOpenEvent`, because a raw `openat` flag can carry any bit and an
+  unprivileged open could have raised the finding, as `O_TMPFILE` did for the signal-loss bit, ADR-0008) but names no
   actor, and no rule consumes it yet (stacked work); and the macOS unified-log tail emits TCC, `sudo` and Gatekeeper records.
 - A service-name list is a list: a tool not on it is not covered. Windows display names (`net stop
   "Windows Defender Antivirus Service"`) are not matched, only service names.

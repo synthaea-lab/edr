@@ -100,7 +100,7 @@ gap.
 | **Memory & injection** | eBPF · tracepoints | ptrace ops, `process_vm_*`, `/proc/*/mem` writes, `memfd_create`+exec (fileless) | 📋 planned | T1055, T1620 | #265 |
 | **Identity & privilege** | journald | sshd accept/fail, PAM sessions, sudo/su → `Auth` | ✅ used | T1078 | #93 |
 | **Identity & privilege** | eBPF · tracepoints | `setuid`/`setresuid`/`capset`/`setns` | ✅ setuid/setresuid (SETUID-ROOT-REQUEST) · 📋 capset/setns have no rule | T1548.001, container escape | #266, #1041 |
-| **Defense evasion** | journald | stop of a security-tool unit (`schema::SECURITY_SERVICES`) → `FileOpen` + `FLAG_UNIT_STOPPED`, system manager only, no actor | ✅ sensor (rule stacked on #1085) | T1562.001 | #1085 |
+| **Defense evasion** | journald | stop of a security-tool unit (`schema::SECURITY_SERVICES`) → `UnitStop` event, system manager only, no actor | ✅ sensor (rule stacked on #1085) | T1562.001 | #1085 |
 | **Persistence & autostart** | journald + rules | systemd unit first-start (flagged approximation, documented); rc/cron/systemd path writes via the file stream | ✅ used | T1543.002, T1053.003 | #93 |
 | **OS security verdicts** | netlink · audit | SELinux AVC denials → `Event::PolicyDenial` (`mechanism: "selinux"`), live-confirmed on a real Enforcing kernel | ✅ used (telemetry only — not yet consumed by a rule/correlator) | T1562-adjacent | #297 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | module loads/unloads, `bpf(2)` loads (eBPF-rootkit visibility) | 📋 planned | T1547.006, T1562 | #264 |
