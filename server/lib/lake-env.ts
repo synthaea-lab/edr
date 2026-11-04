@@ -78,11 +78,12 @@ let cachedReader: { key: string; reader: LakeReader } | null = null;
  * writer's `LAKE_S3_ACCESS_KEY_ID` pair (ADR-0041, decision 4): with neither set the SDK's default
  * credential chain applies. Same refusals as `lakeStoreFromEnv` (both stores set, bad settings).
  *
- * With no reader pair and no writer pair either, both clients resolve the same default chain (an
- * instance role, IRSA), so the query side runs with the writer's identity and its bucket-wide write
- * and delete rights: decision 4 is not met in that configuration. This logs a warning once per
- * configuration rather than refusing to start; set the reader pair, or give the reader a role of its
- * own, to meet it.
+ * With no reader pair, the reader resolves the default chain (an instance role, IRSA), which can
+ * have write and delete rights, and that holds whether or not the writer has an explicit pair of its
+ * own (its variables say nothing about the reader's role): decision 4 is then met only if that role is
+ * read-only, which this cannot see. So the warning is logged whenever the reader pair is unset and S3
+ * is in use, once per process and configuration, on the first call (the archive search, not startup),
+ * rather than refusing to start. Set the reader pair, or give the reader a read-only role, to meet it.
  */
 export function lakeReaderFromEnv(env: Env = process.env): LakeReader | null {
   if (!lakeEnabled(env)) return null;
@@ -94,9 +95,9 @@ export function lakeReaderFromEnv(env: Env = process.env): LakeReader | null {
   const s = s3Settings(env, READER_CREDS);
   const key = JSON.stringify(s);
   if (cachedReader?.key === key) return cachedReader.reader;
-  if (s.accessKeyId === undefined && !env.LAKE_S3_ACCESS_KEY_ID && !env.LAKE_S3_SECRET_ACCESS_KEY) {
+  if (s.accessKeyId === undefined) {
     console.warn(
-      "Lake reader: neither LAKE_S3_READER_ACCESS_KEY_ID/LAKE_S3_READER_SECRET_ACCESS_KEY nor the writer's pair is set, so the reader and the writer both use the SDK's default credential chain: the query side may run with the writer's identity (ADR-0041, decision 4). Set the reader pair, or give the reader its own role."
+      "Lake reader: LAKE_S3_READER_ACCESS_KEY_ID/LAKE_S3_READER_SECRET_ACCESS_KEY are not set, so the reader uses the SDK's default credential chain (an instance or IRSA role), which can have write and delete rights on the bucket, whether or not the writer has its own LAKE_S3_ACCESS_KEY_ID pair: the query side may run with more than read access (ADR-0041, decision 4). Set the reader pair, or give the reader its own read-only role."
     );
   }
   const reader = new S3LakeReader({ bucket: s.bucket, prefix: s.prefix, client: s3Client(s) });

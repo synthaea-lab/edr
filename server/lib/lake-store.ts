@@ -45,11 +45,13 @@ export interface LakeReader {
    * The files under `prefix` in key order. With `limit`, at most that many, the first ones: the
    * store stops listing there instead of materialising the whole prefix (an S3 reader asks for
    * `MaxKeys`). Without it, every file. With `signal`, a store that goes over the network abandons
-   * the request when it is aborted and rejects with the signal's reason (a directory is local and
-   * only checks it before it starts).
+   * the request when it is aborted. Contract: once `signal` is aborted, a rejection is always the
+   * signal's reason, never the store's own error (the S3 SDK and `readFile` reject with an `AbortError`
+   * whose `cause` is the reason), so a caller can tell a deadline (`TimeoutError`) from a failure. A
+   * directory checks the signal before it starts and again if a read fails.
    */
   list(prefix: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<{ key: string; size: number }[]>;
-  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. Honors `signal` as {@link LakeReader.list} does. */
+  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. Honors `signal` and its rejection contract as {@link LakeReader.list} does. */
   get(key: string, opts?: { signal?: AbortSignal }): Promise<Uint8Array>;
 }
 
@@ -81,8 +83,14 @@ export class FsLakeStore implements LakeStore, LakeReader {
 
   async get(key: string, opts: { signal?: AbortSignal } = {}): Promise<Uint8Array> {
     assertSafeKey(key);
-    opts.signal?.throwIfAborted();
-    return new Uint8Array(await readFile(path.join(this.root, key), { signal: opts.signal }));
+    const { signal } = opts;
+    signal?.throwIfAborted();
+    try {
+      return new Uint8Array(await readFile(path.join(this.root, key), { signal }));
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      throw e;
+    }
   }
 
   async list(prefix: string, opts: { limit?: number; signal?: AbortSignal } = {}): Promise<{ key: string; size: number }[]> {

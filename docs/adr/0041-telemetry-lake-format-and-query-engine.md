@@ -230,14 +230,17 @@ credentials need not be the writer's (built in #1105, below). Not measured: quer
 structural: the reader is its own class on its own client (it cannot write or delete), and it takes its
 own pair, `LAKE_S3_READER_ACCESS_KEY_ID` / `LAKE_S3_READER_SECRET_ACCESS_KEY`. It never falls back to the
 writer's pair; with neither set the SDK's default credential chain applies, so an instance role can be the
-reader's identity. **That role may be the writer's:** with no reader pair and no writer pair, both clients
-resolve the same chain, and the query side holds the writer's write and delete rights, so decision 4 is met
-only when a reader pair is set or the reader has a role of its own. The server logs a warning once per
-configuration in that case (review of #1113); it does not refuse to start. Reversible choice, taken here and not by the owner: requiring the reader pair
+reader's identity. **That role may be the writer's, or any role with write or delete rights:** with no reader
+pair the reader resolves the default chain, whether or not the writer has an explicit pair (the writer's
+variables say nothing about the reader's role), so decision 4 is met only when a reader pair is set or the
+reader's role is read-only, which the server cannot see. It therefore logs a warning whenever the reader pair is
+unset and S3 is in use, once per process and configuration and on the first archive search (not at startup;
+the reader is built per request and cached), naming variables and never values (review of #1113); it does not refuse to start. Reversible choice, taken here and not by the owner: requiring the reader pair
 whenever `LAKE_S3_BUCKET` is set would be stricter, at the cost of a lake whose search needs extra
 configuration to start; the owner may prefer that. The abort signal of a search reaches the reader (`list` and
 `get` take `{ signal }`, the S3 reader passes it as the request's `abortSignal`), so the deadline of a search holds
-on a network store. Not done: per-tenant credentials scoped by bucket policy (the second layer of
+on a network store. The readers rethrow the signal's reason once it is aborted (the SDK and `readFile` reject with an
+`AbortError` whose `cause` is the reason), so a deadline answers 504, not 500. Not done: per-tenant credentials scoped by bucket policy (the second layer of
 decision 4 remains the tenant prefix and the per-key re-check of the query layer), and a run against a
 real store (MinIO or S3): the unit tests use an in-memory bucket.
 

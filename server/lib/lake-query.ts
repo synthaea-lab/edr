@@ -66,8 +66,9 @@ export interface LakeQuery {
   order?: "asc" | "desc";
   /**
    * Checked before each listing and before each file is read: an aborted signal ends the query by
-   * throwing its reason, so a caller can bound the time. A listing or a file already in progress is not
-   * interrupted, so a caller that must not return late checks the signal again once the query returns.
+   * throwing its reason, so a caller can bound the time. The signal also goes to the reader, which
+   * abandons a request in flight (S3) and rejects with the same reason. A directory read may still
+   * finish, so a caller that must not return late checks the signal again once the query returns.
    */
   signal?: AbortSignal;
   /**

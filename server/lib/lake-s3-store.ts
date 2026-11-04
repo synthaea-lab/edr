@@ -80,15 +80,22 @@ export class S3LakeReader implements LakeReader {
       signal?.throwIfAborted();
       // S3 lists in key order, so with a limit the first `limit` keys are the answer: ask for no more than are still wanted.
       // `abortSignal` abandons the request in flight, so a slow store cannot hold the caller past its deadline.
-      const page = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: objectPrefix,
-          ContinuationToken: token,
-          MaxKeys: limit === undefined ? undefined : limit - out.length,
-        }),
-        { abortSignal: signal }
-      );
+      let page;
+      try {
+        page = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucket,
+            Prefix: objectPrefix,
+            ContinuationToken: token,
+            MaxKeys: limit === undefined ? undefined : limit - out.length,
+          }),
+          { abortSignal: signal }
+        );
+      } catch (e) {
+        // The SDK rejects with an AbortError whose `cause` is the reason; the contract is the reason itself.
+        if (signal?.aborted) throw signal.reason;
+        throw e;
+      }
       for (const object of page.Contents ?? []) {
         if (object.Key === undefined) continue;
         out.push({ key: this.keys.strip(object.Key), size: Number(object.Size ?? 0) });
@@ -100,10 +107,19 @@ export class S3LakeReader implements LakeReader {
 
   async get(key: string, opts: { signal?: AbortSignal } = {}): Promise<Uint8Array> {
     assertSafeKey(key);
-    opts.signal?.throwIfAborted();
-    const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.keys.full(key) }), { abortSignal: opts.signal });
-    if (res.Body === undefined) throw new Error(`Lake object ${key} has no body`);
-    return res.Body.transformToByteArray();
+    const { signal } = opts;
+    signal?.throwIfAborted();
+    try {
+      const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.keys.full(key) }), { abortSignal: signal });
+      if (res.Body === undefined) throw new Error(`Lake object ${key} has no body`);
+      const bytes = await res.Body.transformToByteArray();
+      // Whether the SDK stops a body read on abort is not guaranteed: say so here.
+      signal?.throwIfAborted();
+      return bytes;
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      throw e;
+    }
   }
 }
 
@@ -119,18 +135,13 @@ export class S3LakeStore implements LakeStore {
     this.client = config.client;
   }
 
-  /** The object key for a lake key. */
-  private full(key: string): string {
-    return this.keys.full(key);
-  }
-
   async put(key: string, body: Uint8Array): Promise<void> {
     assertSafeKey(key);
     // An S3 PUT is atomic: a reader sees the whole object or none, so no temporary name is needed.
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
-        Key: this.full(key),
+        Key: this.keys.full(key),
         Body: body,
         ContentLength: body.byteLength,
         ContentType: "application/vnd.apache.parquet",
@@ -184,7 +195,7 @@ export class S3LakeStore implements LakeStore {
         res = await this.client.send(
           new DeleteObjectsCommand({
             Bucket: this.bucket,
-            Delete: { Objects: batch.map((key) => ({ Key: this.full(key) })), Quiet: true },
+            Delete: { Objects: batch.map((key) => ({ Key: this.keys.full(key) })), Quiet: true },
           })
         );
       } catch (e) {
@@ -197,7 +208,7 @@ export class S3LakeStore implements LakeStore {
       // DeleteObjects answers 200 with a per-key error list: a missing key is not an error in S3, anything else is.
       const errors = new Map((res.Errors ?? []).map((e) => [e.Key, `${e.Code}${e.Message ? `: ${e.Message}` : ""}`] as const));
       for (const key of batch) {
-        const error = errors.get(this.full(key));
+        const error = errors.get(this.keys.full(key));
         if (error === undefined) result.deleted.push(key);
         else result.failed.push({ key, error });
       }

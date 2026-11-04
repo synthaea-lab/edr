@@ -132,12 +132,14 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   |---|---|
   | `LAKE_S3_READER_ACCESS_KEY_ID`, `LAKE_S3_READER_SECRET_ACCESS_KEY` | The reader's pair, both or neither. Give it read-only rights (`s3:ListBucket`, `s3:GetObject`), ideally limited to a tenant prefix by a bucket policy. Neither set: the SDK's default credential chain. |
 
-  **The default chain may be the writer's identity.** With neither pair set (here and for the writer), both
-  clients resolve the same chain, typically one instance role, and the query side then holds the writer's
-  bucket-wide write and delete rights. Decision 4 is met only when the reader pair is set or the reader runs
-  under a role of its own; the server logs a warning at startup when it can tell that neither is the case
-  (it cannot see a role the environment hides). The reader never falls back to the writer's *variables*, but
-  that is not the same as a different identity.
+  **The default chain may have write rights.** With no reader pair, the reader resolves the SDK's default
+  chain (an instance role, IRSA), whether or not the writer has its own pair: the writer's variables say nothing
+  about the reader's role, and that role can hold bucket-wide write and delete rights (typically it is the
+  writer's). Decision 4 is met only when the reader pair is set or the reader's role is read-only, which the
+  server cannot see. So the server logs a warning, naming the variables and never their values, whenever the
+  reader pair is unset and S3 is in use. The reader is built on the first archive search, not at startup, so
+  that is when it appears: once per process and configuration, and never if nobody searches the archive.
+  The reader never falls back to the writer's *variables*, but that is not the same as a different identity.
 
   The reader shares `LAKE_S3_BUCKET`, `_ENDPOINT`, `_REGION`, `_PREFIX` and `_FORCE_PATH_STYLE` with the
   writer, and **never falls back to `LAKE_S3_ACCESS_KEY_ID`**: the writer's bucket-wide write and delete
