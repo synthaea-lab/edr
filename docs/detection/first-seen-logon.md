@@ -29,9 +29,10 @@ identities (`NT AUTHORITY\SYSTEM`, `LOCAL SERVICE`, `NETWORK SERVICE`, `ANONYMOU
 accounts (`HOST$`), `DWM-n` and `UMFD-n`, and the default logins of cloud and distribution images
 (`ubuntu`, `ec2-user`, `debian`, `fedora`, `centos`, `rocky`, `cloud-user`, `azureuser`, `admin`). The
 name alone counts: `HOST\Administrator` is `Administrator`. On Windows the account is also generic
-by its SID when the event carries one (`S-1-5-7`, `S-1-5-18`, `S-1-5-19`, `S-1-5-20`): the name of
+by its SID when the event carries one (`S-1-5-7`, `S-1-5-18`, `S-1-5-19`, `S-1-5-20`, and the
+built-in Administrator `S-1-5-21-…-500`): the name of
 those is localized (the SYSTEM account of a French Windows is named in French, and the event can
-carry the name with a letter already lost), so a name list alone cannot recognise them (#1091).
+carry the name with a letter already lost), so a name list alone cannot recognise them (#1091; `Administrateur` on a French Windows, #1126).
 **`vagrant` is deliberately not generic**: the lab VMs are signed in to as `vagrant`, and a lab run
 could otherwise never show the rule or the join it feeds. The name list is the one of
 `server/lib/fleet-case.ts` (`GENERIC_IDENTITIES`), copied, not shared: keep them in step. The SID

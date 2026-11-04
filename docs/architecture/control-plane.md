@@ -274,7 +274,10 @@ let them link hosts on demand. The generic accounts are compared by their bare n
 `NETWORK SERVICE`) are not identities, nor are the default logins of a cloud or distribution image
 (`ubuntu`, `ec2-user`, `debian`, `fedora`, `centos`, `rocky`, `cloud-user`, `azureuser`, `admin`),
 which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
-are signed in to as `vagrant`, and a lab run could not otherwise show the join.
+are signed in to as `vagrant`, and a lab run could not otherwise show the join. A Windows logon
+that carries `target_user_sid` is also generic by that SID, whatever its localized name
+(`AUTORITE NT\Système`, `Administrateur`): `S-1-5-7`, `S-1-5-18` to `S-1-5-20`, and the built-in
+Administrator `S-1-5-21-…-500`, as the logon rules.
 
 **The successful-logon half has two sources: FIRST-SEEN-LOGON and ODD-HOUR-LOGON (T1078, #376).** The join reads
 `detection.event`, and a detection stores the event that fired a rule. Before that rule no rule

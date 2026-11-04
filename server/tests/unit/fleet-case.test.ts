@@ -103,7 +103,6 @@ describe("joinKeys", () => {
     ["AUTORITE NT\\SERVICE RÉSEAU", "S-1-5-20"],
     ["OUVERTURE DE SESSION ANONYME", "S-1-5-7"],
     ["PC-01\\Administrateur", "S-1-5-21-1004336348-1177238915-682003330-500"],
-    ["CORP\\Invité", "S-1-5-21-1004336348-1177238915-682003330-501"],
   ])("a successful logon of the localized generic account %s (%s) gives no key: the SID says what the name does not", (user, sid) => {
     expect(joinKeys("a1", { ...logon(user), target_user_sid: sid }, T0)).toEqual([]);
   });
@@ -118,10 +117,11 @@ describe("joinKeys", () => {
 
   it.each([
     "S-1-5-21-1004336348-1177238915-682003330-1001",
+    "S-1-5-21-1004336348-1177238915-682003330-501",
     "S-1-5-21-1004336348-1177238915-682003330-5001",
     "S-1-5-180",
     "S-1-5-32-544",
-  ])("a logon whose SID %s is not a built-in account is still keyed by its user", (sid) => {
+  ])("a logon whose SID %s is not a generic account is still keyed by its user", (sid) => {
     expect(joinKeys("a1", { ...logon("Alice"), target_user_sid: sid }, T0)).toEqual([{ kind: "identity", key: "alice" }]);
   });
 

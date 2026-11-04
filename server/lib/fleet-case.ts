@@ -97,9 +97,10 @@ export function isGenericIdentity(user: string, sid?: string): boolean {
  * Windows accounts every host has, by SID, because their names are translated: a French host logs
  * `AUTORITE NT\Système` and `Administrateur`, which no name above matches. Anonymous (`S-1-5-7`),
  * local system, local service and network service (`S-1-5-18`..`20`, as `rules/src/logon.rs`),
- * and the built-in Administrator and Guest of any machine or domain (relative id 500 and 501).
+ * and the built-in Administrator of any machine or domain (relative id 500; as
+ * `administrator` above, Guest is not listed).
  */
-const GENERIC_SID_PATTERN = /^s-1-5-(?:7|18|19|20|21-\d+-\d+-\d+-50[01])$/;
+const GENERIC_SID_PATTERN = /^s-1-5-(?:7|18|19|20|21-\d+-\d+-\d+-500)$/;
 
 function isGenericSid(sid: string): boolean {
   return GENERIC_SID_PATTERN.test(sid.toLowerCase());
