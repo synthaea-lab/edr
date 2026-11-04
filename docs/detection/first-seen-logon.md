@@ -40,7 +40,7 @@ no rule on `main` fired on a successful logon, so the join joined nothing on a h
 that source: a detection whose event is a successful `AuthKind::Logon`. It inherits the join's
 limits (generic accounts excluded, `vagrant` not, never `LogonFailure`, `ExplicitCredentials` not
 counted). Because it alerts once per account, the join sees an identity only the first time the
-account logs on to a host after the window. **No lab run is claimed.**
+account logs on to a host after the window. The join itself (the server side) was not exercised by the Linux run below, which was observe-only.
 
 ## Provisional and stated gaps
 
@@ -104,56 +104,70 @@ Provisional, and stated:
   by schedule alerts. Generic accounts are excluded, a named service account is not.
 - The hour is read from the event's own timestamp (event time), so a replayed journal is judged by when
   the logon happened, not when it was read.
-- **Linux lab run (#1090, 2026-11-02)**: two builds were used. The first run (every case except the 8 h
-  repeat) used the agent built from `main` at `8224d72f` (with #1088). The second run (`F-expiry-8h`) used the
-  agent built from the `feat/1103-signal-generate` branch (#1103) in the VM's `~/edr-1103`; its commit was not
-  recorded, so only the branch is known. Both on a Fedora 43 VM
-  (kernel 7.2.9, `Europe/Paris`, sshd 10.0), real sshd logons by public key from the host, observe-only,
-  captures in `lab/captures/test-1090-20261102/` (one directory per case: `alerts.ndjson`, `events.ndjson`,
-  `agent.out`, `logons.txt`). Verified:
+- **Linux lab runs (#1090, 2026-11-02 and 2026-11-03)**, three runs on one Fedora 43 VM (kernel 7.2.9,
+  `Europe/Paris`, sshd 10.0), real sshd logons by public key from the host, observe-only:
+  - **Run 1, 2026-11-02**: agent built from `main` at `8224d72f` (with #1088). Every case below except the
+    8 h repeat.
+  - **Run 2, 2026-11-02** (`F-expiry-8h`, account `edr-lab`, `utc_offset_minutes = 600`): agent built from the
+    `feat/1103-signal-generate` branch (#1103) in the VM's `~/edr-1103`; its commit was not recorded, so only
+    the branch is known. A first attempt at the 8 h repeat (see below); run 3 supersedes it.
+  - **Run 3, 2026-11-03**: agent built from `main` at `81cc6c52`. The 8 h repeat (see below).
+
+  **Where the evidence is**: the captures of run 1 and 2 (`alerts.ndjson`, `events.ndjson`, `agent.out`,
+  `logons.txt`, one directory per case, named `test-1090-20261102`) and the notes of run 3 (`issue-1090.md`,
+  "Update 2026-11-03") are kept in the author's lab notes. **They are not in this repository**, so the
+  results below can be checked against the code but not against data here. Whether `chronyd` was stopped in
+  runs 1 and 2 is not recorded; in run 3 it was.
+
+  Verified:
   - **The Linux logon event** is `auth`, `kind: logon`, `outcome: success`, `target_user` = the account sshd
     names in `Accepted ... for <user>` (`lab1090`, `edr-lab`, `ubuntu`, `ec2-user`), `source_address` = the
-    client, `comm: sshd-session`. The account is the login name as typed, not a uid lookup, and carries no
-    domain. Every logon produced exactly one such event.
-  - **`[detection] utc_offset_minutes` set**: with `0` (14:5x UTC), a logon of `lab1090` raised nothing; with
-    `600` (00:xx local), `lab1090` raised ODD-HOUR-LOGON once (`T1078`, Low, "at 00:00 host-local time"); a
-    second `lab1090` logon 4 s later did not repeat. The 8 h quiet period was **not** waited out. A second
-    run (`edr-lab`, `utc_offset_minutes = 600`) tried to skip the wait: the first logon alerted, the second 4 s
+    client, `comm: sshd-session`. The parser takes the name from the log text (between " for " and " from",
+    `crates/sensors/linux/journal/src/classify.rs`), never by a uid lookup, adds no domain and keeps whatever
+    sshd logged: a `bob@corp` and a `bob` are two accounts. `comm` is `SYSLOG_IDENTIFIER` (`auth.rs`): it is
+    `sshd-session` on OpenSSH 9.8 and later, `sshd` on older versions. **`target_user_sid` is absent on Linux**
+    (`auth.rs:162`, "Linux: no SID concept"), so an exemption bound to a SID (#1108) or a SID-based generic
+    list (#1125) cannot match a Linux logon: only the name list applies. Every logon produced exactly one
+    such event.
+  - **`[detection] utc_offset_minutes` set, and overriding the platform zone** (run 1): with `0` (14:5x UTC),
+    a logon of `lab1090` raised nothing; with `600` (00:xx local), `lab1090` raised ODD-HOUR-LOGON once
+    (`T1078`, Low, "at 00:00 host-local time"); a second `lab1090` logon 4 s later did not repeat. The VM was
+    on `Europe/Paris`, where the same instant is 15:5x and inside the window, so the setting did override a
+    different live platform zone.
+  - **The failed first attempt at the 8 h repeat** (run 2): the first `edr-lab` logon alerted, the second 4 s
     later did not, then the VM's wall clock was moved +9 h and two more logons raised nothing. **That null
     result says nothing about the cooldown.** The logon event's time is journald's wall clock
     (`__REALTIME_TIMESTAMP`, `record.realtime_us` in `crates/sensors/linux/journal/src/record.rs`, copied to
-    `timestamp_ns` in `auth.rs`), so moving the clock does move it. But a logon at about 14:5x UTC is 00:5x
-    local at +600 min, and +9 h makes it 09:5x local, inside `WORK_HOURS_LOCAL` (7, 20). `OddHours::observe`
-    (`crates/rules/src/logon.rs`) returns `None` on the hour check before it looks at the quiet period, so the
-    experiment could not tell "cooldown still active" from "cooldown elapsed". A repeat check by moving the
-    clock needs a shift that keeps the logon out of the window; that was done in a later run (next bullet).
-  - **8 h quiet period, by moving the clock (2026-11-03, a third run, not part of the 2026-11-02 captures)**:
-    Fedora 43 (`Europe/Paris`), agent of `main` at `81cc6c52`, no setting (platform zone in use), default
-    window 07-20, one fresh account, real sshd logons, `chronyd` stopped and the journald wall clock moved by
-    hand. First alert at 21:00 host-local time; a logon 4 s later silent; **7 h 30 later silent**; **8 h 30
-    later alert**; 30 min after that alert silent; **21 h later alert**. So the quiet period holds on a live
-    agent, stays silent inside it, alerts after it, and restarts at each alert. Details and the capture script:
-    `issues/issue-1090.md`, section "Update 2026-11-03".
+    `timestamp_ns` in `auth.rs`), so moving the clock does move it. But 00:5x local plus 9 h is 09:5x, inside
+    `WORK_HOURS_LOCAL` (7, 20), and `OddHours::observe` (`crates/rules/src/logon.rs:196-200`) returns `None`
+    on the hour check before it looks at the quiet period. The experiment could not tell "cooldown still
+    active" from "cooldown elapsed". (`saturating_sub` also means a clock moved backwards reads as still
+    inside the quiet period.)
+  - **8 h quiet period, by moving the clock** (run 3): Fedora 43 (`Europe/Paris`), no setting (platform
+    zone in use), default window 07-20, one fresh account, real sshd logons, `chronyd` stopped and the
+    journald wall clock moved by hand. First alert at 21:00 host-local time; a logon 4 s later silent; **7 h
+    30 later silent**; **8 h 30 later alert**; 30 min after that alert silent; **21 h later alert**. So the
+    quiet period holds on a live agent, stays silent inside it, alerts after it, and restarts at each alert.
+    The capture script is in `issue-1090.md` (not in this repository, see above).
   - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
     `root` was not tried (no root key on the VM).
-  - **Non-generic accounts you did not mean to test alert too**: the lab's own `edr-lab` logons (the SSH
-    commands that drive the run) raised the rule in every out-of-window case.
+  - **Accounts used to drive the run alert too**: the lab's own `edr-lab` logons (the SSH commands that
+    drive the run) raised the rule in every out-of-window case, since it is not a generic account.
   - **No setting, platform zone** (the case #1088 made default): `Europe/Paris` at 15:5x raised nothing;
     `TZ=Asia/Tokyo` (23:00 local) raised it for `lab1090` and `edr-lab`; log line
     "platform time zone in use, odd-hour logon rule on".
-  - **No setting and no zone** (`/etc/localtime` moved away, `TZ` unset, VM clock set to 02:00 UTC so that UTC
-    would be outside the window): the agent logged "the host names no time zone; odd-hour logon rule off unless
-    utc_offset_minutes is set" and a `lab1090` logon raised nothing. The control at the same clock with
-    `Europe/Paris` (03:00 local) raised it. **The rule is therefore silent without a setting only when the host
-    names no zone, or its zone cannot convert the present** (the agent then logs "the platform gave no time zone
-    offset"; that second case was not reproduced); on a host with a zone it is on.
-  
-  Not verified on Linux: a daylight-saving change (the unit and
-  `localtime_r` tests cover it), `utc_offset_minutes` overriding a different platform zone on a live agent,
-  console, `su` or `sudo` logons, password logins (only public-key ones were made), a logon during a
+  - **No setting and no zone** (`/etc/localtime` moved away, `TZ` unset, VM clock moved back 12 h to 02:00
+    UTC so that UTC would be outside the window; the VM was reverted afterwards): the agent logged "the host
+    names no time zone; odd-hour logon rule off unless utc_offset_minutes is set" and a `lab1090` logon
+    raised nothing. The control at the same clock with `Europe/Paris` (03:00 local) raised it. **The rule is
+    therefore silent without a setting only when the host names no zone, or its zone cannot convert the
+    present** (the agent then logs "the platform gave no time zone offset", `agent/src/commands/common.rs:110`;
+    that second case was not reproduced); on a host with a zone it is on.
+
+  Not verified on Linux: a daylight-saving change (the unit and `localtime_r` tests cover it), the setting
+  changed while the agent runs and the order of zone and setting at startup (the unit tests cover the
+  order), console, `su` or `sudo` logons, password logins (only public-key ones were made), a logon during a
   failed-then-successful sequence, a root login, and journals on hosts that do not use sshd.
-  Run on one VM, on one day; the agent's `date` was moved back 12 h for the no-zone case and the VM was
-  reverted afterwards.
 - Unit tests (`crates/rules/src/tests/logon.rs`, five hand mutations each failing a named test; `crates/config`
   tests for the offset). #1088 adds the zone tests: the rule with a stand-in zone at fixed instants either
   side of both 2026 changes, the override in either order, a zone with no answer; and the module's own test
