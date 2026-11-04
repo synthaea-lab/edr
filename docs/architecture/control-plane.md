@@ -286,7 +286,7 @@ account after a 24-hour learning window, Low, generic accounts excluded with the
 with this one (`vagrant` still not generic). It alerts at most once per account, so the join sees
 an identity only the first time that account logs on to a host after the window. The Windows
 `session` events of the RDP rule (T1563.002) are the other identity source that already reaches a
-detection. ODD-HOUR-LOGON (Low, a logon outside 07:00 to 20:00 host-local, once per account per 8 hours, host-local time from the platform time zone, overridable by `[detection] utc_offset_minutes`, off when no zone is found) is the second source and follows the same gate and generic-account list. **Not proven in a lab run**; the rules are covered by unit tests only.
+detection. ODD-HOUR-LOGON (Low, a logon outside 07:00 to 20:00 host-local, once per account per 8 hours, host-local time from the platform time zone, overridable by `[detection] utc_offset_minutes`, off when no zone is found) is the second source and follows the same gate and generic-account list. **Verified on a Linux lab VM** (#1090, see `docs/detection/first-seen-logon.md`); Windows and macOS not yet, and the rules are also covered by unit tests.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.

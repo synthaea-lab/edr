@@ -140,7 +140,8 @@ Provisional, and stated:
     later did not, then the VM's wall clock was moved +9 h and two more logons raised nothing. **That null
     result says nothing about the cooldown.** The logon event's time is journald's wall clock
     (`__REALTIME_TIMESTAMP`, `record.realtime_us` in `crates/sensors/linux/journal/src/record.rs`, copied to
-    `timestamp_ns` in `auth.rs`), so moving the clock does move it. But 00:5x local plus 9 h is 09:5x, inside
+    `timestamp_ns` in `auth.rs`), so moving the clock does move it. But the run started at 15:23 UTC, which is 01:2x local with `utc_offset_minutes = 600`
+    (the alert says "at 01:00 host-local time"); plus 9 h it is 10:2x local, inside
     `WORK_HOURS_LOCAL` (7, 20), and `OddHours::observe` (`crates/rules/src/logon.rs:196-200`) returns `None`
     on the hour check before it looks at the quiet period. The experiment could not tell "cooldown still
     active" from "cooldown elapsed". (`saturating_sub` also means a clock moved backwards reads as still
@@ -150,7 +151,7 @@ Provisional, and stated:
     journald wall clock moved by hand. First alert at 21:00 host-local time; a logon 4 s later silent; **7 h
     30 later silent**; **8 h 30 later alert**; 30 min after that alert silent; **21 h later alert**. So the
     quiet period holds on a live agent, stays silent inside it, alerts after it, and restarts at each alert.
-    The capture script is in `issue-1090.md` (not in this repository, see above).
+    The driver and alerts are in `lab/captures/test-1090c-20261103/`.
   - **Generic accounts**: `ubuntu` and `ec2-user` logged on with the setting at `600` and raised nothing.
     `root` was not tried (no root key on the VM).
   - **Accounts used to drive the run alert too**: the lab's own `edr-lab` logons (the SSH commands that
