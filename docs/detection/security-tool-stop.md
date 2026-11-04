@@ -249,3 +249,8 @@ tools and failed removals); a unit past the process cap, or with more cgroups th
 A tool that left its unit's cgroup stays watched while it is the same process (same pid and start
 time, `/proc/<pid>/stat` field 22); without a start time recorded at scan it is dropped. A failed
 removal from the kernel set is retried at the next scan and the pid stays named until it succeeds.
+The moved-out processes are capped per unit at `MAX_PROCS_PER_UNIT` too (review of #1114: root moved 8,500
+`sleep` processes in and out of `auditd.service` and filled the map, 309 inserts failed); past the cap
+the extra ones are no longer watched and one warning is logged. Which of them are kept is by pid order,
+not by age: a moved-out tool with a high pid can be the one dropped. The move itself still raises no
+finding, only `warn!` lines; raising it is not done here.
