@@ -89,7 +89,7 @@ start that follows can be seen. It alerts, Medium, unless the stop is explained:
 | --- | --- | --- |
 | an exec that stopped the same unit (the exec rule above already alerted: no second alert) | up to 120 s before the record (a stop job can last `DefaultTimeoutStopSec`, 90 s), 5 s after for clock skew | `systemctl stop`, `disable --now`, `mask --now`, `service X stop`, `/etc/init.d/X stop` |
 | a restart or a start of the same unit | a restart exec like the one above; a start up to 120 s after the stop (a package upgrade stops in its pre-remove script and starts in post-install) | `systemctl restart|try-restart|start|reload-or-restart|enable --now`, `service`, `invoke-rc.d`, `deb-systemd-invoke` |
-| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt`, `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
+| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt` (not with `-w`/`--wtmp-only`, which only writes wtmp), `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
 
 The windows are choices, not measurements (no fleet data), and are named constants in the module.
 
