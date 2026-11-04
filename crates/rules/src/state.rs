@@ -2087,10 +2087,11 @@ impl RuleState {
         if event.outcome != AuthOutcome::Success || event.kind != AuthKind::Logon {
             return None;
         }
-        match self
-            .logon_baseline
-            .observe(&event.target_user, event.meta.timestamp_ns)
-        {
+        match self.logon_baseline.observe(
+            &event.target_user,
+            event.target_user_sid.as_deref(),
+            event.meta.timestamp_ns,
+        ) {
             Observation::FirstSeen => {}
             Observation::Quiet | Observation::Known => return None,
         }
