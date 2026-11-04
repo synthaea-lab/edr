@@ -70,16 +70,19 @@ its total length, and keep the `/proc` read as the fallback when the probe read 
   | head read fails, or offsets unresolved: `/proc` fallback, process alive | what `/proc` gives | true only if the 32 KiB budget cut it | `Some(0)` when whole, else `None` |
   | the same, process already gone | empty | false | `None` |
 
-  The "told apart by `argv_total_bytes`" test of the previous draft is dropped: the probe window is always
-  1 KiB and the budget applies to the `/proc` read, so a total could not decide which one cut. `None` is the
-  honest value when the sensor saw nothing, and a rule must not read it as "complete".
+  The probe window is always 1 KiB and the budget applies to the `/proc` read, so a total cannot tell which
+  of the two cut; the flag does not try to. `None` is the honest value when the sensor saw nothing, and a
+  rule must not read it as "complete". The last row is not flagged either, so the rule below cannot see an
+  exec whose argv was never read at all; counting those (an "argv unknown" counter) is not part of this
+  decision.
 - **A rule on the flag is part of this work.** An exec whose argument block exceeds what was captured is
   itself evidence. How rare a benign one is: in #1112's sample of 3,451 execs the p99.9 is 347 bytes and the
   maximum 1,661, so at most 3 of them exceed 1 KiB; in 1,592 execs with a command line from the lab runs
   of 2026-11-03 (Fedora and Rocky) none exceeds 1 KiB (maximum 662 bytes). A stateless rule, **Low**, on
   `cmdline_truncated` with `argv_omitted_bytes = Some(n > 0)` lands with the probe change, the omitted length
   in its message; the technique id is chosen at implementation. The severity is fixed here from those two
-  samples; both are small and from lab hosts, which the ADR states rather than hides.
+  samples. Neither sample is committed in the repository (they are figures from #1112 and from lab captures
+  that are not in the tree), both are small and from lab hosts, and they were not re-derived for this ADR.
 - **What userspace builds, and what consumers read.** `argv` holds only the **whole** tokens of the head and
   of the tail, in order; a token cut by a window edge is dropped from `argv` and counted in
   `argv_omitted_bytes`, never fused with its neighbour at the join. `cmdline` stays the whole tokens joined by
@@ -92,16 +95,22 @@ its total length, and keep the `/proc` read as the fallback when the probe read 
 - **Schema.** `argv_omitted_bytes` is a field of `ExecEvent`, so a `schema` change: additive and defaulted (an
   old event has none), a new `SCHEMA_VERSION` after #1114 (v60) and #1116 (v61), golden fixtures, and the shared
   fixtures of `crates/ml` and `ml/` updated in the same change (CLAUDE.md). The other platforms fill it with
-  what their sensor knows: Windows takes the command line from the ETW event, which is whole up to the
-  `CreateProcess` limit, so `Some(0)`; macOS reports `None`, or `Some(n)` when its own byte budget cuts, with
-  the flag as #1116 already makes it. Exact values are fixed in the schema change.
+  what their sensor knows, and it is not "unchanged" for them. Windows does not take the command line from the
+  ETW event: it reads it from the target's PEB after the fact (`read_process_cmdline`,
+  `crates/sensors/windows/etw/src/providers.rs:183`, `winapi.rs:61`), and falls back to the image path when
+  the read fails, so it has the same race and no way to know that bytes were lost: `None`. macOS gets
+  `argv_truncated` from Endpoint Security as a count of arguments, not bytes
+  (`endpoint-security/src/ffi.rs:180`), and `normalize.rs:127` drops it today: it can set the flag from that,
+  with `None` for the omitted bytes. Exact values are fixed in the schema change; whether Windows should get
+  its own capture fix is out of scope.
 - **The variable-length record is a new parser of attacker-influenced bytes.** The drain today reads a
   fixed-size `ExecEvent`. A record whose length depends on lengths carried inside it must be validated
   against the record size (head and tail lengths each within the window, their sum at most 1,024, the
   record at least the fixed part plus them; a record that fails is dropped and counted, never read past its
   end), and lands with a never-panic robustness suite in the crate's `tests/` and a fuzz target, like the
   other byte parsers (CLAUDE.md). This is a condition of the change, not a follow-up.
-- **Wire and ring.** The exec record is `size_of::<ExecEvent>()` = 360 bytes today, and `EXEC_EVENTS` is 256
+- **Wire and ring.** The exec record is `size_of::<ExecEvent>()` = 360 bytes today (a figure recomputed in review; no test in the
+  repo asserts it, so it is re-measured with the rest), and `EXEC_EVENTS` is 256
   KiB: about 712 records once the 8-byte ring header is counted. A fixed 1,024-byte buffer in every record
   would make it about 1,400 bytes and the ring about 188 records, 3.8 times fewer, so a storm would shed
   sooner and a shed exec is gone. The decision is therefore a **variable-length record**: the fixed part
