@@ -109,8 +109,10 @@ gone by the time its event is drained.
   signal the target ignores or that is already queued; the probe reads its fifth argument
   (`result`, `enum sig_result`) and drops `TRACE_SIGNAL_IGNORED` (1) and
   `TRACE_SIGNAL_ALREADY_PENDING` (2). Review of #1114: `auditd` ignores `SIGPIPE`, and 20,000 of
-  them ahead of a `kill -9` filled the ring and lost the kill. `SIGKILL` and `SIGSTOP` can be
-  neither. A tool that blocks its reload signal for a `signalfd` (not in `SigCgt`) is covered too:
+  them ahead of a `kill -9` filled the ring and lost the kill. A second `SIGKILL` or `SIGSTOP`
+  while the first is pending is dropped too: the first one was reported or counted as lost. Not
+  seen: a process's `SIGSTOP` while a kernel-sent one (`PTRACE_ATTACH`) is pending; the `ptrace`
+  is its own evidence. A tool that blocks its reload signal for a `signalfd` (not in `SigCgt`) is covered too:
   the repeats are already pending. **Not verified**: the eBPF crate was not built here (no
   `bpf-linker`), only type-checked on the host, and the `SIGPIPE` storm re-run on a VM is for the
   reviewer.
@@ -249,8 +251,11 @@ tools and failed removals); a unit past the process cap, or with more cgroups th
 A tool that left its unit's cgroup stays watched while it is the same process (same pid and start
 time, `/proc/<pid>/stat` field 22); without a start time recorded at scan it is dropped. A failed
 removal from the kernel set is retried at the next scan and the pid stays named until it succeeds.
-The moved-out processes are capped per unit at `MAX_PROCS_PER_UNIT` too (review of #1114: root moved 8,500
-`sleep` processes in and out of `auditd.service` and filled the map, 309 inserts failed); past the cap
-the extra ones are no longer watched and one warning is logged. Which of them are kept is by pid order,
-not by age: a moved-out tool with a high pid can be the one dropped. The move itself still raises no
-finding, only `warn!` lines; raising it is not done here.
+The moved-out processes are capped at `MAX_MOVED_OUT` (256) for all units together (review of #1114:
+root moved 8,500 `sleep` processes in and out of `auditd.service` and filled the map, 309 inserts
+failed; a per-unit cap would still double the worst case, since root can create the cgroup of a
+listed unit that is not installed). Past the cap the extra ones are no longer watched, with one
+warning each. Those kept at the last scan keep their place, then the oldest (start time) win: a
+moved-out tool is not displaced by processes moved out after it, nor by younger ones moved out with
+it, whatever their pids. The move itself still raises no finding, only `warn!` lines; raising it is
+not done here.
