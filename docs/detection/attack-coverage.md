@@ -12,6 +12,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1078 | 3 | `rules:crates/rules/src/state.rs` |
 | T1189 | 3 | `sigma:rules/sigma/linux/browser_spawned_shell.yml`, `sigma:rules/sigma/windows/browser_spawned_interpreter.yml` |
 | T1190 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml`, `sigma:rules/sigma/windows/iis_worker_spawned_interpreter.yml`, `sigma:rules/sigma/windows/web_server_spawned_interpreter.yml` |
+| T1566.001 | 3 | `rules:crates/rules/src/state.rs` |
 
 ## Execution
 
@@ -22,6 +23,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1059.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/windows/browser_spawned_interpreter.yml`, `sigma:rules/sigma/windows/iis_worker_spawned_interpreter.yml`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml`, `sigma:rules/sigma/windows/powershell_encoded.yml` |
 | T1059.004 | 3 | `rules:crates/rules/src/stateless.rs`, `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/linux/browser_spawned_shell.yml`, `sigma:rules/sigma/linux/lolbin_shell_breakout.yml`, `sigma:rules/sigma/linux/reverse_shell.yml`, `sigma:rules/sigma/macos/web_server_spawned_shell.yml` |
 | T1204 | 3 | `rules:crates/rules/src/state.rs`, `sigma:rules/sigma/windows/office_spawned_interpreter.yml` |
+| T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 
 ## Persistence
 
@@ -146,7 +148,6 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1098 | 3 | `sigma:rules/sigma/windows/net_add_local_administrator.yml`, `sigma:rules/sigma/windows/powershell_add_sid_to_local_group.yml` |
 | T1110.001 | 3 | `rules:crates/rules/src/sudo.rs` |
 | T1187 | 3 | `rules:crates/rules/src/ntlm.rs` |
-| T1204.002 | 3 | `rules:crates/rules/src/state.rs` |
 | T1210 | 3 | `rules:crates/rules/src/state.rs` |
 | T1482 | 3 | `rules:crates/rules/src/ldap.rs` |
 | T1486 | 3 | `rules:crates/rules/src/state.rs` |
@@ -161,7 +162,6 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1562 | 3 | `rules:crates/rules/src/state.rs` |
 | T1562.002 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1564.004 | 3 | `rules:crates/rules/src/stateless.rs` |
-| T1566.001 | 3 | `rules:crates/rules/src/state.rs` |
 
 ## Not verified
 
