@@ -115,9 +115,37 @@ as ingest received it. The result says when it was cut: `truncated` (more rows t
   not measured at fleet volume, and the result shape is what a hunt layer consumes, so the engine can
   change under it. The ADR's other isolation requirement (read-only credentials) is a store matter:
   `LakeReader` (`list`, `get`) is separate from `LakeStore` so the reader can be built on its own
-  credentials. Only the directory store implements it; the S3 reader waits for the S3 store (#1052).
-- **Not built:** an HTTP route or the hunt `events` source (#933), time-of-day bounds finer than a day,
-  filters other than equality, ordering other than by time, compaction-aware reading.
+  credentials. The directory store implements it, and so does `S3LakeReader` (#1105; see **S3 reader** below).
+- **Two options for a caller** (#933): `order: "desc"` (the newest rows, newest first; the default is
+  the oldest first), `includeEvent: false` (the `event` column is not read from the file) and `signal`
+  (an `AbortSignal` checked before each file, so a caller can bound the time).
+- **The hunt `events` source** (#933, `server/hunt/README.md`, ADR-0025 point 10) is the one caller:
+  `POST /api/hunts/search` with `source: "events"`. It needs a reader (`lakeReaderFromEnv`,
+  `lib/lake-env.ts`): a directory for `LAKE_DIR`, `S3LakeReader` for `LAKE_S3_BUCKET`. A lake that is on
+  but whose store has no reader would answer `501`, distinct from the `503` of a lake that is off
+  (`eventArchiveFromEnv`, #1105); no configurable store is in that case now.
+- **S3 reader** (#1105, ADR-0041 decision 4). `S3LakeReader` has `get` (`GetObject`) and `list` (`ListObjectsV2`;
+  with `limit` it sends `MaxKeys` and stops at the first files). It is a separate class on its own S3
+  client, which can only list and get, and it uses its own credentials:
+
+  | Variable | Meaning |
+  |---|---|
+  | `LAKE_S3_READER_ACCESS_KEY_ID`, `LAKE_S3_READER_SECRET_ACCESS_KEY` | The reader's pair, both or neither. Give it read-only rights (`s3:ListBucket`, `s3:GetObject`), ideally limited to a tenant prefix by a bucket policy. Neither set: the SDK's default credential chain. |
+
+  **The default chain may have write rights.** With no reader pair, the reader resolves the SDK's default
+  chain (an instance role, IRSA), whether or not the writer has its own pair: the writer's variables say nothing
+  about the reader's role, and that role can hold bucket-wide write and delete rights (typically it is the
+  writer's). Decision 4 is met only when the reader pair is set or the reader's role is read-only, which the
+  server cannot see. So the server logs a warning, naming the variables and never their values, whenever the
+  reader pair is unset and S3 is in use. The reader is built on the first archive search, not at startup, so
+  that is when it appears: once per process and configuration, and never if nobody searches the archive.
+  The reader never falls back to the writer's *variables*, but that is not the same as a different identity.
+
+  The reader shares `LAKE_S3_BUCKET`, `_ENDPOINT`, `_REGION`, `_PREFIX` and `_FORCE_PATH_STYLE` with the
+  writer, and **never falls back to `LAKE_S3_ACCESS_KEY_ID`**: the writer's bucket-wide write and delete
+  must not be the query side's. Not run against MinIO or S3 here (the unit tests use an in-memory bucket).
+- **Not built:** time-of-day bounds finer than a day, filters other than equality, ordering other than
+  by time, compaction-aware reading, a cursor over the archive.
 
 ## Rebuilding prevalence from the lake (issue #77, `lib/prevalence-rebuild.ts`)
 
@@ -138,7 +166,7 @@ Whether a rebuild may replace, merge into or only be checked against the counter
   path): one `list` of the tenant's prefix plus one `get` and one Parquet decode per file, and with no
   compaction a day is as many files as the writer flushed. A range is at most 366 days per call; a longer
   history is several calls folded by `mergeSightings`. Not measured at fleet volume or on an object store
-  (there is no S3 reader yet). A scan lists and reads at most 50,000 files (listed one day at a time, never the whole tenant prefix); past that `complete` is false.
+  (the S3 reader is built, #1105, but untested against a real store). A scan lists and reads at most 50,000 files (listed one day at a time, never the whole tenant prefix); past that `complete` is false.
 - **`complete` is the only result to trust.** It is false when files were left unlisted or unread
   (`scan.listingTruncated`, `scan.filesSkipped`), the sighting cap was reached, or any event was skipped:
   `skipped` counts events whose text was not JSON (their observations are lost, not guessed), and a
@@ -162,7 +190,7 @@ Whether a rebuild may replace, merge into or only be checked against the counter
 - An object store in `server/docker-compose.yml`: the compose still has only Postgres, the server and
   nginx, so `LAKE_S3_*` points at a store you run yourself. See the ADR on which one.
 - Compaction: every drain writes new small files.
-- A `HuntQuery` events source and a route over the query side (#933), and DuckDB for fleet volume.
+- Saved hunts over events (the ad-hoc search is #933), and DuckDB for fleet volume.
 - A bound on the queue: if `LAKE_DIR` is set and the cron is not scheduled, `lake_batches` grows
   without limit.
 - Duplicates of another kind: the same event sent twice by an agent (a lost `2xx`, then a resend) is

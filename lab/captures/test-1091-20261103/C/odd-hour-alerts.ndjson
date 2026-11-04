@@ -1,0 +1,2 @@
+{"timestamp_ns":1793718932198100500,"technique":"T1078","message":"successful logon of account synthaea_t1091c from ::1 at 00:00 host-local time, outside the working hours"}
+{"timestamp_ns":1793718932198371100,"technique":"T1078","message":"successful logon of account Syst�me at 00:00 host-local time, outside the working hours"}
