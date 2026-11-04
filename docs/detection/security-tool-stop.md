@@ -105,6 +105,15 @@ gone by the time its event is drained.
   `WIRE_VERSION` change), userspace strips it and sets `SignalEvent::sender_unreliable` (inside
   schema 60, which this PR introduces: absent means false), and the alert adds that the sender is not
   reliable. For the three codes `current` really is a bystander when the kernel raised them.
+- *Ignored and already-pending signals are dropped in the kernel.* The tracepoint also fires for a
+  signal the target ignores or that is already queued; the probe reads its fifth argument
+  (`result`, `enum sig_result`) and drops `TRACE_SIGNAL_IGNORED` (1) and
+  `TRACE_SIGNAL_ALREADY_PENDING` (2). Review of #1114: `auditd` ignores `SIGPIPE`, and 20,000 of
+  them ahead of a `kill -9` filled the ring and lost the kill. `SIGKILL` and `SIGSTOP` can be
+  neither. A tool that blocks its reload signal for a `signalfd` (not in `SigCgt`) is covered too:
+  the repeats are already pending. **Not verified**: the eBPF crate was not built here (no
+  `bpf-linker`), only type-checked on the host, and the `SIGPIPE` storm re-run on a VM is for the
+  reviewer.
 - *Lost signals are an alert.* A full ring is counted per CPU (`SIGNAL_TOOL_DROPS`); when the
   count grows the sensor emits a `SignalEvent` with `signals_lost` set (no signal, no target:
   `signal` and `target_pid` are 0) and the rule `check_signal_events_lost` raises T1562.001
