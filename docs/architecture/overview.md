@@ -64,8 +64,8 @@ kernel ──► sensor ──► DetectionSink ──► engines (rules/sigma/c
 
 Store-and-forward with at-least-once delivery: the spool's two-phase
 drain/ack survives crashes and outages, sheds-oldest past its byte cap
-(counted), and skips a permanently-rejected poison segment rather than
-blocking newer data. A detection over the server's 8 MiB body limit is shortened to fit and sent, never dropped and
+(counted), and skips a poison segment (an empty or malformed one) rather than
+blocking newer data; an error about the whole agent keeps the record and backs off. A detection over the server's 8 MiB body limit is shortened to fit and sent, never dropped and
 never sent over the limit (the strings and arrays of its events are cut, the image hash, paths and
 pids are not, then events are dropped from the end, then the first is reduced to its identity; the
 title says by how much, in front, so the note survives a long title): a process that pads its own
