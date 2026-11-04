@@ -113,11 +113,13 @@ Provisional, and stated:
     the branch is known. A first attempt at the 8 h repeat (see below); run 3 supersedes it.
   - **Run 3, 2026-11-03**: agent built from `main` at `81cc6c52`. The 8 h repeat (see below).
 
-  **Where the evidence is**: the captures of run 1 and 2 (`alerts.ndjson`, `events.ndjson`, `agent.out`,
-  `logons.txt`, one directory per case, named `test-1090-20261102`) and the notes of run 3 (`issue-1090.md`,
-  "Update 2026-11-03") are kept in the author's lab notes. **They are not in this repository**, so the
-  results below can be checked against the code but not against data here. Whether `chronyd` was stopped in
-  runs 1 and 2 is not recorded; in run 3 it was.
+  **Where the evidence is**: `lab/captures/test-1090-20261102/` (runs 1 and 2, one directory per case:
+  `alerts.ndjson`, `logons.txt`, the agent configuration, `events-auth.ndjson` and the drivers) and
+  `lab/captures/test-1090c-20261103/` (run 3: the alerts, the step log and the driver); each has a README.
+  What is **not** in the repository: the raw `events.ndjson` and `agent.out` of each case (about 14 MB, the
+  whole host's event stream) and the notes of the runs (`issue-1090.md`) stay in the author's lab notes, and
+  the lab password is masked in the drivers. Whether `chronyd` was stopped in runs 1 and 2 is not recorded;
+  in run 3 it was.
 
   Verified:
   - **The Linux logon event** is `auth`, `kind: logon`, `outcome: success`, `target_user` = the account sshd

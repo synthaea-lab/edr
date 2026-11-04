@@ -1,0 +1,9 @@
+date: opérande supplémentaire « %T »
+Saisissez « date --help » pour plus d'informations.
+host start 2026-11-02 15:23:48 UTC; VM  UTC
+15:23:49 host: logon 1 edr-lab rc=0
+15:23:54 host: logon 2 edr-lab rc=0
+VM clock now 2026-11-03 00:23:58 UTC
+15:24:02 host: logon 3 edr-lab rc=0
+15:24:06 host: logon 4 edr-lab rc=0
+lun. 02 nov. 2026 16:24:15 CET
