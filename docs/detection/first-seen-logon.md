@@ -51,12 +51,12 @@ account logs on to a host after the window. The lab runs are recorded under "Lab
   - **The Windows logon event** is `auth`, `kind: logon`, `outcome: success`, `target_user` the bare account
     name (no domain, no machine), `target_user_sid`, `source_address` `::1`; each logon also produced an
     `explicit_credentials` event (4648), which the rule does not count.
-  - **Inside the window, nothing**: a logon at 16:10 local with no `[detection]` section raised nothing.
+  - **Inside the window, nothing**: a logon at 16:11 local with no `[detection]` section raised nothing.
   - **`utc_offset_minutes = 600`**: the first logon of a new account at 01:1x (as the rule saw it) raised
     ODD-HOUR-LOGON once (T1078, Low); a second logon of the same account about 5 s later did not repeat.
   - **The Windows time-zone conversion** (`GetDynamicTimeZoneInformation`, the part this page said was never
     run): with no `[detection]` section and the system zone set to `Tokyo Standard Time` with `tzutil`, a
-    logon at 00:16 local raised the alert at 00:00. The message prints the hour only (`{hour:02}:00`).
+    logon at 00:15 local raised the alert at 00:00. The message prints the hour only (`{hour:02}:00`).
   - **A defect found**: the same run alerted on the account `Système`, the local SYSTEM account (SID
     `S-1-5-18`) of a French Windows. The generic-account list holds English names only, and the name reaches
     the event with its `è` already replaced by U+FFFD, so no spelling of it can match. The SID is on the

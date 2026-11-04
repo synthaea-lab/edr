@@ -10,9 +10,9 @@ directory, `<machine>` for the machine part of the local SIDs.
 
 | Case | `[detection]` | Zone | Logons | Result |
 | --- | --- | --- | --- | --- |
-| `A` | none | `Romance Standard Time`, 16:10 local | 1 | no ODD-HOUR-LOGON (inside 07-20) |
+| `A` | none | `Romance Standard Time`, 16:11 local | 1 | no ODD-HOUR-LOGON (inside 07-20) |
 | `B` | `utc_offset_minutes = 600` | `Romance Standard Time`, 16:12 local (= 01:1x at +600) | 2, about 5 s apart | one alert, no repeat |
-| `C` | none | `Tokyo Standard Time` set with `tzutil`, 00:16 local | 1 | alert at 00:00 (the platform conversion) |
+| `C` | none | `Tokyo Standard Time` set with `tzutil`, 00:15 local | 1 | alert at 00:00 (the platform conversion) |
 
 In `C` a second alert is for the account `Syst`, U+FFFD, `me`: the local SYSTEM account, SID `S-1-5-18`, whose
 display name is `Système` on a French Windows. The name reaches the event with the `è` already replaced by
