@@ -114,3 +114,13 @@ PR bakes one in. sshd/`su` classification is built against the standard, documen
 log line formats but unverified against a real capture (no `sshd` on this dev box,
 `su` needs interactive auth this session can't provide) — lab validation is a
 follow-up, same discipline as #91.
+
+## File-open flags are masked
+
+`FileOpenEvent.flags` from the eBPF probe is the raw `flags` argument of `open`/`openat`.
+The kernel ignores unknown bits there, so a local user can set any of them, including the
+synthetic `schema::FLAG_*` bits other sensors use as detection signals. `normalize::file_open`
+therefore masks the probe's flags with `schema::VALID_OPEN_FLAGS` (`0x007F_FFFF`) and the
+event never carries a synthetic bit. Synthetic bits reach the rules only from userspace
+sensors that build their own event (journal: `FLAG_PERSISTENCE_SYSTEMD_ARTIFACT`,
+`FLAG_UNIT_STOPPED`). Rationale: #1129.
