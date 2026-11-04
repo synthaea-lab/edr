@@ -77,11 +77,11 @@ family, which would be a case-2 change if it lands).
 
 The synthetic bits are set only by userspace sensors that build their own `FileOpenEvent`
 (Windows event log, the Linux journal sensor, macOS endpoint-security). On Linux the probe's
-raw `open(2)` flags are masked with `schema::VALID_OPEN_FLAGS` (`0x007F_FFFF`) in
+raw `open(2)` flags are masked with `OPEN_FLAGS_MASK` (`0x007F_FFFF`) in
 `sensor-linux`'s `normalize::file_open`: the kernel silently ignores unknown flag bits on
 `open`/`openat`, so without the mask any local user could set a synthetic bit and raise
-persistence alerts (#1129). A compile-time assert keeps `VALID_OPEN_FLAGS` disjoint from
-`schema::SYNTHETIC_FLAGS`; a new synthetic flag must stay outside it.
+persistence alerts (#1129). A compile-time assert next to the mask keeps it disjoint from every synthetic flag; a new
+synthetic flag must stay outside it and be added to that list.
 
 ### Not the same contract as a sensor's own wire ABI
 
