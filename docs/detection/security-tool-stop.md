@@ -186,7 +186,7 @@ it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with th
   a rule that often cannot see the command.
 - **Signal attribution.** With `sender_unreliable` the `meta` of the event may be a bystander (`SI_TIMER`, `SI_MESGQ`, `SI_ASYNCIO`, or a forged code). Measured: for `SI_TIMER` the sender is a bystander (the idle task, `swapper/N`, or whatever ran when the interrupt fired); for `SI_MESGQ` it was the real sender in the run, so the marker is cautious there. `SI_ASYNCIO` was not run. A null `siginfo` (`SEND_SIG_NOINFO`) is attributed to the current task;
   other in-kernel callers that pass 0 to `send_sig` were not enumerated (a wrong sender is the
-  safe error). `SigCgt` is as old as the last scan.
+  safe error). `SigCgt` is as old as the last scan (at most 5 s): a process that drops its handler between two scans (a same-pid `exec`, for instance) has a lethal `SIGHUP`, `SIGUSR1`, `SIGUSR2` or real-time signal dropped in the kernel until the next scan. Not measured; read from the design (review of #1114).
 
 ## `systemctl kill`
 
