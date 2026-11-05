@@ -36,8 +36,10 @@ carry the name with a letter already lost), so a name list alone cannot recognis
 **`vagrant` is deliberately not generic**: the lab VMs are signed in to as `vagrant`, and a lab run
 could otherwise never show the rule or the join it feeds. The name list is the one of
 `server/lib/fleet-case.ts` (`GENERIC_IDENTITIES`), copied, not shared: keep them in step. The SID
-rule is in the agent only: the control plane's join reads the name, so it still sees a localized
-SYSTEM name as an identity (a follow-up, not done here).
+rule is on both sides: the control plane's join reads `target_user_sid` from the stored event
+(#1136), so a localized SYSTEM or `Administrateur` is not an identity there either. The two SID
+checks run the same table, `crates/rules/data/generic-sid-vectors.txt`, from the rules' unit tests
+and the server's `fleet-case` tests, so they cannot drift.
 
 ## What it makes live
 

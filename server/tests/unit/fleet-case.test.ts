@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   COMMON_HOST_FRACTION,
   FLEET_JOIN_WINDOW_MS,
   type FleetDetection,
   isCommonHash,
+  isGenericIdentity,
   joinDetections,
   joinKeys,
   MAX_AGENTS_PER_ENTITY,
@@ -123,6 +126,22 @@ describe("joinKeys", () => {
     "S-1-5-32-544",
   ])("a logon whose SID %s is not a generic account is still keyed by its user", (sid) => {
     expect(joinKeys("a1", { ...logon("Alice"), target_user_sid: sid }, T0)).toEqual([{ kind: "identity", key: "alice" }]);
+  });
+
+  it("the generic-SID vectors shared with the agent hold: the join and the rules agree on every SID", () => {
+    const file = path.resolve(__dirname, "../../../crates/rules/data/generic-sid-vectors.txt");
+    const rows = readFileSync(file, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        return tab < 0 ? [line, ""] : [line.slice(0, tab), line.slice(tab + 1)];
+      });
+    expect(rows.length).toBeGreaterThan(10);
+    for (const [verdict, sid] of rows) {
+      expect(["generic", "person"], `verdict of ${JSON.stringify(sid)}`).toContain(verdict);
+      expect(isGenericIdentity("alice", sid), JSON.stringify(sid)).toBe(verdict === "generic");
+    }
   });
 
   it.each(["alice", "CORP\\alice", "svc-backup", "dollar$sign"])(
