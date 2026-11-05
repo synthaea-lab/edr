@@ -49,3 +49,47 @@ in the rules.
 - Needs a VM to reproduce first, per the issue's "done when": the three kernel paths themselves, the
   exact open flags of `echo > memory.max` (the rule accepts `O_WRONLY`, `O_RDWR`, `O_TRUNC`), the
   cgroup path seen from the probe, whether `systemctl set-property` shows pid 1 as the writer.
+
+## Lab measurement (2026-11-05, Fedora 43, kernel 7.2.9)
+
+Run on the lab VM with an existing agent build (`agent-1127`, content of `edr-1103`, so **without** the
+#1138 rules), observe-only, a synthetic `osqueryd.service` (a copy of `sleep`). What the agent saw,
+from `events.ndjson` (capture kept outside git, `lab/captures/test-1138-20261105/`):
+
+- **No `file_open` for any `/sys/fs/cgroup/` path, from any process.** Not for `echo 400M >
+  memory.max` (sh), not for a python `open(memory.high, 'w')`, not for the `cgroup.freeze` write, not
+  for pid 1 on `systemctl set-property` or `freeze`. Zero events contain `/sys/fs/cgroup`; the only
+  `/sys` open is a directory open by pid 1. The control (`echo x > /tmp/ctl-1138` by sh) did produce
+  `file_open` with flags 577 (`O_WRONLY|O_CREAT|O_TRUNC`). So the cgroup-file rule (item 3) has no
+  producer, as designed, and 4a is confirmed necessary. The open flags of `echo > memory.max`
+  therefore remain **unmeasured** (the event never exists).
+- A `file_write` event does exist for those writes (`fd`, `bytes_requested`, no path): sh fd 1, 5
+  bytes for `400M\n`; python fd 3, 5 bytes. It cannot identify a cgroup file.
+- `systemctl set-property osqueryd MemoryMax=500M`: pid 1 (comm `systemd`, ppid 0) opened
+  `/etc/systemd/system.control/osqueryd.service.d/.#50-MemoryMax.conf...` (flags 524738) and
+  `/etc/systemd/system.control`. So pid 1 is the actor, and its drop-in write is visible, but as an
+  `/etc/` open, not a `/sys/` one. No `/sys/` open by pid 1. This is a possible extra signal
+  (a `50-Memory*.conf` or `50-Tasks*.conf` under `system.control/<tool>.service.d/`), not built.
+- **argv is the weak point of the exec rules**: the argv read failed (empty `argv`, empty `cmdline`)
+  for 5 of 8 `systemctl` execs and for 3 of 3 `prlimit` execs, including `freeze`, `thaw` and both
+  `prlimit --pid 1196` runs; `set-property` had its argv. Across the run most short-lived
+  execs had none (`cat` 44 of 47, `grep` 49 of 63, `find` 32 of 40). With an empty argv
+  `check_security_tool_throttle` cannot match, so on this agent build the two `systemctl` verbs
+  and `prlimit` were mostly **not seen by command line**. This is the race named in ADR-0045 (#1118);
+  whether the probe-side capture removes it for these execs is not measured here.
+- `exec` events also show `image_path` as `/usr/sbin/<name>` for `/usr/bin` tools (symlink resolved);
+  nothing in the rules compares on the directory.
+- **No unit-stop event and no signal event** for freeze, set-property, direct writes, `prlimit` or
+  the OOM kill. `signal` events seen are only `systemd-journal` signal 0 to the agent. `unit_stop`
+  (pid 1, comm `osqueryd.service`) appears only for the plain `systemctl stop`, which the existing
+  stop rule alerted on (T1562.001, "stopped the security tool osqueryd").
+- OOM kill: a unit `osqueryd-oom.service` (`MemoryMax=30M`, python hog) was killed by the kernel
+  (`Result: oom-kill`, journal `Memory cgroup out of memory: Killed process`). The agent saw the hog's
+  exec and nothing about its death: no signal, no unit_stop. The same unit `systemctl status` says
+  `signal=KILL`, but no `signal_generate` event exists for it.
+
+Not measured: the #1138 rules themselves on a VM (the agent build predates them); a real OOM or
+`RLIMIT_CPU` kill of the main process of the tool unit (the synthetic main process `sleep` uses no CPU,
+the OOM hit a sibling unit); `systemctl set-property --runtime` (`/run/systemd/system.control`); cgroup v1
+files; the probe change 4a and its verifier/volume cost; the `prlimit64` tracepoint. Disk 49 % used at
+start, clock fixed, one run, one VM not otherwise loaded.

@@ -81,7 +81,8 @@ minute is not maintenance.
 
 A process can make the kernel end or freeze a tool with no signal the `signal_generate` probe
 reports (`SEND_SIG_PRIV` signals are dropped, `cgroup.freeze` sends none). Traced in the kernel
-source (v6.12), **not reproduced on a VM**. What is covered, and what is not (ADR-0046):
+source (v6.12) and **measured once on a Fedora 43 VM (2026-11-05)**, see the list after the table.
+What is covered, and what is not (ADR-0046):
 
 | Path | Coverage | Where |
 | --- | --- | --- |
@@ -96,3 +97,18 @@ argv-based, hence bypassable (`echo` through a shell redirection has no argv at 
 the file rule exists) and blind when `argv` is empty (#1118). `systemctl freeze` and
 `set-property` reach the cgroup through pid 1, so the file rule skips pid 1 and the exec rule is
 the only one that sees them.
+
+Measured on the VM (agent build without these rules, observe-only, synthetic `osqueryd.service`):
+
+- No `file_open` reaches the agent for any `/sys/fs/cgroup/` path, for sh, python or pid 1: the file
+  rule has no producer until the probe change. A `file_write` event exists (fd and byte count, no
+  path), which does not identify the file. A write elsewhere (`/tmp`) did produce `file_open`.
+- `systemctl set-property` is written by pid 1, as an open of
+  `/etc/systemd/system.control/<unit>.d/50-<Property>.conf`, not a `/sys/` open.
+- argv was empty for 5 of 8 `systemctl` execs (`freeze`, `thaw`) and 3 of 3 `prlimit` execs, so the
+  exec rules are blind on this build for most short-lived calls (#1118).
+- No `signal` or `unit_stop` event for freeze, set-property, direct writes, `prlimit` or an OOM kill
+  (only a plain `systemctl stop` gives `unit_stop`).
+
+Not measured: the new rules on a VM, a real OOM or CPU-limit kill of a tool's main process,
+`--runtime`, cgroup v1, the probe change, the `prlimit64` tracepoint.
