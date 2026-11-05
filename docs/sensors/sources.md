@@ -142,7 +142,7 @@ gap.
 | **File activity** | ETW · Kernel-File | create/write (`NameCreate`+`CreateNewFile` join, F-6 partial), NT→drive-letter paths via real volume map (F-5) | ✅ used | T1105, dropper joins | #20 |
 | **File activity** | driver · minifilter | authoritative deletes/renames (sent to the agent: #857 kernel side, #853 user side; pid only, `comm`/parent/user empty), named pipes, ADS, raw-volume access (planned) | 🔨 built (rename and delete only) | T1486 (rename rule, #973) | #136 |
 | **Network** | ETW · Kernel-Network | TCP connects (IPv4+IPv6 first-class F-7, dedup window), UDP sends (EID 14) | ✅ used | T1071/T1041 BEACON, T1048 | #20/#97 |
-| **Network** | Win32 · GetExtendedTcpTable | listening-port snapshots (IPv4 + IPv6, 10s) + startup baseline — LISTENER-DRIFT parity with Linux/macOS; unprivileged, owner pid/ppid/name via Toolhelp32 | ✅ used | backdoor listeners | #366 |
+| **Network** | Win32 · GetExtendedTcpTable + GetExtendedUdpTable | listening-port snapshots (IPv4 + IPv6, 10s; UDP only below the ephemeral range, #676) + startup baseline — LISTENER-DRIFT parity with Linux/macOS; unprivileged, owner pid/ppid/name via Toolhelp32 | ✅ used | backdoor listeners | #366 |
 | **Network** | ETW · SMBClient | SMB connections established (EID 30704; failures dropped) | ✅ used | T1021.002 | #97 |
 | **Network** | driver · WFP | flows + inline block | 📋 planned | response primitive | #138 |
 | **DNS** | ETW · DNS-Client | query + answer + status joined to the process (EID 3008; 3006 dropped as noise) | ✅ used | T1071.004, IOC join | #21 |
