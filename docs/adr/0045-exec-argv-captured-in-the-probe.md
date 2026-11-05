@@ -102,7 +102,7 @@ its total length, and keep the `/proc` read as the fallback when the probe read 
   today, a shorter one for a long command line; nothing in them changes. Whether a feature should also read
   the flag is a question for the ML parity work, not decided here.
 - **Schema.** `argv_omitted_bytes` is a field of `ExecEvent`, so a `schema` change: additive and defaulted (an
-  old event has none), a new `SCHEMA_VERSION` after #1116 (v61), #1127 (v62) and #1114 (v63), golden fixtures, and the shared
+  old event has none), the next free `SCHEMA_VERSION` when it lands (each schema PR takes the number after `main`'s at merge time), golden fixtures, and the shared
   fixtures of `crates/ml` and `ml/` updated in the same change (CLAUDE.md). The other platforms fill it with
   what their sensor knows, and it is not "unchanged" for them. Windows does not take the command line from the
   ETW event: it reads it from the target's PEB after the fact (`read_process_cmdline`,
