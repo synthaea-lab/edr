@@ -93,3 +93,15 @@ Not measured: the #1138 rules themselves on a VM (the agent build predates them)
 the OOM hit a sibling unit); `systemctl set-property --runtime` (`/run/systemd/system.control`); cgroup v1
 files; the probe change 4a and its verifier/volume cost; the `prlimit64` tracepoint. Disk 49 % used at
 start, clock fixed, one run, one VM not otherwise loaded.
+
+## Decisions taken under delegation (2026-11-05)
+
+The owner left the open points to the session that built this change. What was decided, and why, so a reviewer can overrule it:
+
+| Point | Decision | Why | Not verified |
+| --- | --- | --- | --- |
+| Probe change (let write-intent `/sys/fs/cgroup/` opens through `is_filtered_path`) | **Not made here.** | The filter is inlined in 14 BPF programs; the verifier on 5.15 and the ring volume cannot be judged without a run on each kernel, and the lab run of 2026-11-05 shows the rule would still miss the `systemctl set-property` path (pid 1 writes an `/etc` drop-in, not a visible `/sys` file). A probe change with no measured benefit is the wrong first step. | Verifier on 5.15, ring volume, the open flags of `echo > memory.max`. |
+| `prlimit64` tracepoint | **Not made.** | It needs a new event or field, so a schema version; 60, 61 and 62 are claimed by #1114, #1116 and #1127, so it would be 63 or later and would conflict with all three until they merge. Without a tracepoint the only visible `prlimit` path is argv, which the run showed is empty for 3 of 3 execs. | Whether a tracepoint sees the target pid reliably. |
+| Low alert for `prlimit --pid`, no tool named | **Kept.** | It costs nothing, it is Low, and the doc states how it is bypassed (whole-match `--as`, clustered short options, direct `setrlimit`, empty argv). Removing it would remove the only trace of the attempt. | Its false-positive rate on a real fleet. |
+| Watching pid 1's write of `/etc/systemd/system.control/<unit>.d/*.conf` (seen in the run) | **Not built; recorded as the next step on #1138.** | It is a different detection shape (a write by the manager to a drop-in of a listed unit), and the run shows one file name pattern on one systemd version. It needs a second host (Rocky 9, systemd 252) before a rule keys on it. | Other systemd versions, `--runtime`, a unit with its own drop-in name. |
+| ADR number | **0046 kept**, renumber at merge. | 0044 is claimed by #1051 and 0045 by #1141; both are unmerged. | |
