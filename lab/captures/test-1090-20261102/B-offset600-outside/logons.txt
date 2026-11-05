@@ -1,0 +1,6 @@
+host start 2026-11-02 14:51:08 UTC
+14:51:09 UTC logon lab1090 rc=0
+14:51:13 UTC logon lab1090 rc=0
+14:51:18 UTC logon ubuntu rc=0
+14:51:22 UTC logon ec2-user rc=0
+lrwxrwxrwx. 1 root root 34 13 oct.  21:20 /etc/localtime -> ../usr/share/zoneinf
