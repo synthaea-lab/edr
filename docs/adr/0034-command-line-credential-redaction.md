@@ -53,7 +53,7 @@ variable values and secrets in files, stdin, PowerShell `-EncodedCommand`, shell
 expansions, aliases, caret escapes, and unknown tool-specific options are not
 decoded. Unknown positional values are kept except for documented `net` forms.
 Command text in `ReadlineInput`, `ScriptBlock`, `AmsiContent`, and `WmiActivity`
-is outside this ADR and needs a separate design. Best-effort matching may also
+follows its own rules, below. Best-effort matching may also
 redact benign values following a recognized secret option. The tool is chosen
 from the image's basename alone (no path, hash, or signature check); the
 recognized general wrappers (sudo/doas/nohup, env, timeout, nice, `cmd`, a shell
@@ -62,6 +62,55 @@ still matched, but a tool invoked under a name this module does not recognize
 (a renamed binary, an unlisted wrapper, an interpreter calling a library
 function instead of spawning a new process image) is not. This is a known gap
 of basename matching generally, not specific to any one shape (#843 review).
+
+## Command text outside `Exec` (#895)
+
+Four other events carry text a person or a script wrote: a typed shell line
+(`ReadlineInput.input`), a PowerShell script block (`ScriptBlock.text`), an AMSI buffer
+(`AmsiContent.text`), and a WQL query (`WmiActivity.query`). They follow the same
+boundary as `Exec`. Detection reads them raw: the live `RedactingSink` leaves them alone
+exactly as it leaves `Exec`. Every copy that leaves the process is redacted: `events.jsonl`,
+the event spool, detection evidence, and the capture commands. The schema does not change.
+
+`redact::redact_command_text(text, dialect)` cuts the text into statements at unquoted
+separators and grouping characters (newlines, `;`, `|`, `&`, parentheses, braces, and the
+POSIX backtick). It then redacts each statement as a command line of its own first word,
+so `cd x && mysql -pS3cret` and a `net use … S3cret` inside a script block are both read.
+Each field has its own dialect:
+
+| Field | Dialect | Also redacted |
+|---|---|---|
+| `ReadlineInput.input` | POSIX | secret-named `NAME=value` assignments before a command or after `export`/`declare`/`local`/`readonly`/`typeset` (`*_FILE` names kept) |
+| `ScriptBlock.text` | PowerShell | secret-named `-Parameter value` / `-Parameter:value`; the plain text given to `ConvertTo-SecureString`; quoted `$name = '…'` assignments to a secret-named variable (scope such as `env:` ignored); a leading `&` or `.` call operator is skipped so the program it calls is read |
+| `AmsiContent.text` | PowerShell when `app_name` starts with `PowerShell`, otherwise opaque | `content_name` loses URL credentials |
+| `WmiActivity.query` | opaque | — |
+
+Opaque text (VBScript, JScript, VBA, .NET, WQL) is not parsed. It only loses the shapes
+that do not depend on a tool: URL credentials, secret headers, and secret-named
+`--option=value` pairs. A PowerShell value computed at run time is kept, because it holds
+no literal and it tells an analyst where the secret came from: a variable (`$cred`), a
+subexpression (`(Read-Host)`), a splat (`@args`), or a type. `ScriptBlock.path`,
+`AmsiContent.app_name`, and the WMI `namespace`/`method` are names, not command text, and
+are kept.
+
+The AMSI rule quotes an excerpt of the raw buffer in its message. The agent swaps that
+excerpt for the excerpt of the redacted buffer (`rules::amsi_excerpt`) before the message
+reaches the alert log, the verdict, or the spool, as it already does for an `Exec` command
+line.
+
+A redacted value keeps its quote and escape characters, so a second pass cuts the text at
+the same places. On hostile quoting the statement cut and the command-line tokenizer can
+still disagree. `redact_command_text` therefore runs to a fixed point, at most sixteen
+passes. Text with no secret costs one pass.
+
+Limits, on top of the command-line ones above:
+- A script block that ETW splits into fragments is redacted per fragment, so a secret cut
+  across two fragments is not recognized.
+- A shell string inside a typed line (`bash -c "a; mysql -p…"`) is still read as one
+  command.
+- PowerShell here-strings, `-EncodedCommand`, string concatenation, and secrets held in
+  variables are not decoded.
+- AMSI text cut at the sensor's limit may end in the middle of a secret.
 
 ## Consequences
 

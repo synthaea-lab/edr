@@ -1,0 +1,45 @@
+title: Browser spawned a shell
+description: >
+  Detects a web browser directly starting a shell or AppleScript: a process-lineage
+  signal for a possible drive-by compromise (T1189), the Unix sibling of the Windows
+  browser rule. A browser's renderers are sandboxed and cannot exec, so a shell whose
+  parent is the browser image came from the browser process itself. It needs the parent
+  image (the Linux exec cache, #768, or the Endpoint Security exec event); without lineage
+  the rule does not match. It does not prove that a downloaded file ran: this Sigma subset
+  has no provenance join, and T1204.002 covers the quarantine-marked execution.
+  The rule lives in `linux/` because macOS hosts load that directory too, so it carries
+  the Linux image names (`chrome`, `chromium`, `firefox`, `msedge`, `brave`) and the
+  macOS bundle executables (`Google Chrome`, `Microsoft Edge`, `Brave Browser`, `Safari`).
+  A launcher script that starts the browser (`/usr/bin/google-chrome`) is the parent of
+  the browser, not its child, and does not match.
+tags:
+  - attack.initial_access
+  - attack.t1189
+  - attack.execution
+  - attack.t1059.004
+  - synthaea.coverage.initial_access_user_execution
+level: medium
+falsepositives:
+  - Browser automation, native messaging hosts and developer test harnesses can launch a
+    shell from the browser process.
+detection:
+  selection:
+    ParentImage|endswith:
+      - '/chrome'
+      - '/chromium'
+      - '/chromium-browser'
+      - '/firefox'
+      - '/firefox-bin'
+      - '/msedge'
+      - '/brave'
+      - '/google chrome'
+      - '/microsoft edge'
+      - '/brave browser'
+      - '/safari'
+    Image|endswith:
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/zsh'
+      - '/osascript'
+  condition: selection

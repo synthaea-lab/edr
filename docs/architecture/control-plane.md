@@ -63,7 +63,7 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `agent_version` | agent crate version |
 | `sensors[]` | one entry per heartbeat registered on the silence monitor: `name` (`linux-ebpf`, `windows-etw`, `windows-eventlog:<target>`, …), `pulse_count` (cumulative since start) and `silent` (past its deadline without a pulse). It's the same snapshot `cli health` shows. |
 | `spool_bytes` | event spool backlog awaiting upload; `0` with `--standalone` |
-| `spool_dropped` | cumulative records shed by the spool's byte cap |
+| `spool_dropped` | cumulative records shed by the spool: the byte cap, a skipped poison segment (an empty or malformed one), and a detection the server refused for good (`400 Invalid payload`, `409`, `413`, `422`), which is left out on its own while the rest of its segment is uploaded (#1119). A detection over the 8 MiB body limit is shortened until it fits and sent, so it is not in this count; a `413` from a server whose limit is smaller than the agent's mirror of it is counted like any refusal. The counter does not say which kind of loss it is, and the server counts only some of the refusals: its ingest counters (`refusedOutcome` in `app/api/ingest/detection/route.ts`) take `400 Invalid payload` and `409`, while a `413` from nginx, which answers before the route runs, is counted nowhere but in the agent. The agent's own log line with the detection's key is the trace of a refused detection, and a `warn` with the key and the original size is the trace of a shortened one (the stored title carries the note on the server side). A separate counter in the heartbeat is not built. |
 | `enrich_dropped` | cumulative events shed by the enrichment queue (backpressure) |
 | `rarity_applied` | cumulative executed images the fleet's common set called rare whose evidence reached a process belief (ADR-0020). Zero if the agent predates the field. |
 | `rarity_withheld` | cumulative executions the rarity evidence could not judge: no snapshot, a snapshot covering too few hosts, or no usable hash. A high count with no applied one says why rarity is silent. Zero if the agent predates the field. |
@@ -222,13 +222,16 @@ unparseable body is retried, other `4xx` count toward skipping the segment
 
 ### Server behavior today (interim)
 
-- **Events are counted into fleet prevalence and not retained.** Each event's hash,
-  image path, parent-to-child transition and DNS domain go into
+- **Events are counted into fleet prevalence, and kept only if the lake is on.** Each
+  event's hash, image path, parent-to-child transition and DNS domain go into
   `PrevalenceSighting` (issue #76), aggregated per batch into one multi-row upsert.
-  Raw telemetry belongs in the lake (`server/datalake`), which does not exist yet,
-  so **an accepted event is gone once its observations are counted**, and the agent
-  has already deleted its copy. Building the lake, and deciding whether to keep
-  events somewhere in the meantime, is open work.
+  With `LAKE_DIR` unset (the default) **an accepted event is gone once its
+  observations are counted**, and the agent has already deleted its copy. With
+  `LAKE_DIR` set, the batch is also queued in Postgres (`lake_batches`) before the
+  counters run, and a queue failure answers `500` so the agent keeps its segment; the
+  `write-lake` cron then writes the queue as Parquet under `LAKE_DIR` (issue #77,
+  ADR-0041, `server/datalake/README.md`). The agent's `2xx` then means "durably
+  queued", not "in the lake".
 - The event's own `meta.timestamp_ns` dates the sighting, so a spool flushed after
   an outage does not look new. A missing, non-positive or more-than-a-day-ahead
   timestamp becomes the server's `now`, so an enrolled agent with a bad clock
@@ -271,9 +274,12 @@ let them link hosts on demand. The generic accounts are compared by their bare n
 `NETWORK SERVICE`) are not identities, nor are the default logins of a cloud or distribution image
 (`ubuntu`, `ec2-user`, `debian`, `fedora`, `centos`, `rocky`, `cloud-user`, `azureuser`, `admin`),
 which every host built from the image has. `vagrant` is left off that list on purpose: the lab VMs
-are signed in to as `vagrant`, and a lab run could not otherwise show the join.
+are signed in to as `vagrant`, and a lab run could not otherwise show the join. A Windows logon
+that carries `target_user_sid` is also generic by that SID, whatever its localized name
+(`AUTORITE NT\Système`, `Administrateur`): `S-1-5-7`, `S-1-5-18` to `S-1-5-20`, and the built-in
+Administrator `S-1-5-21-…-500`, as the logon rules.
 
-**The successful-logon half has one source: FIRST-SEEN-LOGON (T1078, #376).** The join reads
+**The successful-logon half has two sources: FIRST-SEEN-LOGON and ODD-HOUR-LOGON (T1078, #376).** The join reads
 `detection.event`, and a detection stores the event that fired a rule. Before that rule no rule
 on `main` fired on a successful logon (`RuleState::on_auth` returned nothing for `AuthKind::Logon`,
 it returned early for a Windows logon, and no Sigma rule matches `auth` events), so a detection
@@ -283,7 +289,7 @@ account after a 24-hour learning window, Low, generic accounts excluded with the
 with this one (`vagrant` still not generic). It alerts at most once per account, so the join sees
 an identity only the first time that account logs on to a host after the window. The Windows
 `session` events of the RDP rule (T1563.002) are the other identity source that already reaches a
-detection. **Not proven in a lab run**; the rule is covered by unit tests only.
+detection. ODD-HOUR-LOGON (Low, a logon outside 07:00 to 20:00 host-local by default, or outside the operator's `[detection] work_hours`, with an optional exempt-account list, once per account per 8 hours, host-local time from the platform time zone, overridable by `[detection] utc_offset_minutes`, off when no zone is found) is the second source and follows the same gate and generic-account list. **Verified on a Linux lab VM** (#1090) and on a Windows host (#1091), see `docs/detection/first-seen-logon.md`; macOS not yet, and the rules are also covered by unit tests.
 The 24 hours, the 20 agents and the seven days are starting points, not measured figures. Not
 built: a console view or an API route for fleet cases, the other entities of #62 (lateral
 source/destination pairs, software inventory, network neighbours), and any posture trigger.

@@ -1,0 +1,2 @@
+{"type":"auth","meta":{"pid":12592,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793584826828914000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"edr-lab","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":12647,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793584835094486000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"lab1090","source_address":"192.168.100.1"}
