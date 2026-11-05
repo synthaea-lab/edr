@@ -128,7 +128,7 @@ gap.
 | Source | Mechanism | Cost & privilege (as observed) |
 | --- | --- | --- |
 | **ETW** | one kernel-provider session, nine manifest-based providers | Administrator. Session name randomized per start, persisted for orphan cleanup, silence watchdog turns a stopped trace into a loud error (F-2) |
-| **WEL** (Windows Event Log) | channel polling via `wevtutil` (2s) | Administrator for the Security channel. Lab-earned (ADR-0004): 7045's classic provider defeats TDH schema resolution, and the Security channel never delivered to an ad-hoc raw-ETW subscriber — `EvtSubscribe` is the evaluated successor. Per-channel allowlist + volume counters (ADR-0006) |
+| **WEL** (Windows Event Log) | channel polling via `EvtQuery` (2s; `wevtutil` before #1126, which lost non-ANSI names) | Administrator for the Security channel. Lab-earned (ADR-0004): 7045's classic provider defeats TDH schema resolution, and the Security channel never delivered to an ad-hoc raw-ETW subscriber — `EvtSubscribe` is the evaluated successor. Per-channel allowlist + volume counters (ADR-0006) |
 | **driver tier** | kernel callbacks, minifilter, WFP, Threat-Intelligence ETW | Signed driver, its own distribution tier; TI-ETW additionally needs PPL. All planned (#39) |
 | **Win32 APIs** | table snapshots (`GetExtendedTcpTable`), WMI/CIM queries | Unprivileged; snapshot cadence |
 | **device-control** | PnP/device-interface notifications | Planned (#84, cross-platform crate) |
