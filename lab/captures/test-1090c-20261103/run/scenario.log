@@ -1,0 +1,7 @@
+2026-11-03T13:21:23.362870Z  INFO agent::commands::common: detection: platform time zone in use, odd-hour logon rule on
+STEP 2026-11-04 21:00:00 (CET) first odd-hour logon of ob_q: alert expected
+STEP 21:00:04 second logon 4 s later: silent expected
+STEP 2026-11-05 04:30:00 (CET) 7 h 30 after the first alert: silent expected (quiet period 8 h)
+STEP 2026-11-05 05:30:00 (CET) 8 h 30 after the first alert: alert expected
+STEP 2026-11-05 06:00:00 (CET) 30 min after the second alert: silent expected
+STEP 2026-11-06 03:00:00 (CET) 21 h later: alert expected

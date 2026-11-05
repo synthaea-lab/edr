@@ -1,0 +1,39 @@
+{"timestamp_ns":1793633028331617943,"technique":"T1059/T1071","message":"pid=1103: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633028341868100,"technique":"T1059/T1071","message":"pid=1105: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633028404426749,"technique":"BAYES","message":"pid=1103 comm=sshd-session: high Bayesian score (log_odds=2.14, P=89%)"}
+{"timestamp_ns":1793633028404440430,"technique":"RESPONSE-ESCALATE","message":"escalated 853:sshd-session at Critical severity across 1 source(s): T1059/T1071, BAYES"}
+{"timestamp_ns":1793633028404451712,"technique":"RESPONSE-KILL","message":"pid 1103 would have been killed on a high-confidence correlated verdict (observe-only)"}
+{"timestamp_ns":1793633028453079415,"technique":"T1003.008","message":"pid=734 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793633028456593543,"technique":"T1003.008","message":"pid=728 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793633028571356251,"technique":"T1078","message":"successful logon of account edr-lab from 192.168.100.1 at 01:00 host-local time, outside the working hours"}
+{"timestamp_ns":1793633028571752382,"technique":"T1543.002","message":"unit=session-6.scope pid=1: systemd service first seen starting — unit: session-6.scope"}
+{"timestamp_ns":1793633028664414906,"technique":"T1059/T1071","message":"pid=1133: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633028672831821,"technique":"T1059/T1071","message":"pid=1134: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633028806426256,"technique":"T1003.008","message":"pid=729 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793633028822118649,"technique":"T1543.002","message":"unit=session-7.scope pid=1: systemd service first seen starting — unit: session-7.scope"}
+{"timestamp_ns":1793633033001252910,"technique":"T1059/T1071","message":"ppid=853 comm=sshd-session: 3 spawns + network connection — automatic respawn with suspected beaconing"}
+{"timestamp_ns":1793633033022351664,"technique":"T1059/T1071","message":"pid=1162: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633033022404417,"technique":"T1071/T1041","message":"pid=1162 comm=sshd-session → :::22 | 3x in 60s — suspected beaconing"}
+{"timestamp_ns":1793633033022415095,"technique":"RESPONSE-ESCALATE","message":"escalated 853:sshd-session at Critical severity across 2 source(s): T1059/T1071, BAYES, T1071/T1041"}
+{"timestamp_ns":1793633033022664337,"technique":"T1071/T1041","message":"pid=1162 comm=sshd-session → 0.0.0.0:22 | 3x in 60s — suspected beaconing"}
+{"timestamp_ns":1793633033038648705,"technique":"T1059/T1071","message":"pid=1163: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633033038689281,"technique":"T1071/T1041","message":"pid=1163 comm=sshd-auth → :::22 | 3x in 60s — suspected beaconing"}
+{"timestamp_ns":1793633033038699557,"technique":"RESPONSE-ESCALATE","message":"escalated 1162:sshd-auth at High severity across 2 source(s): T1059/T1071, T1071/T1041"}
+{"timestamp_ns":1793633033038895747,"technique":"T1071/T1041","message":"pid=1163 comm=sshd-auth → 0.0.0.0:22 | 3x in 60s — suspected beaconing"}
+{"timestamp_ns":1793633033508754633,"technique":"T1543.002","message":"unit=session-8.scope pid=1: systemd service first seen starting — unit: session-8.scope"}
+{"timestamp_ns":1793633037930713029,"technique":"T1059/T1071","message":"ppid=853 comm=sshd-session: 3 spawns + network connection — automatic respawn with suspected beaconing"}
+{"timestamp_ns":1793633037961812571,"technique":"T1059/T1071","message":"pid=1195: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633037967962939,"technique":"T1059/T1071","message":"pid=1196: spawn + network connection in the same time window"}
+{"timestamp_ns":1793633037969542878,"technique":"BAYES","message":"pid=1196 comm=sshd-auth: high Bayesian score (log_odds=2.84, P=94%)"}
+{"timestamp_ns":1793633037969572155,"technique":"RESPONSE-ESCALATE","message":"escalated 1195:sshd-auth at Critical severity across 1 source(s): T1059/T1071, BAYES"}
+{"timestamp_ns":1793633037969582833,"technique":"RESPONSE-KILL","message":"pid 1196 would have been killed on a high-confidence correlated verdict (observe-only)"}
+{"timestamp_ns":1793633038268207897,"technique":"T1543.002","message":"unit=session-9.scope pid=1: systemd service first seen starting — unit: session-9.scope"}
+{"timestamp_ns":1793665441329350465,"technique":"T1059/T1071","message":"ppid=853 comm=sshd-session: 5 spawns + network connection — automatic respawn with suspected beaconing"}
+{"timestamp_ns":1793665441340251589,"technique":"T1059/T1071","message":"pid=1230: spawn + network connection in the same time window"}
+{"timestamp_ns":1793665441355956735,"technique":"T1059/T1071","message":"pid=1231: spawn + network connection in the same time window"}
+{"timestamp_ns":1793665441612544801,"technique":"T1543.002","message":"unit=session-10.scope pid=1: systemd service first seen starting — unit: session-10.scope"}
+{"timestamp_ns":1793665446009635733,"technique":"T1543.002","message":"unit=session-11.scope pid=1: systemd service first seen starting — unit: session-11.scope"}
+{"timestamp_ns":1793665455189948167,"technique":"T1543.002","message":"unit=session-12.scope pid=1: systemd service first seen starting — unit: session-12.scope"}
+{"timestamp_ns":1793665455246775385,"technique":"T1562","message":"agent received signal 15 (SIGTERM) from pid 1321 (`pkill`) — recording before exit"}
+{"timestamp_ns":1793665455246805546,"technique":"T1562.001","message":"pid=1321 comm=pkill uid=0: sent SIGTERM (15) to security process pid=1072 (/home/edr-lab/edr-1103/target/release/agent)"}
+{"timestamp_ns":1793665455246819277,"technique":"RESPONSE-ESCALATE","message":"escalated 1317:pkill at High severity across 1 source(s): T1562.001"}

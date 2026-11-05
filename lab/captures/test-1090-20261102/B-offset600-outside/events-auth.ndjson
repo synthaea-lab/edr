@@ -1,0 +1,5 @@
+{"type":"auth","meta":{"pid":11425,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793631059736557000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"edr-lab","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":11479,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793631067976219000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"lab1090","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":11521,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793631072399224000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"lab1090","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":11551,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793631076668410000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"ubuntu","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":11593,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793631081091551000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"ec2-user","source_address":"192.168.100.1"}

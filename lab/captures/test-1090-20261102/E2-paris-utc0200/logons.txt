@@ -1,0 +1,3 @@
+host start 2026-11-02 14:53:22 UTC
+14:53:22 UTC logon lab1090 rc=0
+lrwxrwxrwx. 1 root root 34 13 oct.  21:20 /etc/localtime -> ../usr/share/zoneinf
