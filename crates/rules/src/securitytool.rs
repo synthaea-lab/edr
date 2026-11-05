@@ -8,9 +8,13 @@
 //! falco` is what an intruder does to blind the host before acting, and it is below the
 //! burst's threshold by design.
 
-use schema::{ExecEvent, SECURITY_SERVICES, detection::Severity};
+use schema::{ExecEvent, FileOpenEvent, SECURITY_SERVICES, detection::Severity};
 
-use crate::{Alert, servicestop::services_stopped};
+use crate::{
+    Alert,
+    recon::{args, program},
+    servicestop::services_stopped,
+};
 
 /// launchd label prefixes of macOS security tooling: a vendor's namespace, so any daemon
 /// stopped under it is that vendor's tool. Same caveat on the names as [`SECURITY_SERVICES`]
@@ -57,6 +61,146 @@ pub(crate) fn check_security_tool_stop(event: &ExecEvent) -> Option<Alert> {
             event.meta.pid,
             event.meta.comm,
             crate::recon::program(event),
+        ),
+    })
+}
+
+/// `systemctl set-property` keys that make the kernel end or starve a unit's cgroup: the
+/// memcg OOM kill (`MemoryMax`), reclaim pressure (`MemoryHigh`) and a fork limit (`TasksMax`).
+/// Lowercase, as [`args`] gives them. `CPUQuota` throttles without ending anything and is left
+/// out on purpose.
+const LIMIT_PROPERTIES: &[&str] = &["memorymax", "memoryhigh", "tasksmax"];
+
+/// What a `systemctl` exec does to a unit's cgroup besides stopping it, and the unit: `freeze`
+/// (the cgroup freezer, the effect of a `SIGSTOP` without the signal) or `set-property` of one
+/// of [`LIMIT_PROPERTIES`] (not `infinity` or empty, which lifts a limit). Lowercase unit name,
+/// without `.service`.
+fn cgroup_squeeze(args: &[String]) -> Option<(&'static str, String)> {
+    let mut positional = args.iter().filter(|a| !a.starts_with('-'));
+    let verb = positional.next()?;
+    match verb.as_str() {
+        "freeze" => positional.next().map(|u| ("freeze", unit_base(u))),
+        "set-property" => {
+            let rest: Vec<&String> = positional.collect();
+            let limits = rest.iter().any(|a| {
+                a.split_once('=').is_some_and(|(key, value)| {
+                    LIMIT_PROPERTIES.contains(&key) && !value.is_empty() && value != "infinity"
+                })
+            });
+            let unit = rest.iter().find(|a| !a.contains('='))?;
+            limits.then(|| ("set-property limit", unit_base(unit)))
+        }
+        _ => None,
+    }
+}
+
+fn unit_base(unit: &str) -> String {
+    unit.strip_suffix(".service").unwrap_or(unit).to_owned()
+}
+
+/// T1562.001 — a command that makes the kernel stop or freeze a listed security tool without a
+/// signal the probe can attribute (#1138): `systemctl freeze <tool>` (the cgroup freezer) and
+/// `systemctl set-property <tool> MemoryMax=...|MemoryHigh=...|TasksMax=...` (a limit the memcg
+/// OOM killer then enforces with a `SEND_SIG_PRIV` `SIGKILL`, which the `signal_generate` probe
+/// drops). Medium, like the stop verbs, and for the same reasons: it reads the command, an
+/// administrator can do the same, and an empty `argv` (#1118) blinds it.
+///
+/// `prlimit --pid <pid> --cpu=...` (or `--as=...`) is the third path. The target is a pid and
+/// the exec says nothing of what runs there, so the alert is Low and names no tool: a
+/// `RLIMIT_CPU` set on another process is rare enough to be worth a line, not a verdict. The
+/// resolved form needs the `prlimit64` syscall and a pid-to-tool map (ADR-0046).
+#[must_use]
+pub(crate) fn check_security_tool_throttle(event: &ExecEvent) -> Option<Alert> {
+    let args = args(event);
+    match program(event).as_str() {
+        "systemctl" => {
+            let (how, tool) = cgroup_squeeze(&args).filter(|(_, tool)| is_security_tool(tool))?;
+            Some(Alert {
+                technique: "T1562.001",
+                severity: Severity::Medium,
+                message: format!(
+                    "pid={} comm={}: the kernel is made to stop or freeze the security tool {tool} ({how})",
+                    event.meta.pid, event.meta.comm,
+                ),
+            })
+        }
+        "prlimit" if prlimit_sets_cpu_or_as_on_a_pid(&args) => Some(Alert {
+            technique: "T1562.001",
+            severity: Severity::Low,
+            message: format!(
+                "pid={} comm={}: prlimit sets RLIMIT_CPU or RLIMIT_AS on another pid (target not resolved to a tool)",
+                event.meta.pid, event.meta.comm,
+            ),
+        }),
+        _ => None,
+    }
+}
+
+/// `prlimit --pid N --cpu=1:1`: a pid is named and a CPU or address-space limit is **set**
+/// (`--cpu` alone only prints it). Long options may be abbreviated to a unique prefix
+/// (`--cp=`), the short forms attach their value (`-t1:1`). Not exhaustive: `--as` is matched
+/// whole, and an option clustered with another short one (`-tp`) is not read. That is the
+/// argv-reading limit of ADR-0006.
+fn prlimit_sets_cpu_or_as_on_a_pid(args: &[String]) -> bool {
+    let names_pid = args.iter().any(|a| {
+        a == "--pid" || a.starts_with("--pid=") || (a.starts_with("-p") && !a.starts_with("--"))
+    });
+    let sets = args.iter().any(|a| {
+        if let Some(long) = a.strip_prefix("--") {
+            long.split_once('=').is_some_and(|(name, value)| {
+                !value.is_empty() && (name == "as" || (name.len() >= 2 && "cpu".starts_with(name)))
+            })
+        } else {
+            ["-t", "-v"].iter().any(|short| {
+                a.strip_prefix(short)
+                    .is_some_and(|value| !value.trim_start_matches('=').is_empty())
+            })
+        }
+    });
+    names_pid && sets
+}
+
+/// The cgroup control files whose write ends, freezes or starves a unit: cgroup v2 and the v1
+/// controllers' equivalents.
+const THROTTLE_FILES: &[&str] = &[
+    "memory.max",
+    "memory.high",
+    "cgroup.freeze",
+    "pids.max",
+    "memory.limit_in_bytes",
+    "memory.soft_limit_in_bytes",
+    "freezer.state",
+];
+
+/// Open flags that make an open a write: `O_ACCMODE` (`O_WRONLY`, `O_RDWR`) or `O_TRUNC`.
+const OPEN_WRITE_INTENT: u32 = 0o3 | 0o1000;
+
+/// T1562.001 — a write-intent open of `memory.max`, `memory.high`, `cgroup.freeze` or `pids.max`
+/// (or the cgroup v1 equivalents) in the cgroup of a listed unit: `echo 1M >
+/// /sys/fs/cgroup/system.slice/auditd.service/memory.max`. The kernel then OOM-kills or freezes
+/// the tool with no signal the probe reports (#1138).
+///
+/// **The Linux probe does not deliver this event yet**: `is_filtered_path` drops `/sys/`
+/// unconditionally, so the rule is the contract of the probe change in ADR-0046 and fires for
+/// any source that reports such an open. Pid 1 is skipped: the manager writes these files when
+/// it starts a unit that has a configured limit, and when it carries out `systemctl
+/// set-property` and `freeze`, which `check_security_tool_throttle` reads from the exec.
+/// Medium.
+#[must_use]
+pub(crate) fn check_security_tool_cgroup_write(event: &FileOpenEvent) -> Option<Alert> {
+    if event.flags & OPEN_WRITE_INTENT == 0 || event.meta.pid == 1 {
+        return None;
+    }
+    let rest = event.path.strip_prefix("/sys/fs/cgroup/")?;
+    let mut segments = rest.rsplit('/');
+    let file = segments.next()?;
+    let unit = segments.next()?.strip_suffix(".service")?;
+    (THROTTLE_FILES.contains(&file) && SECURITY_SERVICES.contains(&unit)).then(|| Alert {
+        technique: "T1562.001",
+        severity: Severity::Medium,
+        message: format!(
+            "pid={} comm={}: write to {file} of the security tool {unit}: {}",
+            event.meta.pid, event.meta.comm, event.path,
         ),
     })
 }
