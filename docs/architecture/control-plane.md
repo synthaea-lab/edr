@@ -205,6 +205,14 @@ agent retry the same segment until it gives up and discards the good ones too.
 nginx allows 8 MiB on the ingest locations (its default 1 MiB is below a full
 batch of large events).
 
+The agent keeps its bodies under the 4 MiB limit itself (#1131): the batch is split by
+bytes as well as by count, and an event over 1 MiB (a process can pad its own argv to
+megabytes) is shortened before sending, not dropped. Strings and arrays are cut
+progressively; the identifying fields (`type`, `meta`, hashes, paths, `comm`, user) are
+never cut, and the host logs the original size. The limit is a mirror of `MAX_BODY_BYTES`
+in the route (`transport::event_limit`): change both together. Not covered: a server
+limit lower than the mirror still skips the segment on `413`.
+
 ### Response
 
 | Status | When | Body |
