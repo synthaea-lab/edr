@@ -122,5 +122,5 @@ The kernel ignores unknown bits there, so a local user can set any of them, incl
 synthetic `schema::FLAG_*` bits other sensors use as detection signals. `normalize::file_open`
 therefore masks the probe's flags with `OPEN_FLAGS_MASK` (`0x007F_FFFF`) and the
 event never carries a synthetic bit. Synthetic bits reach the rules only from userspace
-sensors that build their own event (journal: `FLAG_PERSISTENCE_SYSTEMD_ARTIFACT`,
-`FLAG_UNIT_STOPPED`). Rationale: #1129.
+sensors that build their own event (journal: `FLAG_PERSISTENCE_SYSTEMD_ARTIFACT`). A unit
+stop is no flag at all: the journal sensor builds an `Event::UnitStop` (#1085). Rationale: #1129.
