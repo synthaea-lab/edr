@@ -221,7 +221,7 @@ it, a python process with a `SIGUSR2` handler); a kernel older than 5.14 with th
   same effect as the `SIGSTOP` this rule grades High). Traced in the kernel source (v6.12,
   `kernel/time/posix-cpu-timers.c`, `mm/oom_kill.c`), not run on a VM. Candidate detections, not
   done here: `prlimit64` with `RLIMIT_CPU` or `RLIMIT_AS` on a watched tgid, and a write to
-  `memory.max`, `memory.high`, `cgroup.freeze` or `pids.max` under a listed unit's cgroup. Follow-up issue to open.
+  `memory.max`, `memory.high`, `cgroup.freeze` or `pids.max` under a listed unit's cgroup. Follow-up: #1138.
 - **Dependency on #1118.** That exec rule reads `argv`, which is empty for most short-lived
   commands (issue #1118, ADR-0045 in PR #1123): until it is fixed the manager-sent stop depends on
   a rule that often cannot see the command.
