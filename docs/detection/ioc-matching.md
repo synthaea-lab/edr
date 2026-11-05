@@ -65,9 +65,8 @@ came from, `unversioned` without one. Feed ids follow the sorted file names, so 
 the same files agree on which feed wins an overlap. Names and versions are trimmed, stripped of
 control characters and cut at 64 characters, because they travel in every detection.
 Delivery is a signed content release carrying `ioc/<feed>.txt` entries of type `ioc` (ADR-0038,
-"Delivery"); the agent needs nothing new for it. **Nothing builds and publishes such a release yet**, and
-signing it in production waits on the production keys (#753): a feed reaches a host through a release an
-operator signs by hand (test key in the lab), or is a file somebody put there.
+"Delivery"); the agent needs nothing new for it. The server stages a feed for such a release (see below);
+signing it in production waits on the production keys (#753), so until then a feed is a file somebody put there.
 
 Verified in the lab on 2026-10-29 (Fedora 43, kernel 7.2.9, agent built from `main` `609cd1d8`, control
 plane run from the same tree, **public test key only**): release 1 of ring `prod` with `ioc/lab-feed.txt`
@@ -168,6 +167,49 @@ normalisation, device rules and public-suffix gate, and gives the same bytes (an
   starts with `#` is therefore skipped too: address the columns by index with `hasHeader: false`.
 - A quote in the middle of an unquoted field is kept as text (lenient on input; the output is always
   normalised).
+
+### A STIX 2.1 source (`server/lib/ioc-stix.ts`)
+
+`buildFeedFromStix({ feed, json, now, isPublicSuffix })` reads a STIX bundle (or a TAXII envelope: an object
+with an `objects` array) and passes its indicators to the same builder core, so the normalisation, device
+rules and public-suffix gate are the same and the same indicators give the same bytes as a plain feed.
+
+- **Patterns.** The engine matches one value per line, so an `indicator` is taken only when its pattern is a
+  single `=` comparison on `file:hashes.'SHA-256'`, `ipv4-addr:value`, `ipv6-addr:value` or
+  `domain-name:value`. `AND`, `OR`, `FOLLOWEDBY`, `IN`, `LIKE`, `MATCHES`, a qualifier (`WITHIN`, `REPEATS`),
+  `!=`, another property (`file:name`, `MD5`), a CIDR range and a `pattern_type` other than `stix` are
+  `unsupported_pattern`: never read in part, because half of an `OR` is an indicator the feed did not claim.
+- **Lifetime** is judged at build time against `now`: `revoked: true` is `revoked`, `valid_until` at or before
+  `now` is `expired`, `valid_from` after `now` is `not_yet_valid`, an unreadable timestamp or a missing pattern
+  is `bad_stix`. **The device has no expiry**: the file is a snapshot, so an indicator that expires after the
+  build stays loaded until a later release replaces the file. Rebuild and re-release on a schedule shorter than
+  the shortest `valid_until` you care about; nothing does that automatically yet.
+- Objects that are not indicators (malware, relationships, ...) are ignored and not counted. A rejection
+  carries the object's 1-based position in `objects` in place of a line number.
+- Not a bundle (not JSON, no `objects`, another `type`) throws, as a wrong CSV column does. `POST
+  /api/content/ioc-feed` takes it as `{ "format": "stix", "json": "<the bundle>" }`.
+- Not done: fetching a bundle from a TAXII server, STIX `x-` extensions, `indicator` objects that name a
+  confidence (the device carries none).
+
+### A MISP source (`server/lib/ioc-misp.ts`)
+
+`buildFeedFromMisp({ feed, json, isPublicSuffix })` reads a MISP export (the JSON of `/events/restSearch`,
+`{"Event": ...}` or a bare event) and passes its attributes, from `Event.Attribute` and from `Event.Object`,
+to the same builder core: same normalisation, device rules and public-suffix gate, same bytes for the same
+indicators.
+
+- **Types taken:** `sha256`, `ip-src`, `ip-dst`, `domain`, `hostname`. Everything else (`md5`, `sha1`, `url`,
+  `email-*`, and every composite such as `ip-src|port`, `filename|sha256`, `domain|ip`) is `unknown_kind`. A
+  composite is never split: half of `domain|ip` is not the indicator the feed claimed.
+- **`to_ids` must be true** (`true`, `1` or `"1"`). It is MISP's flag for "a detection indicator"; an
+  attribute without it is context (a victim's address, a sample's name), and publishing it would raise findings
+  on it. Refused as `not_for_detection`. A `deleted` attribute is `deleted`.
+- **No expiry here.** A MISP attribute has no `valid_until`; decay is a score MISP computes. Filter on the
+  MISP side (`last`, `publish_timestamp`, a decaying model) before exporting. The device has no expiry either.
+- A rejection carries the attribute's 1-based position in the order read (an event's attributes, then its
+  objects') in place of a line number. A malformed attribute is `bad_misp`; text that holds no event throws.
+  `POST /api/content/ioc-feed` takes it as `{ "format": "misp", "json": "<the export>" }`.
+- Not done: fetching from a MISP instance (API key handling), tags and galaxies, attribute `comment`.
 
 ### Publishing (`ioc` content type)
 

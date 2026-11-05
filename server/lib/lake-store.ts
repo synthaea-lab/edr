@@ -44,11 +44,15 @@ export interface LakeReader {
   /**
    * The files under `prefix` in key order. With `limit`, at most that many, the first ones: the
    * store stops listing there instead of materialising the whole prefix (an S3 reader asks for
-   * `MaxKeys`). Without it, every file.
+   * `MaxKeys`). Without it, every file. With `signal`, a store that goes over the network abandons
+   * the request when it is aborted. Contract: once `signal` is aborted, a rejection is always the
+   * signal's reason, never the store's own error (the S3 SDK and `readFile` reject with an `AbortError`
+   * whose `cause` is the reason), so a caller can tell a deadline (`TimeoutError`) from a failure. A
+   * directory checks the signal before it starts and again if a read fails.
    */
-  list(prefix: string, opts?: { limit?: number }): Promise<{ key: string; size: number }[]>;
-  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. */
-  get(key: string): Promise<Uint8Array>;
+  list(prefix: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<{ key: string; size: number }[]>;
+  /** The bytes at `key`. Throws for a key that is not safe, or that is not there. Honors `signal` and its rejection contract as {@link LakeReader.list} does. */
+  get(key: string, opts?: { signal?: AbortSignal }): Promise<Uint8Array>;
 }
 
 export type DeleteResult = { deleted: string[]; failed: { key: string; error: string }[] };
@@ -77,13 +81,21 @@ export class FsLakeStore implements LakeStore, LakeReader {
     await rename(tmp, target);
   }
 
-  async get(key: string): Promise<Uint8Array> {
+  async get(key: string, opts: { signal?: AbortSignal } = {}): Promise<Uint8Array> {
     assertSafeKey(key);
-    return new Uint8Array(await readFile(path.join(this.root, key)));
+    const { signal } = opts;
+    signal?.throwIfAborted();
+    try {
+      return new Uint8Array(await readFile(path.join(this.root, key), { signal }));
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason;
+      throw e;
+    }
   }
 
-  async list(prefix: string, opts: { limit?: number } = {}): Promise<{ key: string; size: number }[]> {
+  async list(prefix: string, opts: { limit?: number; signal?: AbortSignal } = {}): Promise<{ key: string; size: number }[]> {
     if (prefix !== "") assertSafeKey(prefix.replace(/\/$/, ""));
+    opts.signal?.throwIfAborted();
     const limit = opts.limit;
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new RangeError("list limit must be a positive integer");
     const out: { key: string; size: number }[] = [];
@@ -141,6 +153,13 @@ export class FsLakeStore implements LakeStore, LakeReader {
     return result;
   }
 }
+
+/**
+ * What the archive search can read from (#1105): a reader exists; the lake is off; or the lake is on
+ * but its store has no reader (the API answers that differently from "off"). Built from the
+ * environment by `eventArchiveFromEnv` in `lib/lake-env.ts`, which holds the S3 client.
+ */
+export type EventArchive = { state: "ready"; reader: LakeReader } | { state: "off" } | { state: "no_reader" };
 
 /**
  * Whether the telemetry lake is on: a directory (`LAKE_DIR`) or an S3 bucket (`LAKE_S3_BUCKET`) is
