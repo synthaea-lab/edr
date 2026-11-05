@@ -57,7 +57,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | T1027 | 3 | `sigma:rules/sigma/linux/base64_pipe_shell.yml`, `sigma:rules/sigma/windows/powershell_encoded.yml` |
 | T1036 | 3 | `sigma:rules/sigma/linux/susp_tmp_exec.yml`, `sigma:rules/sigma/windows/susp_appdata_exec.yml` |
 | T1036.005 | 3 | `rules:crates/rules/src/stateless.rs` |
-| T1055 | 6 | `correlator:crates/correlator/src/rules.rs` |
+| T1055 | 3, 6 | `correlator:crates/correlator/src/rules.rs`, `rules:crates/rules/src/lsass.rs` |
 | T1070.001 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1070.002 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1070.006 | 3 | `rules:crates/rules/src/stateless.rs` |
@@ -75,7 +75,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
-| T1003.001 | 3 | `rules:crates/rules/src/amsi.rs`, `sigma:rules/sigma/windows/procdump_lsass_full_dump.yml` |
+| T1003.001 | 3 | `rules:crates/rules/src/amsi.rs`, `rules:crates/rules/src/lsass.rs`, `sigma:rules/sigma/windows/procdump_lsass_full_dump.yml` |
 | T1003.002 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
 | T1003.003 | 3 | `sigma:rules/sigma/windows/ntds_ifm_export.yml` |
 | T1003.004 | 3 | `sigma:rules/sigma/windows/registry_credential_hive_save.yml` |
