@@ -68,6 +68,14 @@ describe("parseHeartbeatBody", () => {
     expect([old?.ioc_indicators, old?.ioc_findings, old?.ioc_cooled_down]).toEqual([0, 0, 0]);
   });
 
+  it("reads the own-traffic IOC skips, and counts them as zero for an agent that predates them (#1061)", () => {
+    const withSkips = parseHeartbeatBody({ beacon: beacon({ ioc_own_skipped: 6, ioc_sibling_skipped: 2 }) });
+    expect([withSkips?.ioc_own_skipped, withSkips?.ioc_sibling_skipped]).toEqual([6, 2]);
+
+    const old = parseHeartbeatBody({ beacon: beacon() });
+    expect([old?.ioc_own_skipped, old?.ioc_sibling_skipped]).toEqual([0, 0]);
+  });
+
   it("returns null for a body with no usable beacon instead of throwing", () => {
     for (const body of [null, "x", 7, {}, { beacon: null }, { beacon: { timestamp_ns: 1 } }]) {
       expect(parseHeartbeatBody(body)).toBeNull();
@@ -82,7 +90,7 @@ describe("parseHeartbeatBody", () => {
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_applied: -1 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_withheld: 0.5 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_unapplied: "3" }) })).toBeNull();
-    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead", "ioc_indicators", "ioc_findings", "ioc_cooled_down"]) {
+    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead", "ioc_indicators", "ioc_findings", "ioc_cooled_down", "ioc_own_skipped", "ioc_sibling_skipped"]) {
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: -1 }) }), `${field} -1`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: 0.5 }) }), `${field} 0.5`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: "3" }) }), `${field} "3"`).toBeNull();
