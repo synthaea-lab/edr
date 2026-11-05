@@ -51,8 +51,8 @@ without a driver.**
 | 22 | DNS query | `DnsQuery` |
 | 15 | Alternate data stream created | `Zone.Identifier` streams: `FileQuarantine` (#365), their removal `FileDelete` (#442); other streams planned: minifilter (#136) |
 | 2, 9, 23, 26 | Timestomp, raw read, file delete | planned: minifilter (#136) |
-| 8 | Remote thread | planned: #137; candidate without a driver: a Kernel-Process thread start whose creating process is not the target (unverified) |
-| 10 | Process access (LSASS) | planned: #137; candidate without a driver: Microsoft-Windows-Kernel-Audit-API-Calls `OpenProcess` (task 5: `TargetProcessId`, `DesiredAccess`, [Elastic][elastic]) (unverified) |
+| 8 | Remote thread | `RemoteThread` (ETW Kernel-Process thread start whose creating process is not the owner, #720; received by a non-PPL session, #715) |
+| 10 | Process access (LSASS) | `ProcessAccess` (ETW Kernel-Audit-API-Calls `PsOpenProcess`, task 5: `TargetProcessId`, `DesiredAccess`, [Elastic][elastic]; memory-reading opens of LSASS only, #720; received by a non-PPL session, #715) |
 | 4, 16, 255 | Sysmon service state changed, configuration changed, error | none |
 | 17, 18 | Named pipe created, connected | none |
 | 25 | Process tampering (hollowing, herpaderping) | none |
@@ -171,6 +171,12 @@ ADR.
 5. `crates/sigma`: `logsource` category mapping and field mapping onto native events.
 6. If follow-up 1 confirms them: native remote-thread and LSASS-access collection from
    the driver-free providers, filed against #137.
+
+**Update (#720):** follow-up 1's capture (#715) showed both driver-free providers reach a
+non-PPL session, so follow-up 6 shipped them as native events (`RemoteThread`,
+`ProcessAccess`, schema v63) and, per decision 1, Sysmon 8 and 10 do not enter the
+allowlist. #137 stays for what these providers cannot give: handle access through
+duplication, and injection that starts no thread (APC, hijacked thread context).
 
 [ms]: https://techcommunity.microsoft.com/blog/windows-itpro-blog/-/4468112
 [petri]: https://petri.com/microsoft-native-sysmon-windows-11/

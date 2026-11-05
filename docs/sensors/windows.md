@@ -18,6 +18,50 @@ Windows 11 25H2 (PR #728): recycled pids get a new stamp, and the ETW parent fie
 with the class-92 query. `listen_port` (the `sockets` snapshot) and the `eventlog` sensor
 do not stamp yet.
 
+## Cross-process activity without a driver (#720)
+
+Two ETW providers a non-PPL session can enable (ADR-0026 follow-up 6, capture in #715) give
+the native equivalents of Sysmon 8 and 10. Both live on the sensor's one session; the
+filters are in `crates/sensors/windows/etw/src/cross_process.rs`.
+
+**Remote thread** (`RemoteThreadEvent`, T1055): Kernel-Process `ThreadStart` (EID 3, keyword
+`0x20`, which the process provider now asks for alongside process and image). The creator is
+the record header's pid, the owner the `ProcessID` field. Dropped before an event is built:
+
+- a thread its own process starts, and one the kernel starts (pid 0 or 4);
+- the initial thread of a new process, which its creator starts as part of creating it. It
+  is paired with the process's `ProcessStart` in either order: a start waits for one initial
+  thread, and a thread whose owner the pid store has never heard of is taken as the initial
+  one of a process whose start is still in flight. A process that predates the trace never
+  waits, so every cross-process thread into it is reported.
+
+What is left is one event per (creator, owner) per minute, at most 32 per creator per 10 s,
+both counted. #715 measured about 1 to 2 cross-process starts per second after these
+exclusions on an idle Windows 11 host, from ordinary software (debuggers, installers,
+services working in their clients) as much as from injection, so the event is telemetry,
+not an alert. The start address is the user-mode one (`Win32StartAddr`) and is not resolved
+to a module. Thread stops (EID 4) come with the keyword and are dropped on their id.
+
+**LSASS access** (`ProcessAccessEvent`, T1003.001): Kernel-Audit-API-Calls `PsOpenProcess`
+(EID 5: `TargetProcessId`, `DesiredAccess`, `ReturnCode`; the caller is the header pid). The
+provider has no keywords, so every id arrives and only 5 is kept; then only opens whose
+target is LSASS, from another user process, asking for a right that reads memory
+(`PROCESS_VM_READ`, or `GENERIC_READ`, `GENERIC_ALL` or `MAXIMUM_ALLOWED`, since the mask is
+logged as passed). Denied opens are kept with their status. LSASS is found at start among
+the running processes by name and confirmed by its full path,
+`%SystemRoot%\System32\lsass.exe`, so an `lsass.exe` started from elsewhere is never taken
+for it; a `ProcessStart` of that path updates it. An identical open (caller, mask, status)
+is reported once per minute. #715 counted 280 to 330 opens per second on the idle host,
+about half with `PROCESS_VM_READ`, which is why the target is the filter.
+
+**Not seen by either:** a handle to LSASS obtained by duplicating one another process holds,
+injection that starts no thread (APC queued to an existing thread, a hijacked thread
+context), and anything done from the kernel. Those stay with the driver work (#137).
+
+**Not measured yet:** neither provider has been run through the agent's real-time consumer:
+the #715 capture wrote to a file. The rates above are one idle Windows 11 host, not a busy
+server.
+
 ## Minifilter event channel
 
 The kernel minifilter reports file **delete and rename requests that succeeded** through its
