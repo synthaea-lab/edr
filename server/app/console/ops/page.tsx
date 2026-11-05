@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { loadFleet, type FleetAgent } from "@/lib/fleet";
 import { loadRings, type RingStatus, type RolloutState } from "@/lib/rings";
-import type { FleetStatus } from "@/lib/fleet-health";
+import { iocFeedSummary, type FleetStatus } from "@/lib/fleet-health";
 import { loadIngestHealth, type AgentIngestHealth } from "@/lib/ingest-stats";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
@@ -82,6 +82,7 @@ export default async function FleetHealthPage() {
                 <th className="px-4 py-2 text-right">Watchdog restarts</th>
                 <th className="px-4 py-2 text-right">Tamper events</th>
                 <th className="px-4 py-2">Parent images evicted</th>
+                <th className="px-4 py-2">IOC feed</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -136,6 +137,7 @@ function AgentRow({ agent }: { agent: FleetAgent }) {
           ? `${agent.health.parentImageEvictedLive} live, ${agent.health.parentImageEvictedDead} exited`
           : "—"}
       </td>
+      <td className="px-4 py-2 text-gray-700">{agent.health ? iocFeedSummary(agent.health) : "—"}</td>
     </tr>
   );
 }

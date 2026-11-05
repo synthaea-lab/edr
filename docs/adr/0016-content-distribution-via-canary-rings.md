@@ -255,7 +255,9 @@ Admin UI shows ring distribution per tenant and suggests agents for canary enrol
 
 **Agent v1.0** supports:
 - Content schema v1
-- Content types: rule, model, policy
+- Content types: rule, model, policy, and `ioc` (an agent that predates it downloads and stores the
+  files and ignores them: its updater keeps the type as a plain string, so an unknown type cannot fail
+  the manifest)
 
 **Future Agent v2.0** may support:
 - Content schema v2 (e.g., delta updates)
@@ -279,6 +281,17 @@ Agents **reject** manifests with `schema_version > max_supported`.
 - Format: JSON
 - Validation: Agent parses JSON, validates against schema
 - Application: Merged with agent config, overrides local settings
+
+**IOC feed** (`type: "ioc"`, added by ADR-0038, no schema version change):
+- Format: `ioc/<feed>.txt`, one `sha256:`, `ip:` or `domain:` indicator per line, and an optional
+  one-line `ioc/VERSION`
+- Validation: the server, at publish, refuses a feed with a line the device would skip or a listed public
+  suffix; the agent loads it whole, keeps the previous set when it is over budget or unreadable
+- Application: the agent applies an entry by its **path**, never by its type, so the file lands in
+  `<content_root>/ioc/` where the on-device IOC engine reads it on startup and on `ReloadContent`. A feed
+  withdrawn by a corrective release (ADR-0032) is removed like any other entry and the set unloads on the
+  next reload. The server therefore enforces the pairing both ways at publish: only an `ioc` entry may sit
+  under `ioc/`, and an `ioc` entry must be a feed or the version file.
 
 ---
 

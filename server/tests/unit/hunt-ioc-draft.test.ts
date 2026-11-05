@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import path from "path";
 import { parseGraduationRequest, type GraduationDetection, type GraduationHunt } from "@/lib/hunt-graduation";
-import { draftIocSetFromHunt, graduationKind, parseIocGraduationRequest } from "@/lib/hunt-ioc-draft";
+import { draftIocSetFromHunt, graduationKind, iocObservations, parseIocGraduationRequest, type IocPrevalence } from "@/lib/hunt-ioc-draft";
+import { prevalenceKey, type Prevalence } from "@/lib/prevalence";
 
 const SHA_A = "a".repeat(64);
 const SHA_B = "0123456789abcdef".repeat(4);
@@ -76,16 +77,42 @@ describe("draftIocSetFromHunt", () => {
     expect(todo.join(" ")).toMatch(/3 values were left out/);
   });
 
-  it("does not draft domains, and says why", () => {
-    const { todo } = ok(
-      draftIocSetFromHunt(hunt, [det("1", exec(SHA_A)), det("2", { type: "dns_query", query: "evil.example.com" })])
+  it("drafts the queried domains, lowercased, once, after the addresses", () => {
+    const { files, todo } = ok(
+      draftIocSetFromHunt(hunt, [
+        det("1", { type: "dns_query", query: "C2.Evil.example.com." }),
+        det("2", { type: "dns_query", query: "c2.evil.example.com" }),
+        det("3", { type: "dns_query", query: "a.evil.example" }),
+        det("4", connect("203.0.113.9")),
+      ])
     );
-    expect(todo.join(" ")).toMatch(/1 DNS queries were not drafted.*public-suffix/);
+    const lines = files[0].content.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(lines).toEqual(["ip:203.0.113.9", "domain:a.evil.example", "domain:c2.evil.example.com"]);
+    expect(todo.join(" ")).toMatch(/every name beneath it/);
+  });
+
+  it("leaves out a public suffix, a name the feed builder refuses, and counts them", () => {
+    const { files, todo } = ok(
+      draftIocSetFromHunt(hunt, [
+        det("1", exec(SHA_A)),
+        det("2", { type: "dns_query", query: "co.uk" }),
+        det("3", { type: "dns_query", query: "blogspot.com" }),
+        det("4", { type: "dns_query", query: "localhost" }),
+        det("5", { type: "dns_query", query: "\u212A.example.com" }), // KELVIN SIGN
+        det("6", { type: "dns_query", query: "1.2.3.4" }),
+        det("7", { type: "dns_query" }),
+        det("8", { type: "dns_query", query: "evil.co.uk" }),
+      ])
+    );
+    const lines = files[0].content.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(lines).toEqual([`sha256:${SHA_A}`, "domain:evil.co.uk"]);
+    expect(todo.join(" ")).toMatch(/2 DNS queries were left out because the name is a public suffix/);
+    expect(todo.join(" ")).toMatch(/4 values were left out/);
   });
 
   it("refuses when no match carries an indicator, naming what was skipped", () => {
     const result = draftIocSetFromHunt(hunt, [
-      det("1", { type: "dns_query", query: "evil.example.com" }),
+      det("1", { type: "dns_query", query: "co.uk" }),
       det("2", exec(undefined)),
       det("3", connect("127.0.0.1")),
       det("4", null),
@@ -93,7 +120,7 @@ describe("draftIocSetFromHunt", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems[0]).toMatch(/SHA-256/);
-    expect(result.problems[0]).toMatch(/1 DNS queries/);
+    expect(result.problems[0]).toMatch(/1 DNS queries for a public suffix/);
     expect(result.problems[0]).toMatch(/1 loopback/);
   });
 
@@ -112,9 +139,62 @@ describe("draftIocSetFromHunt", () => {
         det("3", connect("203.0.113.9")),
         det("4", connect("2001:db8::1", "network_flow")),
         det("5", connect("127.0.0.1")),
+        det("6", { type: "dns_query", query: "C2.Evil.example." }),
+        det("7", { type: "dns_query", query: "a.evil.example" }),
+        det("8", { type: "dns_query", query: "co.uk" }),
       ])
     );
     expect(files[0].content).toBe(golden);
+  });
+});
+
+describe("fleet prevalence in the draft", () => {
+  const seen = (hostCount: number): Prevalence => ({ hostCount, eventCount: hostCount, firstSeen: new Date("2026-09-01T10:00:00Z"), lastSeen: new Date("2026-10-01T10:00:00Z") });
+  const dns = (query: string) => ({ type: "dns_query", query });
+  const detections = [det("1", exec(SHA_A)), det("2", exec(SHA_B)), det("3", dns("cdn.example.com")), det("4", dns("rare.evil.example")), det("5", connect("203.0.113.9"))];
+  const fleet = (hosts: number, found: [string, string, Prevalence][], unchecked: string[] = []): IocPrevalence => {
+    const keys = [...found.map(([k, v]) => prevalenceKey(k as "sha256", v)), ...iocObservations(detections).map((o) => prevalenceKey(o.kind, o.key))].filter((k) => !unchecked.includes(k));
+    return { hosts, found: new Map(found.map(([k, v, p]) => [prevalenceKey(k as "sha256", v), p])), lookedUp: new Set(keys) };
+  };
+  const body = (r: ReturnType<typeof draftIocSetFromHunt>) => ok(r).files[0].content;
+
+  it("takes only hashes and domains to the prevalence lookup", () => {
+    expect(iocObservations(detections).map((o) => o.kind).sort()).toEqual(["domain", "domain", "sha256", "sha256"]);
+  });
+
+  it("comments each hash and domain with how many hosts saw it, and marks a widespread one", () => {
+    const result = draftIocSetFromHunt(hunt, detections, fleet(100, [["sha256", SHA_A, seen(1)], ["domain", "cdn.example.com", seen(40)]]));
+    const text = body(result);
+    expect(text).toContain(`# seen on 1 of 100 hosts, first 2026-09-01\nsha256:${SHA_A}`);
+    expect(text).toContain(`# never seen on this fleet before\nsha256:${SHA_B}`);
+    expect(text).toContain("# seen on 40 of 100 hosts, first 2026-09-01 (widespread: likely benign)\ndomain:cdn.example.com");
+    expect(text).toContain("# never seen on this fleet before\ndomain:rare.evil.example");
+    expect(text).toMatch(/\nip:203\.0\.113\.9\n/);
+    expect(text).not.toMatch(/widespread[^\n]*\nsha256/);
+    const todo = ok(result).todo.join(" ");
+    expect(todo).toMatch(/1 hashes or domains are on at least 5%/);
+    expect(todo).toMatch(/Addresses carry no fleet prevalence/);
+  });
+
+  it("does not call a value widespread on a small fleet, and does not judge a fleet that reported nothing", () => {
+    expect(body(draftIocSetFromHunt(hunt, detections, fleet(10, [["domain", "cdn.example.com", seen(4)]])))).not.toMatch(/widespread/);
+    const empty = body(draftIocSetFromHunt(hunt, detections, fleet(0, [])));
+    expect(empty).not.toMatch(/seen on|never seen/);
+    expect(empty).toBe(body(draftIocSetFromHunt(hunt, detections)));
+  });
+
+  it("does not say unseen about a value the lookup skipped", () => {
+    const skipped = prevalenceKey("sha256", SHA_A);
+    const result = draftIocSetFromHunt(hunt, detections, fleet(100, [], [skipped]));
+    expect(body(result)).toMatch(new RegExp(`^sha256:${SHA_A}$`, "m"));
+    expect(body(result)).not.toMatch(new RegExp(`\\n#[^\\n]*\\nsha256:${SHA_A}`));
+    expect(ok(result).todo.join(" ")).toMatch(/1 hashes or domains were not checked/);
+  });
+
+  it("keeps the file loadable: every comment is a # line", () => {
+    const text = body(draftIocSetFromHunt(hunt, detections, fleet(100, [["sha256", SHA_A, seen(50)]])));
+    const indicators = text.split("\n").filter((l) => l !== "" && !l.startsWith("#"));
+    expect(indicators).toEqual([`sha256:${SHA_B}`, `sha256:${SHA_A}`, "ip:203.0.113.9", "domain:cdn.example.com", "domain:rare.evil.example"]);
   });
 });
 

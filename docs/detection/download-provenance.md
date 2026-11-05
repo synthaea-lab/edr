@@ -15,8 +15,19 @@ ADR-0018). Two rules consume it:
 
 | Rule | Fires when | Technique |
 | --- | --- | --- |
-| `check_quarantined_exec` | a marked file is executed within 10 min of the mark (`QUARANTINE_EXEC_WINDOW_NS`) | T1204.002 |
+| `check_quarantined_exec` | a marked file is executed within 10 min of the mark (`QUARANTINE_EXEC_WINDOW_NS`) | T1204.002; `T1566.001/T1204.002` when the mark's writer is Apple Mail (quarantine agent `Mail`) |
 | `check_exec_after_motw_removal` | a file is executed within the same window after its mark was **removed**: `Unblock-File`, `Remove-Item -Stream Zone.Identifier`, Explorer's "Unblock" checkbox (#442) | T1553.005 |
+
+The mail-client tag (`MAIL_CLIENT_QUARANTINE_AGENTS`) is a label on the same
+alert, not a second rule: same window, same signature gate, same one alert per
+mark. It says "marked by Mail", not "phishing": a person who saved an
+attachment on purpose and ran it matches too. **Apple Mail is listed on its
+expected string, not on a capture**: no `com.apple.quarantine` value from a
+saved Mail attachment is in the repo yet, and if a Mac shows another agent
+string the tag does not fire (a missed label, not a false one). **Outlook and
+Thunderbird are not in the list**: that the opened attachment carries a mark, which process
+writes it, and where (hypothesis: a `Content.Outlook` folder) are not
+observed. They stay plain T1204.002 until a lab capture shows them.
 
 Removing a mark doesn't alert on its own. `Unblock-File` over a downloaded
 PowerShell module tree removes hundreds of marks legitimately. The removal is
@@ -56,3 +67,27 @@ downloads:
 
 The minifilter (#136) supersedes this path: it sees stream deletes, renames
 and overwrites at the file-system level, whichever API issued them.
+
+## The signature gate verifies the image that ran (#441, #688)
+
+T1204.002 stays silent when the executed image's Authenticode signature is
+`Valid`. The verdict is read on the enrichment worker, after the exec, from the
+file at the image's path, and a running image can be renamed on Windows. So the
+ETW sensor records the image file's identity at exec (`ExecEvent::image_file_id`,
+volume serial + file id) and the worker compares it with the identity of the
+file it verified, read from the same handle as the hash and the verdict. Same
+identity: the verdict decides as before. Different identity, or none on either
+side: the alert is raised `[signature not verified: file differs from the image
+that ran]`.
+
+No identity is captured for an image on a network or device path (UNC, `\\?\`,
+`\Device\...`): the open would be a round trip on the thread that delivers every
+kernel-process event. The gate then fails closed for those images, as it does when
+nothing could be captured. A mapped network drive letter looks local and is still
+opened.
+
+Residual: the identity is taken in the ETW callback, so a swap between the
+process starting and that callback is not seen. Closing it needs a kernel
+process-creation callback giving the image's file object (the minifilter has
+none today). Elsewhere nothing is captured and the gate is unchanged (`Valid`
+never silences off Windows anyway: no chain verification).

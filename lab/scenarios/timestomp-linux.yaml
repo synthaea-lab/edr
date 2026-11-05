@@ -1,0 +1,21 @@
+name: timestomp-linux
+platform: linux
+script: timestomp-linux.sh
+simulates: >
+  Explicit file timestamp changes (touch -d, utimensat from a script) as an attacker
+  backdating a dropped file, next to the writes and plain touches that must not report.
+expected_detections:
+  - technique: "T1070.006"
+    rule: evaluate_file_set_time   # crates/rules/src/stateless.rs
+    min_count: 3
+    tolerance: 0
+notes: >
+  Live-tested 2026-10-29 in `edr-lab-fedora` (Fedora 43, kernel 7.2.9, `bpf` in the active
+  LSM list), agent built from the #1044 branch: exactly 3 T1070.006 alerts with the full path
+  (comm touch, python3, touch), none for the write, the plain touch or the chmod
+  (`lab/captures/test-1044-20261029/`). Known limits measured the same day: a chain deeper
+  than 8 directories reports its last 8 names behind `/...`; a name over 31 bytes is cut; a
+  file on another mount than `/` (here `/tmp`, tmpfs) reports its path without the mount point.
+  Noise measured the same day with 3000-file `tar x`, `cp -a` and `rsync -a` (events on): one
+  alert per process per 60 s, so 7 alerts in total for the three, not ~2850; `rpm -ivh` of two
+  packages: events seen, no alert (`cpio` on the same files alerts). `lab/captures/test-1044-20261029/`.

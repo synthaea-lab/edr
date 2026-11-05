@@ -19,6 +19,7 @@ import {
   MAX_RUNS_PER_TENANT_PER_MINUTE,
 } from "@/lib/hunt";
 import { dueHunts, pruneHuntRuns, runHunt } from "@/lib/hunt-runner";
+import { recordObservations } from "@/lib/prevalence";
 import { Prisma } from "@prisma/client";
 
 const HOUR = 3_600_000;
@@ -399,6 +400,40 @@ describe("POST /api/hunts/[id]/graduate (#618)", () => {
     const refused = await graduate(noText.id, tenant.id, { platform: "linux" });
     expect(refused.status).toBe(422);
     expect((await refused.json()).problems.join(" ")).toMatch(/negative/);
+  });
+
+  it("drafts an IOC set whose hashes and domains carry the fleet's prevalence (#934)", async () => {
+    const tenant = await createTestTenant();
+    const agents = [await createTestAgent(tenant.id), await createTestAgent(tenant.id)];
+    const common = "c".repeat(64);
+    const rare = "d".repeat(64);
+    const at = new Date();
+    for (const agent of agents) await recordObservations(prisma, tenant.id, agent.id, at, [{ kind: "sha256", key: common }]);
+    await recordObservations(prisma, tenant.id, agents[0].id, at, [{ kind: "domain", key: "c2.evil.example" }]);
+    for (const [sha256, image] of [[common, "/usr/bin/wget"], [rare, "/tmp/dropper"]]) {
+      await createTestDetection(tenant.id, agents[0].id, {
+        technique: "T1105",
+        severity: "high",
+        timestamp: new Date(Date.now() - HOUR),
+        event: { type: "exec", image_path: image, cmdline: "x --post-file", sha256 },
+      });
+    }
+    await createTestDetection(tenant.id, agents[0].id, {
+      technique: "T1071",
+      severity: "high",
+      timestamp: new Date(Date.now() - HOUR),
+      event: { type: "dns_query", query: "C2.Evil.example.", cmdline: "--post-file" },
+    });
+    const hunt = await create(tenant.id, { name: "Dropper", query: { version: 1, lastHours: 24 } });
+    await runHuntRoute(req(`/api/hunts/${hunt.id}/run`, tenant.id, "POST"), ctx(hunt.id));
+
+    const res = await graduate(hunt.id, tenant.id, { kind: "ioc" });
+    expect(res.status).toBe(200);
+    const text: string = (await res.json()).files[0].content;
+    expect(text).toContain(`# seen on 2 of 2 hosts, first ${at.toISOString().slice(0, 10)}\nsha256:${common}`);
+    expect(text).toContain(`# never seen on this fleet before\nsha256:${rare}`);
+    expect(text).not.toMatch(/widespread/); // 2 hosts is under the 5-host floor
+    expect(text).toContain(`hosts, first ${at.toISOString().slice(0, 10)}\ndomain:c2.evil.example`);
   });
 
   it("is a 400 for a bad body and a 404 for another tenant's hunt", async () => {

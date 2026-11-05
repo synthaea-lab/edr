@@ -1,8 +1,9 @@
 # IOC matching (issue #60, ADR-0038)
 
 `crates/intel` matches file hashes (SHA-256), IP addresses and domains against a loaded indicator
-set. This is the engine only: it is not yet wired into the agent and loads no signed content (see
-"Not decided, not built" in ADR-0038).
+set. The agent loads feed files from its content root and raises a detection on a match (see "In the
+agent" below); no signed delivery of those files exists yet, and ADR-0038 ("Not decided, not built")
+lists what is still open.
 
 ## Building a set
 
@@ -63,8 +64,27 @@ written in the line format above; an optional `VERSION` file (first line) names 
 came from, `unversioned` without one. Feed ids follow the sorted file names, so two agents with
 the same files agree on which feed wins an overlap. Names and versions are trimmed, stripped of
 control characters and cut at 64 characters, because they travel in every detection.
-**Nothing delivers these files yet:** signed delivery through the content manifest waits on the
-production signing keys (#753), so today a feed is a file somebody put there.
+Delivery is a signed content release carrying `ioc/<feed>.txt` entries of type `ioc` (ADR-0038,
+"Delivery"); the agent needs nothing new for it. The server stages a feed for such a release (see below);
+signing it in production waits on the production keys (#753), so until then a feed is a file somebody put there.
+
+Verified in the lab on 2026-10-29 (Fedora 43, kernel 7.2.9, agent built from `main` `609cd1d8`, control
+plane run from the same tree, **public test key only**): release 1 of ring `prod` with `ioc/lab-feed.txt`
+(an exec hash, an address, a domain) and `ioc/VERSION` was staged under `storage/artifacts/<sha256>`, signed
+with `release-tool sign --kind content --test-key` and published with `POST /api/content/release`. A running
+agent ran `agent apply-content-manifest --allow-test-key`: `applied release 1 (2 entries fetched, 0 removed)`,
+`notified the running agent`, and its log shows `ioc: indicator set loaded` with the version
+`2026-10-29.signed`. Before the delivery the same exec, connections and lookups raised no IOC finding; after
+it the exec hash and the domain each raised one on the test traffic (a listed binary run twice, a lookup of
+a name under the listed domain), carrying that feed name and version, and the unlisted domain and address
+stayed silent. **The address case was exercised only through the agent's own connection:** the listed address
+was the control plane's, the finding came from the `apply-content-manifest` process connecting to it, and the
+test loop's connections then fell inside the cooldown. So the run shows that a delivered address indicator
+is loaded and matches, not that a listed address a test process connects to raises a finding; that needs
+another run with a listed address that is not the control plane. The same run showed the agent alerting on its
+own control-plane connection (#1061). The publish step refused, with 422, a `rule` entry under `ioc/`, an
+`ioc` entry outside `ioc/` and a feed with an invalid line. Not covered: a delivery to an agent that is not
+running, the production key path, and the file-write hash (above, still not wired).
 
 Loaded at startup and on `reload_content` (IPC `ReloadContent`): a present directory replaces the
 set, an absent one unloads it, an unreadable or over-budget one keeps the previous set (logged).
@@ -93,6 +113,110 @@ forgotten first.
 A `NetworkFlow` peer address is checked like a connect destination: conntrack reports every live
 flow on each poll, and the cooldown makes that one finding.
 
+The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_findings` and
+`ioc_cooled_down`, so the server can tell a host with no feed from one with a feed and no match. The
+console's fleet health page shows them in an "IOC feed" column (`docs/architecture/control-plane.md`).
+
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no
-hash, so there is nothing to match until a sensor reports one) and the health-beacon counters
-(`IocStats` exists, nothing reports it yet).
+hash, so there is nothing to match until a sensor reports one).
+
+## Server side: building a feed (`server/lib/ioc-feed.ts`)
+
+`buildFeed({ feed, text, isPublicSuffix, defaultKind })` turns the text of one source into the
+`ioc/<feed>.txt` an agent loads: `kind:value` lines, normalised as the device normalises them,
+de-duplicated and sorted, so the same input always gives the same bytes and the same hash. It
+applies the device's own load rules (hash length, loopback and unspecified addresses, IPv4-mapped
+IPv6 canonicalised, domain syntax and 2 to 8 labels, ASCII only) and returns a reason per rejected
+line (`rejected`, bounded to 100 by default, with `rejectedTotal` always exact). One bad line never
+discards a feed. `versionFile` writes the one-line `ioc/VERSION`, `isValidFeedName` guards the file
+stem.
+
+The check the device cannot make is here: a listed domain must not be a public suffix (`co.uk`
+would flag a whole country, since a listed domain covers its subdomains). The suffix list is a
+dependency the module does not carry: the caller passes `isPublicSuffix`, and **without one every
+domain is refused** (`public_suffix_unchecked`) rather than published unchecked. Hashes and
+addresses are unaffected.
+
+`server/lib/public-suffix.ts` is the `isPublicSuffix` to pass: `tldts` (pinned at 7.4.18, MIT, one
+transitive package), private suffixes such as `github.io` and `blogspot.com` counted, so a listed
+`github.io` is refused and `attacker.github.io` is not.
+
+`server/tests/fixtures/ioc-feed-golden.txt` is checked on both sides: the server test asserts the
+builder produces it from `ioc-feed-input.txt`, and `crates/intel/tests/feed_golden.rs` asserts the
+engine takes every line of it unchanged.
+
+### A CSV source (`server/lib/ioc-csv.ts`)
+
+`buildFeedFromCsv({ feed, csv, valueColumn, typeColumn?, defaultKind?, hasHeader?, isPublicSuffix })`
+reads a feed published as CSV (RFC 4180: quoted fields, `""` for a quote, CRLF or LF, a newline inside
+quotes, a byte-order mark) and passes its rows to the same builder core, so a CSV feed gets the same
+normalisation, device rules and public-suffix gate, and gives the same bytes (and hash) as the plain
+`kind:value` text for the same indicators. `server/tests/fixtures/ioc-csv-input.csv` produces
+`ioc-feed-golden.txt` byte for byte.
+
+- **Columns** are named by header (case-insensitive) or, with `hasHeader: false`, by 0-based index. A
+  column that is not there throws: it is a mistake in the configuration, not in the data.
+- **Kind**: from `typeColumn` (`sha256`, `sha-256`, `ip`, `ipv4`, `ipv6`, `ip-src`, `ip-dst`, `domain`,
+  `fqdn`, `hostname`; case-insensitive), else `defaultKind`. A kind the engine does not match (`md5`, `url`)
+  or none at all is rejected as `unknown_kind`. A `kind:` prefix inside the value does not override it.
+- **A bad row never discards the feed.** A row with the wrong number of fields is `bad_csv`; every
+  rejection carries the line its record *starts* on, which a quoted newline makes different from the
+  record's index. A quote that is never closed swallows the rest of the text, so it is one `bad_csv`
+  rejection at its record and the records before it are kept.
+- A line starting with `#` and a blank line are skipped, as in the plain format. A header that itself
+  starts with `#` is therefore skipped too: address the columns by index with `hasHeader: false`.
+- A quote in the middle of an unquoted field is kept as text (lenient on input; the output is always
+  normalised).
+
+### A STIX 2.1 source (`server/lib/ioc-stix.ts`)
+
+`buildFeedFromStix({ feed, json, now, isPublicSuffix })` reads a STIX bundle (or a TAXII envelope: an object
+with an `objects` array) and passes its indicators to the same builder core, so the normalisation, device
+rules and public-suffix gate are the same and the same indicators give the same bytes as a plain feed.
+
+- **Patterns.** The engine matches one value per line, so an `indicator` is taken only when its pattern is a
+  single `=` comparison on `file:hashes.'SHA-256'`, `ipv4-addr:value`, `ipv6-addr:value` or
+  `domain-name:value`. `AND`, `OR`, `FOLLOWEDBY`, `IN`, `LIKE`, `MATCHES`, a qualifier (`WITHIN`, `REPEATS`),
+  `!=`, another property (`file:name`, `MD5`), a CIDR range and a `pattern_type` other than `stix` are
+  `unsupported_pattern`: never read in part, because half of an `OR` is an indicator the feed did not claim.
+- **Lifetime** is judged at build time against `now`: `revoked: true` is `revoked`, `valid_until` at or before
+  `now` is `expired`, `valid_from` after `now` is `not_yet_valid`, an unreadable timestamp or a missing pattern
+  is `bad_stix`. **The device has no expiry**: the file is a snapshot, so an indicator that expires after the
+  build stays loaded until a later release replaces the file. Rebuild and re-release on a schedule shorter than
+  the shortest `valid_until` you care about; nothing does that automatically yet.
+- Objects that are not indicators (malware, relationships, ...) are ignored and not counted. A rejection
+  carries the object's 1-based position in `objects` in place of a line number.
+- Not a bundle (not JSON, no `objects`, another `type`) throws, as a wrong CSV column does. `POST
+  /api/content/ioc-feed` takes it as `{ "format": "stix", "json": "<the bundle>" }`.
+- Not done: fetching a bundle from a TAXII server, STIX `x-` extensions, `indicator` objects that name a
+  confidence (the device carries none).
+
+### A MISP source (`server/lib/ioc-misp.ts`)
+
+`buildFeedFromMisp({ feed, json, isPublicSuffix })` reads a MISP export (the JSON of `/events/restSearch`,
+`{"Event": ...}` or a bare event) and passes its attributes, from `Event.Attribute` and from `Event.Object`,
+to the same builder core: same normalisation, device rules and public-suffix gate, same bytes for the same
+indicators.
+
+- **Types taken:** `sha256`, `ip-src`, `ip-dst`, `domain`, `hostname`. Everything else (`md5`, `sha1`, `url`,
+  `email-*`, and every composite such as `ip-src|port`, `filename|sha256`, `domain|ip`) is `unknown_kind`. A
+  composite is never split: half of `domain|ip` is not the indicator the feed claimed.
+- **`to_ids` must be true** (`true`, `1` or `"1"`). It is MISP's flag for "a detection indicator"; an
+  attribute without it is context (a victim's address, a sample's name), and publishing it would raise findings
+  on it. Refused as `not_for_detection`. A `deleted` attribute is `deleted`.
+- **No expiry here.** A MISP attribute has no `valid_until`; decay is a score MISP computes. Filter on the
+  MISP side (`last`, `publish_timestamp`, a decaying model) before exporting. The device has no expiry either.
+- A rejection carries the attribute's 1-based position in the order read (an event's attributes, then its
+  objects') in place of a line number. A malformed attribute is `bad_misp`; text that holds no event throws.
+  `POST /api/content/ioc-feed` takes it as `{ "format": "misp", "json": "<the export>" }`.
+- Not done: fetching from a MISP instance (API key handling), tags and galaxies, attribute `comment`.
+
+### Publishing (`ioc` content type)
+
+A feed is published as an `ioc` entry of a content release (`ContentType` has `ioc`): the file as
+`ioc/<feed>.txt` and, optionally, `ioc/VERSION`. At publish (`POST /api/content/release`) the server refuses
+the release when the type and the path disagree or a feed has a line the device would skip. See ADR-0038,
+"Delivery", for why the pairing is checked on the server.
+
+Not built: the other sources (STIX/TAXII, MISP), expiry, per-tenant enablement, a step that turns a source
+into a release (nothing calls `buildFeed` outside this check yet), and production signing (#753).

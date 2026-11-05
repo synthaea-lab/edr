@@ -72,6 +72,13 @@ worker for hashing, raw logging, and spooling. Alerts append to
 after full processing, so the watchdog's heartbeat measures real forward
 progress, not scheduling.
 
+Each alert is also printed on stderr as an `[ALERT]` line. By default, that line
+carries only the technique and the `pid=… comm=…` the rule message starts with,
+followed by `(details in alerts.ndjson)`. The message body is left out because
+rules put the command line there, and event payloads never reach the terminal at
+default verbosity (#319). `run --alert-details` prints the whole message. The
+file and `cli detections` always get the whole message, redacted (ADR-0034).
+
 Response (#25) is injected, not built in: `enable_response` hands the sink a
 policy plus an OS kill callback. A platform that never calls it is
 indistinguishable from policy-disabled — observe-only either way.

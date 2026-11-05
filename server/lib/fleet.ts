@@ -36,6 +36,10 @@ export type FleetAgent = {
     /** Parent-image cache entries dropped while their process was alive (the loss), and after it exited. */
     parentImageEvictedLive: number;
     parentImageEvictedDead: number;
+    /** On-device IOC engine (#60): indicators in force (a gauge, 0 with no feed), findings raised, repeats held back by the cooldown. */
+    iocIndicators: number;
+    iocFindings: number;
+    iocCooledDown: number;
     sensors: SensorState[];
   } | null;
 };
@@ -85,6 +89,9 @@ export async function loadFleet(
           tamperEvents: Number(a.health.tamperEvents),
           parentImageEvictedLive: Number(a.health.parentImageEvictedLive),
           parentImageEvictedDead: Number(a.health.parentImageEvictedDead),
+          iocIndicators: Number(a.health.iocIndicators),
+          iocFindings: Number(a.health.iocFindings),
+          iocCooledDown: Number(a.health.iocCooledDown),
           sensors,
         },
       };

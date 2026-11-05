@@ -37,6 +37,11 @@ export const HealthBeacon = z.object({
   tamper_events: counter.default(0),
   parent_image_evicted_live: counter.default(0),
   parent_image_evicted_dead: counter.default(0),
+  // #60: the on-device IOC engine. `ioc_indicators` is a gauge. Absent from an agent that
+  // predates them: counted as zero.
+  ioc_indicators: counter.default(0),
+  ioc_findings: counter.default(0),
+  ioc_cooled_down: counter.default(0),
 });
 export type HealthBeacon = z.infer<typeof HealthBeacon>;
 

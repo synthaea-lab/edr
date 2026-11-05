@@ -111,6 +111,9 @@ async function storeBeacon(
       tamperEvents: BigInt(beacon.tamper_events),
       parentImageEvictedLive: BigInt(beacon.parent_image_evicted_live),
       parentImageEvictedDead: BigInt(beacon.parent_image_evicted_dead),
+      iocIndicators: BigInt(beacon.ioc_indicators),
+      iocFindings: BigInt(beacon.ioc_findings),
+      iocCooledDown: BigInt(beacon.ioc_cooled_down),
       sensors: beacon.sensors,
     };
     await prisma.agentHealth.upsert({

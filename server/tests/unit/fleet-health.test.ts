@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { beaconTime, parseHeartbeatBody } from "@/lib/health-beacon";
+import { loadFleet } from "@/lib/fleet";
 import {
   LOSS_WINDOW_MS,
   SILENCE_THRESHOLD_MS,
   fleetStatus,
+  iocFeedSummary,
   nextLossObservedAt,
   sensorsOf,
 } from "@/lib/fleet-health";
@@ -56,6 +58,16 @@ describe("parseHeartbeatBody", () => {
     expect([old?.watchdog_restarts, old?.tamper_events, old?.parent_image_evicted_live, old?.parent_image_evicted_dead]).toEqual([0, 0, 0, 0]);
   });
 
+  it("reads the IOC engine counters, and counts them as zero for an agent that predates them (#60)", () => {
+    const withCounters = parseHeartbeatBody({
+      beacon: beacon({ ioc_indicators: 12000, ioc_findings: 4, ioc_cooled_down: 31 }),
+    });
+    expect([withCounters?.ioc_indicators, withCounters?.ioc_findings, withCounters?.ioc_cooled_down]).toEqual([12000, 4, 31]);
+
+    const old = parseHeartbeatBody({ beacon: beacon() });
+    expect([old?.ioc_indicators, old?.ioc_findings, old?.ioc_cooled_down]).toEqual([0, 0, 0]);
+  });
+
   it("returns null for a body with no usable beacon instead of throwing", () => {
     for (const body of [null, "x", 7, {}, { beacon: null }, { beacon: { timestamp_ns: 1 } }]) {
       expect(parseHeartbeatBody(body)).toBeNull();
@@ -70,7 +82,7 @@ describe("parseHeartbeatBody", () => {
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_applied: -1 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_withheld: 0.5 }) })).toBeNull();
     expect(parseHeartbeatBody({ beacon: beacon({ rarity_unapplied: "3" }) })).toBeNull();
-    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead"]) {
+    for (const field of ["watchdog_restarts", "tamper_events", "parent_image_evicted_live", "parent_image_evicted_dead", "ioc_indicators", "ioc_findings", "ioc_cooled_down"]) {
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: -1 }) }), `${field} -1`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: 0.5 }) }), `${field} 0.5`).toBeNull();
       expect(parseHeartbeatBody({ beacon: beacon({ [field]: "3" }) }), `${field} "3"`).toBeNull();
@@ -186,5 +198,67 @@ describe("sensorsOf", () => {
       sensorsOf([{ name: "a", pulse_count: 3, silent: true }, { name: 5 }, null, "x"])
     ).toEqual([{ name: "a", pulse_count: 3, silent: true }]);
     expect(sensorsOf("not an array")).toEqual([]);
+  });
+});
+
+describe("iocFeedSummary", () => {
+  const ioc = (iocIndicators: number, iocFindings: number, iocCooledDown: number) => ({ iocIndicators, iocFindings, iocCooledDown });
+
+  it("says no feed when no indicator is in force, whatever else the agent counted", () => {
+    expect(iocFeedSummary(ioc(0, 0, 0))).toBe("no feed");
+    // An unloaded feed leaves the cumulative counters behind: still no feed.
+    expect(iocFeedSummary(ioc(0, 4, 31))).toBe("no feed");
+  });
+
+  it("tells a feed with no match from a feed that matched", () => {
+    expect(iocFeedSummary(ioc(12000, 0, 0))).toBe("12000 indicators, 0 findings");
+    expect(iocFeedSummary(ioc(12000, 4, 0))).toBe("12000 indicators, 4 findings");
+  });
+
+  it("adds the repeats the cooldown held back only when there were some", () => {
+    expect(iocFeedSummary(ioc(3, 3, 26))).toBe("3 indicators, 3 findings, 26 repeats held back");
+  });
+});
+
+describe("loadFleet and the IOC counters", () => {
+  const row = (health: Record<string, unknown> | null) => ({
+    id: "a1",
+    hostname: "h1",
+    ring: "canary_0",
+    version: "1.0.0",
+    lastSeen: new Date("2026-10-28T10:00:00Z"),
+    health,
+  });
+  const stored = (over: Record<string, unknown> = {}) => ({
+    beaconAt: new Date("2026-10-28T10:00:00Z"),
+    agentVersion: "1.0.0",
+    spoolBytes: BigInt(0),
+    spoolDropped: BigInt(0),
+    enrichDropped: BigInt(0),
+    lossObservedAt: null,
+    rarityApplied: BigInt(0),
+    rarityWithheld: BigInt(0),
+    rarityUnapplied: BigInt(0),
+    watchdogRestarts: BigInt(0),
+    tamperEvents: BigInt(0),
+    parentImageEvictedLive: BigInt(0),
+    parentImageEvictedDead: BigInt(0),
+    iocIndicators: BigInt(0),
+    iocFindings: BigInt(0),
+    iocCooledDown: BigInt(0),
+    sensors: [],
+    ...over,
+  });
+  const load = (rows: unknown[]) =>
+    loadFleet({ agent: { findMany: async () => rows } } as never, "t1", new Date("2026-10-28T10:00:30Z"));
+
+  it("carries the three counters from the stored beacon as numbers", async () => {
+    const [agent] = await load([row(stored({ iocIndicators: BigInt(12000), iocFindings: BigInt(4), iocCooledDown: BigInt(31) }))]);
+    expect(agent.health).toMatchObject({ iocIndicators: 12000, iocFindings: 4, iocCooledDown: 31 });
+  });
+
+  it("leaves an agent with no beacon without health", async () => {
+    const [agent] = await load([row(null)]);
+    expect(agent.health).toBeNull();
   });
 });

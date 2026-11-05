@@ -39,17 +39,51 @@ A dedicated vertical over existing machinery — no new engine, one wired reflex
    tree, quarantining the binary, and the lab acceptance run below.
 
    **Service-stop burst (built, #381).** `SERVICE-STOP-BURST` (T1489, Medium) alerts when one
-   lineage stops five distinct services inside 60 s: `systemctl stop` / `disable --now`,
+   lineage stops five distinct services inside 60 s: `systemctl stop` / `disable --now` / `kill` (with a signal that ends the unit),
    `service X stop` and `/etc/init.d/X stop` (Linux), `net stop`, `sc stop`, `Stop-Service`
    (Windows), `launchctl bootout` / `unload` / `remove` / `stop` (macOS); an exec that names
    several services counts each, and a `Get-Service | Stop-Service` pipeline counts as one. It
    is the pre-encryption tell (databases, backup, mail and security services stopped so their
    files can be encrypted), and a maintenance window, a shutdown script or a package upgrade
    looks the same, hence Medium; five in a minute is a calibration choice, not a measurement.
-   **It is deliberately not joined to anything above:** the damage manifest and the reflex
-   consume T1486 alerts only, so a T1489 alert neither attaches files nor corroborates a kill.
-   Joining them (a service-stop burst followed by mass renames from the same lineage) is a
-   decision of its own and is not made here.
+   **It is still not joined to the damage manifest or the reflex:** both consume T1486
+   alerts only, so a T1489 alert neither attaches files nor corroborates a kill. The one
+   thing it feeds is the message of a later T1486 finding, see the next item.
+
+   **Burst then mass renames (built, #973).** When a T1486 finding (any of its four sources)
+   comes from the lineage that raised a SERVICE-STOP-BURST in the previous 15 minutes, its
+   message ends with `corroborated: the lineage of pid=N stopped K distinct services
+   (SERVICE-STOP-BURST, T1489) Ts earlier`. Nothing else changes: the technique, the
+   severity (Critical already, so there is nothing to raise), the thresholds, the alert
+   count, the damage manifest and the reflex are the same with or without the burst (tests
+   `the_corroboration_changes_neither_...`, `a_burst_does_not_lower_the_rename_threshold`).
+   The lineage of a rename is the one its process was exec'd under (the shell that launched
+   the encryptor, or the loop shell of the `mv` shape) or the process itself. A process that
+   started before the agent has no recorded lineage and gets no note. The memory is one
+   mark per lineage (16384, least recently used evicted), refreshed while the burst goes on,
+   read at the finding and never consulted for anything but the message.
+
+   **Shutdown or reboot as case context (T1529, built, #973).** Low, and never on its own:
+   `shutdown`, `reboot`, `halt`, `poweroff`, `systemctl reboot|poweroff|halt|kexec|soft-reboot`,
+   `init|telinit 0|6` and `shutdown /s|/r|/p` are reported only when the same lineage
+   (the shell, or the encryptor as the parent of the command) raised a **T1486 or T1490**
+   finding in the previous 30 minutes, once per finding. The note says the command was
+   seen, not that the host went down. Without such a finding the exec records nothing and
+   raises nothing. A SERVICE-STOP-BURST alone does not arm it: stop five services then reboot
+   is the patch window. Low means the verdict, which takes the maximum severity over an
+   entity, cannot rise because of the note; it adds a technique to the case. The program name
+   is enough for `shutdown`, `reboot`, `halt` and `poweroff` (the argv of a short-lived process
+   can be empty, ADR-0045), the others need their arguments and are missed without them
+   (fail closed). A visible `-c`, `-k`, `--cancel`, `--help`, `--dry-run`, `reboot -w` or
+   `shutdown /a` is not a shutdown. Not built: a shutdown *before* the finding (it would have
+   to edit a finding already sent), the manager's journal record as the source
+   (ADR-0006, needs a new event), and Windows/macOS-specific forms beyond the ones above.
+   Decisions and what is not verified: `issues/issue-973.md`.
+
+   **Not built, on purpose (#973):** the sudo-burst threshold (no measurement to calibrate
+   it), the Windows failed-then-success join (4672 and 4624 are routine for administrators),
+   and T1486 on Windows and macOS telemetry (waits on #853 and #857; macOS Endpoint Security
+   has no `FileWrite`).
 
 Acceptance is scenario-driven: a lab encryptor (benign, marker-based) must be killed
 before it processes more than N canary-adjacent files.

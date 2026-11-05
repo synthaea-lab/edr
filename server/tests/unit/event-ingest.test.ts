@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 const db = vi.hoisted(() => ({
   agent: { findUnique: vi.fn(), update: vi.fn() },
   agentHealth: { findUnique: vi.fn(), upsert: vi.fn() },
+  lakeBatch: { create: vi.fn() },
   $executeRaw: vi.fn(),
 }));
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
@@ -199,9 +200,22 @@ describe("POST /api/ingest/events counts ingest health (#899)", () => {
   });
 
   it("counts an internal failure as a refusal of the 5xx class", async () => {
-    db.agent.update.mockRejectedValue(new Error("db down"));
-    expect((await post({ events: [exec()] })).status).toBe(500);
+    // The lake queue is the one write that must not be lost, so its failure is the 5xx.
+    process.env.LAKE_DIR = "/nonexistent/lake";
+    db.lakeBatch.create.mockRejectedValue(new Error("db down"));
+    try {
+      expect((await post({ events: [exec()] })).status).toBe(500);
+    } finally {
+      delete process.env.LAKE_DIR;
+    }
     expect(stats().map((v) => v.slice(7, 9))).toEqual([[0, 1]]);
+  });
+
+  it("does not fail an ingest, and so does not make the agent resend, when the lastSeen update fails", async () => {
+    db.agent.update.mockRejectedValue(new Error("db down"));
+    expect((await post({ events: [exec()] })).status).toBe(200);
+    // received, accepted, skipped, refused 4xx, refused 5xx: counted as accepted, not as a refusal.
+    expect(stats().map((v) => v.slice(4, 9))).toEqual([[1, 1, 0, 0, 0]]);
   });
 
   it("counts nothing before the agent is identified", async () => {
