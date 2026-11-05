@@ -131,9 +131,15 @@ without change. It does not revisit any Linux decision.
    path (the production signing keys of ADR-0027, the PKCS#11 signer) is
    checked too. The rules this ADR adds (drive prefixes, ASCII-only,
    case-insensitive and 8.3 sibling collisions) extend that same shared
-   validator, behind a Windows-target profile so a Linux release is not
-   refused for names that are legal there, and `release-tool` calls the
-   validator rather than keeping a second copy. Normalization of the key
+   validator **for every manifest, whatever platform it ships to**: there is
+   no target profile to select. A manifest has no target field, and adding
+   one, a build flag or a `cfg(windows)` branch at verify time would each be
+   a second path that can disagree with the first. The cost of one rule set
+   is nil in practice: every entry of a release is a file this project names
+   itself (`agent`, `watchdog`, `cli`, their libraries and content), so a
+   Linux release that needed a name these rules refuse would be a naming
+   choice to change, not a legitimate file to accept. `release-tool` calls
+   the validator rather than keeping a second copy. Normalization of the key
    itself still happens once, at **build time**, never at verify time. A manifest key is always relative (ADR-0015 Decision 2), so
    `release-tool` rejects a candidate entry outright (refuses to build the
    manifest, not a warning) if its path contains a `..` segment, a backslash
@@ -407,14 +413,27 @@ without change. It does not revisit any Linux decision.
       a `Result`, so a log line alone is not a security guarantee on that
       path — a log is something an operator might read eventually, not a
       state the service is actually in. So `Drop`, on a reharden failure,
-      does not stop at logging: it immediately attempts `sc stop` on the
-      service itself, synchronously (a destructor can still run blocking
-      code, it just cannot return its outcome to the original caller). A
-      service that is down cannot be reached through the permissive SDDL
-      it was left under, so this trades "promotion also failed" for "stayed
-      exploitable" — the fail-safe direction. Both outcomes are logged at
-      error level: the reharden failure itself, and separately whether the
-      follow-up `sc stop` succeeded. If `sc stop` *also* fails — the
+      does not stop at logging. It first **retries the reharden** with a
+      bounded backoff (three attempts over about two seconds): the transient
+      case, an antivirus holding the service's descriptor, clears there.
+      Only if every attempt fails does it take the fail-safe: it writes a
+      `%ProgramData%\Synthaea\reharden_pending` marker, then `sc stop`s the
+      service, synchronously (a destructor can still run blocking code, it
+      just cannot return its outcome to the original caller). A service that
+      is down cannot be reached through the permissive SDDL it was left
+      under, so this trades "promotion also failed" for "stayed exploitable"
+      — the fail-safe direction. It must not leave the sensor off until a
+      reboot, so the stop is a *failure* stop: the watchdog's stop handler
+      reports a non-zero service-specific exit code whenever the marker is
+      present (unlike step 5's deliberate stop, which reports
+      `ERROR_SUCCESS`), and `failureflag= 1` (Decision 6) then queues the
+      restart ladder. The watchdog's startup rehardens the service
+      descriptor before anything else, next to Decision 3's startup
+      reconciliation of `current`, and removes the marker only once that
+      succeeded, so the restarted service comes back hardened (it runs as
+      `SY`, which the hardened SDDL keeps at full control). Every outcome is
+      logged at error level: each failed reharden attempt, and separately
+      whether the fail-safe `sc stop` succeeded. If `sc stop` *also* fails — the
       genuinely worst case, a service both unhardened and unstoppable by
       this path — that is logged at the highest severity this module has,
       as a terminal, operator-actionable condition; there is nothing
@@ -433,20 +452,23 @@ without change. It does not revisit any Linux decision.
       logs at error level on the early-return path, per above) instead.
       That is the intended fix, not an accident of the move, and is called
       out here so it is not mistaken for implementation detail.
-      Both ACL functions move from `watchdog/src/service/windows.rs` into
-      `updater`'s own Windows layout module: `updater` is a leaf crate
-      (`tools/check-deps.py`'s LEAF tier, base-tier dependencies only), so it
-      cannot depend on `watchdog` (a *binary*, Context) for them — that
-      dependency direction would be backwards. `watchdog`
-      (free to depend on anything, being a binary) calls them from `updater`
-      instead of owning them; `cmd_install` changes its two call sites
-      accordingly. One more required change comes with the move: `run_sc`
-      and both ACL functions currently return `anyhow::Result` (fine in
-      `watchdog`, a binary), but `updater` is a library crate, and this
-      project's error convention (`CLAUDE.md`) is `thiserror` there —
-      `UpdaterError` gains a variant for an `sc` invocation that fails to
-      launch or returns non-zero, and these functions return that instead of
-      `anyhow::Result` once they live in `updater`.
+      **Where the code lives: the promotion is orchestrated by the watchdog
+      binary, not by `updater`.** `updater` is a leaf crate
+      (`tools/check-deps.py`'s LEAF tier), and `CLAUDE.md` scopes its
+      platform exception narrowly. So `updater` keeps only what is
+      library-shaped and testable without a service: the `versions\`/`current`
+      layout, the manifest and its path validator, the ban list, the
+      release-version floor and the file-level operations (stage, the
+      `current.tmp` replace with its retry). Everything that talks to the SCM
+      stays in `watchdog`, which `tools/check-deps.py` lets depend on
+      anything: the ACL reset/reharden bracket and its guard, `stop_and_wait`,
+      the `sc config`/`sc start` calls, the rollback sequence and the service
+      name. `apply-release` on Windows is therefore a `watchdog` subcommand
+      that calls `updater` for the layout and drives the service itself, and
+      `reset_service_acl_best_effort`/`harden_service_acl` stay in
+      `watchdog/src/service/windows.rs`, keeping their `anyhow::Result`
+      (binary convention). `updater`'s Windows module needs no `sc` invocation
+      and no new `UpdaterError` variant for one.
    4. Only now flips `current` to the new target: writes the active path
       into a fresh `current.tmp` file, then `MoveFileExW(current.tmp,
       current, MOVEFILE_REPLACE_EXISTING)` — an ordinary file-over-file
@@ -515,7 +537,9 @@ without change. It does not revisit any Linux decision.
         `failureflag= 1` only a non-zero stop queues a failure action, so
         nothing else would relaunch it. It exits with a distinct "previous
         version did not stop" error so the operator or timer can retry the
-        same release later; if the second wait also times out it logs at
+        same release later (the release-version floor was not raised, see
+        "Release-version floor" below, so the retry is not refused as not
+        newer); if the second wait also times out it logs at
         error level that the sensor is down until an operator acts.
       - **Stopped, then `sc start` fails:** the case below, the only one that
         is about `vN` itself.
@@ -577,11 +601,25 @@ without change. It does not revisit any Linux decision.
    so it cannot stand in for a high-water mark: with `versions\` wiped,
    `check_release_version(None)` would accept any validly signed release,
    including an older vulnerable one that was never banned. `apply-release`
-   therefore persists `%ProgramData%\Synthaea\max_release_version` (the
-   highest `release_version` it has verified, written before the promotion
-   it belongs to and replaced like `current`) and passes it as `current` to
-   `check_release_version`. `cmd_install` never removes it, same as the ban
-   list; absent means no release was ever staged.
+   therefore persists `%ProgramData%\Synthaea\max_release_version` and passes
+   it as `current` to `check_release_version`, which refuses a
+   `release_version` at or below it (`ReleaseNotNewer`). The floor records
+   the highest release that was **promoted**, not merely verified: it is
+   written (replaced like `current`) only once vN's `sc start` has reported
+   the service running on the new `binPath` (Decision 4 step 5), never
+   before. Written any earlier, it would refuse the very retry step 5
+   promises: a release that never ran would already sit at the floor, and
+   its retry would be "not newer". So every failure before that point
+   leaves the floor where it was, and the same release can be applied again:
+   the pre-flight self-check rejecting it (step 1), `sc config` failing
+   (step 2), the `current` write failing (step 4), the old service not
+   stopping in time (step 5), and vN's own `sc start` failing (step 5, where
+   the ban list, not the floor, is what refuses vN from then on). A release
+   that was promoted and then failed its health check and was banned
+   (Decision 5) keeps the floor it raised: the fix for it must be a newer
+   release, never a re-release of an older number. `cmd_install` never
+   removes the floor, same as the ban list; absent means no release was ever
+   promoted.
    **Sequencing, so this wipe never races a running image inside
    `versions\`:** a major upgrade's old service, if it is currently running
    from a staged `versions\vN\watchdog.exe` rather than from `Program
@@ -828,9 +866,9 @@ without change. It does not revisit any Linux decision.
   exception's own text should name this ADR's job once it exists, rather
   than leaving a future reader to wonder whether the Windows module it names
   is actually sanctioned. The paragraph names this ADR as proposed; the scope stays
-  narrow — this ADR's own
-  layout/promotion logic, not a general invitation for `updater` to grow
-  unrelated platform branches.
+  narrow — this ADR's own layout, ban list, floor and file operations (the
+  service orchestration is the watchdog binary's, Decision 4 step 3), not a
+  general invitation for `updater` to grow unrelated platform branches.
 - `agent/src/integrity.rs` (issue #71) can finally gain a Windows call site once
   this layout exists: `commands/windows.rs` wires `integrity::spawn_monitor` the
   same way `commands/linux.rs:391` already does, closing that half of #71's
@@ -841,18 +879,23 @@ without change. It does not revisit any Linux decision.
   an `apply-release` promotion on Windows stages into a fresh `versions\vN\`
   before touching `binPath`, the same non-overlapping-write property that let
   ADR-0015 settle this for Linux without an allowlist.
-- `reset_service_acl_best_effort`/`harden_service_acl` move from
-  `watchdog/src/service/windows.rs` into `updater`'s Windows module (Decision
-  4), returning `UpdaterError` instead of `anyhow::Result` once there
-  (library-crate convention); `watchdog`'s `cmd_install` becomes a caller of
-  `updater`, not the owner of these two functions — the only direction
-  `tools/check-deps.py`'s LEAF tier allows, since `updater` cannot depend on
-  a binary. `cmd_install` itself also changes behaviorally, not just by
-  relocation: `reset= 180` instead of `0`, a new `sc failureflag SynthaEDR 1`
-  call (Decision 6), and rehardening failure becomes a hard error on the
-  normal path, and a logged `sc stop` fail-safe attempt (never just a logged
-  warning) on the early-return path, instead of today's bare best-effort
-  log-and-continue (Decision 4).
+- The split between `updater` and `watchdog` (Decision 4 step 3): `updater`'s
+  Windows module holds the layout, ban list, floor and file operations only;
+  the SCM orchestration (`reset_service_acl_best_effort`/`harden_service_acl`,
+  which stay in `watchdog/src/service/windows.rs`, `stop_and_wait`, `sc
+  config`/`sc start`, rollback, the service name) is the watchdog binary's.
+  `cmd_install` also changes behaviorally: `reset= 180` instead of `0`, a new
+  `sc failureflag SynthaEDR 1` call (Decision 6), and rehardening failure
+  becomes a hard error on the normal path; on the early-return path the guard
+  retries the reharden, then takes the fail-safe stop with a non-zero exit,
+  and the watchdog's startup rehardens (Decision 4 step 3), instead of today's
+  bare best-effort log-and-continue.
+- Tests the implementation must carry, besides the unit tests of each piece:
+  the retry of the same release after each failure that leaves the floor
+  untouched (pre-flight self-check, `sc config`, `current` write, old service
+  not stopping in time) is accepted; the retry of a release whose promotion
+  succeeded and was then banned is refused (ban list), and a re-release under
+  an older number is refused (floor).
 - `%ProgramData%\Synthaea\` gains a DACL it did not have before (Decision 3)
   — the first piece of Windows-side code in this project to set one
   explicitly rather than rely on inherited defaults — plus an
