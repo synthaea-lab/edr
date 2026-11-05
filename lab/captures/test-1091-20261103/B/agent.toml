@@ -1,0 +1,27 @@
+schema_version = 1
+
+[server]
+control_plane_url = "https://cp.invalid.example"
+mtls_cert       = '<lab>\no-such\client.crt'
+mtls_key        = '<lab>\no-such\client.key'
+mtls_passphrase = "envvar:SYNTHAEA_MTLS_PASSPHRASE"
+offline_fallback = true
+
+[log]
+dir     = '<lab>\B\logs'
+level   = "info"
+max_mb  = 256
+
+[storage]
+state_dir     = '<lab>\B\state'
+spool_max_mb  = 256
+
+[ipc]
+endpoint = '\\.\pipe\synthaea-agent-t1091b'
+
+[resources]
+worker_threads = 0
+max_reconnect_backoff_ms = 60000
+
+[detection]
+utc_offset_minutes = 600

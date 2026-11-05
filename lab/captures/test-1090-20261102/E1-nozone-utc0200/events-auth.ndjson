@@ -1,0 +1,3 @@
+{"type":"auth","meta":{"pid":12385,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793584808783013000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"lab1090","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":12428,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793584813281141000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"lab1090","source_address":"192.168.100.1"}
+{"type":"auth","meta":{"pid":12460,"ppid":0,"user":{"os":"unix","uid":0,"gid":0},"timestamp_ns":1793584823524196000,"comm":"sshd-session"},"outcome":"success","kind":"logon","target_user":"edr-lab","source_address":"192.168.100.1"}
