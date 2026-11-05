@@ -28,3 +28,28 @@ callback is the follow-up that closes the exec → callback window.
 - Windows build of the ETW change (no Windows target on the dev host).
 - `agent` tests (the host cannot link it: no libstdc++), only `cargo check`/clippy.
 - Lab: rename-and-replace within the enrichment latency must raise T1204.002.
+
+## Status review (2026-11-05, read against `main`, nothing run on a VM)
+
+The issue's two comments (2026-10-22, 2026-10-27) predate d7f72d7a (2026-10-29), which
+built the exec-time identity after all (`ExecEvent::image_file_id`, v59, ETW sensor). They
+read "ExecEvent has no such field": that is no longer true. Defect 2 (#794) and defect 1
+(Windows, userland capture) are both in code. Nothing in code is left that can be
+validated without a Windows host, so this review changes documentation only.
+
+Why Linux and macOS need no code today: the gate only silences on
+`ImageSignature::chain_verified`, which is `cfg!(windows)` in `agent/src/sink.rs`. Elsewhere
+a `Valid` never silences T1204.002 ("signed, chain not verified on this platform"), so a
+swapped file cannot hide the alert and `image_file_id` stays `None`. `IDENTITY_CAPTURED`
+in `agent/src/enrich_queue.rs` is `cfg!(windows)` for the same reason.
+
+### Per-OS split of what remains
+
+| OS | Needed | Needs a probe / VM |
+|----|--------|--------------------|
+| Windows | Lab run of the "Done when" (rename-and-replace inside the enrichment latency raises T1204.002); Windows build and `agent` tests of the ETW identity (`the_sensor_and_enrichment_agree_on_a_files_identity`, `a_valid_signature_of_a_file_that_is_not_the_image_that_ran_still_alerts`) never ran on a Windows host. Measure the exec -> ETW delivery window. Airtight fix: kernel process-creation callback in the minifilter (#136, #853, #857). | Windows VM + CI |
+| macOS | Only if a chain-verified verdict is ever allowed to silence the gate there (today it cannot: ad-hoc signatures count as `Valid`). Then the ES exec message carries the image's `stat` (`es_file_t.stat`, device + inode): read it in `endpoint-security/src/normalize.rs` into `image_file_id` in the `{dev:016x}:{ino:032x}` format of `enrich::path_identity`, and flip `IDENTITY_CAPTURED`. Not verified: ES field availability on the deployment target, and device number encoding versus `stat(2)` from userland. | macOS host |
+| Linux | Same condition (no chain-verified signature check exists on Linux). The audit PATH record gives `dev`/`inode` of the executed file; eBPF could read the exec'd inode in the probe. Which of the two is exact for an exec through a symlink or an overlayfs container, and whether audit `dev=` (major:minor) maps to `st_dev`, is unverified. | Linux VM (audit and eBPF paths) |
+
+No schema change is needed for any row: `image_file_id` is a free-form identity token, and
+versions 60-62 stay untouched.
