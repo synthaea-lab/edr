@@ -199,17 +199,32 @@ than ADR-0027's, not a weaker version of the same one.
 
    **A lost response must not strand the host.** That guarantee covers the server's state, not
    the host's: the commit can succeed and the `200` be dropped, or `agent enroll` can crash
-   before it writes the certificate. So `agent enroll` writes its private key to disk *before*
-   the first request, and the server records the SHA-256 of the CSR's public key on the
-   `Agent` row it creates. A retry with the same token and the same public key finds that row,
-   consumes no further use, and re-signs a certificate for the same `enrollmentId` instead of
-   failing as exhausted or minting a second identity; a different public key presented with
-   an already-consumed token is an ordinary exhausted-token refusal. The retry window is the
-   token's own expiry.
+   before it writes the certificate. So `agent enroll` generates a **fresh** key for each
+   enrollment and writes it to its own pending file (`server.mtls_key` with a `.pending`
+   suffix, same ownership and mode) *before* the first request. It never sends the public key
+   of a live `server.mtls_key`: a cloned golden image already holds one, and re-signing it
+   would hand two machines the same `enrollmentId`, the shared identity the per-host key
+   exists to prevent. The pending key is reused only for retries of that enrollment, only
+   until the token's expiry, and is moved into place (and so no longer pending) once the
+   certificate is written. The server records, on the `Agent` row it redeems onto, the token id
+   and the SHA-256 of the CSR's public key, overwriting both at every redemption (a reissue
+   redeems onto an existing row and replaces them). A retry is looked up by the pair (token
+   id, key hash), never by the key hash alone. It consumes no further use, so it skips the
+   conditional `UPDATE`, but it still verifies the token's secret, and it is refused when the
+   `Agent` is `revoked` or when the pair no longer matches the row because a later reissue
+   replaced it (with a new `enrollmentId`); otherwise it re-signs a certificate for the same
+   `enrollmentId` instead of failing as exhausted or minting a second identity. A different
+   public key presented with an already-consumed token is an ordinary exhausted-token refusal.
+   The retry window is the token's own expiry.
 
    Abuse is bounded per token, not per address. A presented token whose id exists but whose
    secret does not match increments that token's failure count, outside the rolled-back
-   transaction, and every such failure is audited; an unknown id is a plain `401`. The count
+   transaction; an unknown id is a plain `401`. The audit trail of those failures is bounded,
+   because the endpoint is unauthenticated and anyone who sees a token id could otherwise
+   write one `AuditLog` row per request: the count and the time of the last failure live on
+   the token row, and an audit row is written only for the first failure of a token in each
+   hour, its `details` carrying the running count, so an operator still sees every attack and
+   its size at one row per token per hour. The count
    never refuses a request that carries the right secret: the id half of `<token id>.<secret>`
    is not secret (console lists, audit rows and deployment scripts show it), so a lock on wrong
    secrets would let anyone who sees an id stall a fleet rollout, and against a 256-bit secret
@@ -232,15 +247,17 @@ than ADR-0027's, not a weaker version of the same one.
    `agent run` needs no change at all; it already loads whatever is at those paths.
    It loads them once, at start: a running `agent run` keeps its old in-memory identity,
    and after a reissue (which rotates `enrollmentId`) that identity is refused with
-   `403` as non-retryable until the service restarts. So `agent enroll` ends by telling the
-   operator that a running service must be restarted, and the procedure includes that
-   restart; how it is triggered (the watchdog-owned service manager) is left to the
-   implementation.
+   `403` "Agent not enrolled" as non-retryable. **Required:** on that `403`, a running agent
+   reloads its identity files once, if they changed on disk since it loaded them, and retries
+   with the new pair before treating the refusal as final. A reissue then takes effect
+   without restarting the service; `agent enroll` still tells the operator that a restart
+   also works, for an agent too old to reload.
 
 4. **Concrete lifetime, renewal window, and a cheap revocation check on both.** A signed
    certificate is valid 30 days, and renewal starts with at least a 10-day lead — generous
    enough that a control-plane outage has to run longer than ten days before any agent is at
-   risk of hitting its hard expiry. These are config defaults, not hardcoded forever, but they
+   risk of hitting its hard expiry. These are control-plane settings with these defaults (one
+   value for the server, not per tenant), not hardcoded forever, but they
    are *stated*: a number has to exist for "the server was down longer than the cert
    lifetime" to even be a question with an answer.
 
@@ -275,12 +292,29 @@ than ADR-0027's, not a weaker version of the same one.
    **Renewal has a ceiling.** A valid certificate alone must not be enough to renew forever:
    a stolen certificate and key (a plain file on disk) would otherwise renew every 15 days
    even after the host is decommissioned, since TLS-layer revocation is deferred. The `Agent`
-   row records when its identity chain began (enrollment or reissue), and the server refuses a
-   renewal once the chain is older than a maximum (config default 90 days): the host then
-   needs a fresh token, the same operator action as after an expiry. Every renewal writes an
-   `AuditLog` row (`userId` `"system"`, the same precedent as `check-ring-health`, with the
-   source address), and a renewal from an address other than the previous one is flagged in
-   that row.
+   row records when its identity chain ends, set at enrollment or reissue, and the server
+   refuses a renewal past it: the host then needs a fresh token, the same operator action as
+   after an expiry. A bare ceiling would recreate the fleet-wide cliff that renewal jitter
+   avoids (a golden-image fleet enrolled in one afternoon would reach it together, and every
+   host would need a token by hand), so it comes with what makes it operable:
+   - **Jitter.** The chain end is the chain start plus the maximum (a server setting, default
+     90 days) plus a random 0 to 14 days, drawn once per chain, so a cohort does not end the
+     same day.
+   - **A warning before the cliff.** The renewal response carries the chain end; the agent
+     logs a warning and puts "chain ends in N days" in its heartbeat once fewer than 14 days
+     remain, and the console lists the chains ending within 14 days.
+   - **Extension without a token.** An admin action extends a chain, for one agent or for a
+     tenant, by moving its end forward (by at most the maximum again). It is audited like
+     every console action and issues nothing: the host keeps renewing on its own certificate.
+
+   The ceiling still answers the stolen-certificate case: a decommissioned host's chain is not
+   extended, so a copy of its key stops renewing at the chain end. The maximum is a
+   control-plane setting, not per tenant, like the lifetime and renewal window above. Every
+   renewal writes an `AuditLog` row (`userId` `"system"`, the same precedent as
+   `check-ring-health`, with the source address), and a renewal from an address other than
+   the previous one is flagged in that row. The console's audit view shows the flag; nothing
+   alerts on it in this ADR, since an address change is common (DHCP, roaming laptops) and an
+   alert needs its own design.
 
    **Revocation is a flag every agent route checks.** A new `Agent.revoked` boolean is read by
    `authenticateAgent`, and a revoked agent is refused with `403` and a body that names
@@ -390,10 +424,17 @@ than ADR-0027's, not a weaker version of the same one.
   client-CA bundle (existing `ca.crt` plus the new CA) that `ssl_client_certificate` now
   points at (Decision 2). `docker-compose.yml` gains the key mount for `server`.
 - A new `EnrollmentToken` model (tenant-scoped; id plus hashed 256-bit secret; expiry; usage
-  cap and count; failure count and `disabled`; optional `agentId` for a reissue token) and the
-  console UI to create, list, disable and delete them.
+  cap and count; failure count, time of the last failure and `disabled`; optional `agentId`
+  for a reissue token) and the console UI to create, list, disable and delete them.
 - `Agent.revoked: Boolean` (default `false`) and `revokedAt`, read by `authenticateAgent`;
   console "revoke" and "un-revoke" actions, each audited.
+- On `Agent`, for the idempotent retry and the renewal ceiling (Decisions 3 and 4): the id of
+  the token it was last redeemed with and the SHA-256 of that redemption's public key (both
+  overwritten at every redemption), and the chain end. The console lists chains ending within
+  14 days and has an audited "extend chain" action, per agent and per tenant; the agent's
+  heartbeat gains the days left on its chain once under 14.
+- On the agent: a pending key file next to `server.mtls_key` during an enrollment, and the
+  one-time reload of the identity files on a `403` "Agent not enrolled" (Decision 3).
 - `agent enroll` (token, never presents a client certificate) and `agent enroll --renew`
   (current certificate), plus the renewal check inside `agent run` (Decision 4) —
   `updater`-adjacent in style but not in that crate (no manifest, no signature, no rollback
