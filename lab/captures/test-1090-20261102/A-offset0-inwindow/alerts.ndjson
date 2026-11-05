@@ -1,0 +1,28 @@
+{"timestamp_ns":1793631018137217331,"technique":"T1543.002","message":"unit=session-79.scope pid=1: systemd service first seen starting — unit: session-79.scope"}
+{"timestamp_ns":1793631025921067104,"technique":"T1059/T1071","message":"pid=11234: spawn + network connection in the same time window"}
+{"timestamp_ns":1793631025934726956,"technique":"T1059/T1071","message":"pid=11235: spawn + network connection in the same time window"}
+{"timestamp_ns":1793631026002117170,"technique":"BAYES","message":"pid=11234 comm=sshd-session: high Bayesian score (log_odds=2.42, P=92%)"}
+{"timestamp_ns":1793631026002141174,"technique":"RESPONSE-ESCALATE","message":"escalated 854:sshd-session at Critical severity across 1 source(s): T1059/T1071, BAYES"}
+{"timestamp_ns":1793631026002162454,"technique":"RESPONSE-KILL","message":"pid 11234 would have been killed on a high-confidence correlated verdict (observe-only)"}
+{"timestamp_ns":1793631026041746715,"technique":"T1003.008","message":"pid=10795 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793631026043716832,"technique":"T1003.008","message":"pid=10796 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793631026080799568,"technique":"T1003.008","message":"pid=10797 comm=systemd-userwor: opened /etc/shadow for reading from outside the authentication stack"}
+{"timestamp_ns":1793631026144140947,"technique":"T1070.006","message":"pid=11239 comm=systemd: explicit timestamp change requested for /systemd/propagate/.os-release-stage/#11"}
+{"timestamp_ns":1793631026211234512,"technique":"T1543.002","message":"unit=user-1001.slice pid=1: systemd service first seen starting — unit: user-1001.slice"}
+{"timestamp_ns":1793631026211558921,"technique":"T1543.002","message":"unit=user-runtime-dir@1001.service pid=1: systemd service first seen starting — unit: user-runtime-dir@1001.service"}
+{"timestamp_ns":1793631026641324456,"technique":"T1543.002","message":"unit=app.slice pid=11239: systemd service first seen starting — unit: app.slice"}
+{"timestamp_ns":1793631026642740024,"technique":"T1543.002","message":"unit=grub-boot-success.timer pid=11239: systemd service first seen starting — unit: grub-boot-success.timer"}
+{"timestamp_ns":1793631026643569226,"technique":"T1543.002","message":"unit=systemd-tmpfiles-clean.timer pid=11239: systemd service first seen starting — unit: systemd-tmpfiles-clean.timer"}
+{"timestamp_ns":1793631026644254516,"technique":"T1543.002","message":"unit=paths.target pid=11239: systemd service first seen starting — unit: paths.target"}
+{"timestamp_ns":1793631026644999488,"technique":"T1543.002","message":"unit=timers.target pid=11239: systemd service first seen starting — unit: timers.target"}
+{"timestamp_ns":1793631026645758016,"technique":"T1543.002","message":"unit=systemd-ask-password.socket pid=11239: systemd service first seen starting — unit: systemd-ask-password.socket"}
+{"timestamp_ns":1793631026646499817,"technique":"T1543.002","message":"unit=dbus.socket pid=11239: systemd service first seen starting — unit: dbus.socket"}
+{"timestamp_ns":1793631026647196983,"technique":"T1543.002","message":"unit=systemd-tmpfiles-setup.service pid=11239: systemd service first seen starting — unit: systemd-tmpfiles-setup.service"}
+{"timestamp_ns":1793631026647867415,"technique":"T1543.002","message":"unit=sockets.target pid=11239: systemd service first seen starting — unit: sockets.target"}
+{"timestamp_ns":1793631026648542566,"technique":"T1543.002","message":"unit=basic.target pid=11239: systemd service first seen starting — unit: basic.target"}
+{"timestamp_ns":1793631026649174276,"technique":"T1543.002","message":"unit=default.target pid=11239: systemd service first seen starting — unit: default.target"}
+{"timestamp_ns":1793631026649699671,"technique":"T1543.002","message":"unit=user@1001.service pid=1: systemd service first seen starting — unit: user@1001.service"}
+{"timestamp_ns":1793631026650145397,"technique":"T1543.002","message":"unit=session-80.scope pid=1: systemd service first seen starting — unit: session-80.scope"}
+{"timestamp_ns":1793631036356389604,"technique":"T1059/T1071","message":"pid=11276: spawn + network connection in the same time window"}
+{"timestamp_ns":1793631036370791269,"technique":"T1059/T1071","message":"pid=11277: spawn + network connection in the same time window"}
+{"timestamp_ns":1793631036600619011,"technique":"T1562","message":"agent received signal 15 (SIGTERM) from pid 11314 (`pkill`) — recording before exit"}

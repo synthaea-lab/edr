@@ -175,9 +175,8 @@ export function extractGraphFacts(hostKey: string, event: unknown, at: Date): Gr
       edges.push({ kind: "logged_in", from: identity, to: host, at });
     }
   } else if (e.type === "auth") {
-    // A logon the host accepted (Linux sshd `Accepted`, Windows 4624). No rule fires on one yet
-    // (`on_auth` returns nothing for it), so a stored detection does not carry such an event today:
-    // this is ready for the rule that will (T1078, #377). Never a failed logon, whose
+    // A logon the host accepted (Linux sshd `Accepted`, Windows 4624), as FIRST-SEEN-LOGON and
+    // ODD-HOUR-LOGON (T1078) carry it. Never a failed logon, whose
     // user name is text the attacker picked, and never `explicit_credentials` / `privileged_session`
     // (`su`, `sudo -u`, a successful `sudo`): an attacker already on the host chooses the account
     // they name there. Both would make an identity a way to link hosts on demand.
@@ -185,7 +184,9 @@ export function extractGraphFacts(hostKey: string, event: unknown, at: Date): Gr
     if (user) {
       addHost();
       const identity: NodeRef = { kind: "identity", key: user };
-      nodes.push({ ...identity, label: user, attrs: {}, at });
+      // The Windows SID names the account in every language; the name does not (`Système`).
+      const sid = nonEmptyString(e.target_user_sid);
+      nodes.push({ ...identity, label: user, attrs: sid ? { sid } : {}, at });
       edges.push({ kind: "logged_in", from: identity, to: host, at });
     }
   }

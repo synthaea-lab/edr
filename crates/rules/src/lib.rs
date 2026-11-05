@@ -16,6 +16,7 @@ mod defender;
 mod egressdomain;
 mod exclusions;
 mod failure_join;
+mod impactctx;
 mod inventory;
 mod ld_trust;
 mod ldap;
@@ -34,6 +35,7 @@ mod staging;
 mod state;
 mod stateless;
 mod sudo;
+mod unitstop;
 
 // AMSI content rules (#282): the dispatcher for `AmsiContent` events.
 pub use amsi::{evaluate_amsi_content, excerpt as amsi_excerpt};
