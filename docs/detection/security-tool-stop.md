@@ -88,13 +88,22 @@ What is covered, and what is not (ADR-0046):
 
 | Path | Coverage | Where |
 | --- | --- | --- |
-| `systemctl freeze <tool>`, `systemctl set-property <tool> MemoryMax=\|MemoryHigh=\|TasksMax=` | Medium, T1562.001, by command (`check_security_tool_throttle`) | exec stream |
+| `systemctl freeze <tool>...` (every unit named is checked), `systemctl set-property <tool> MemoryMax=\|MemoryHigh=\|TasksMax=` | Medium, T1562.001, by command (`check_security_tool_throttle`) | exec stream |
 | `prlimit --pid N --cpu=...` / `--as=...` | Low, T1562.001, **target not resolved to a tool** | exec stream |
 | write to `memory.max`, `memory.high`, `cgroup.freeze`, `pids.max` (and v1 `memory.limit_in_bytes`, `memory.soft_limit_in_bytes`, `freezer.state`) of a listed unit's cgroup | rule written (`check_security_tool_cgroup_write`, Medium, pid 1 skipped), **no event reaches it yet** | `FileOpenEvent` |
 | `prlimit64` syscall on a watched tgid | not built | needs a probe |
 
 The cgroup-file rule is the contract of a probe change that needs a VM: `is_filtered_path` drops
-`/sys/` unconditionally, so the open never leaves the kernel. Same limits as the exec rules above:
+a path that starts with `/sys/`, so the **canonical** path never leaves the kernel. A relative
+path (`cd` into the slice, then `echo 1M > auditd.service/memory.max`) or one written
+`//sys/fs/cgroup/...` or with `/./` passes the filter, and the rule reads those forms too
+(`cgroup_unit_and_file`); that these opens leave the probe is read from the filter and the
+normalizer, not measured. A bare `cgroup.freeze` after a `cd` into the unit's directory names no
+unit and is not read. Not covered, by choice: the ancestor slice (`systemctl freeze system.slice`,
+a write to `system.slice/cgroup.freeze`: it acts on every service of the host), `CPUQuota`
+(a quota low enough to blind a tool is a threshold this rule cannot judge without parsing the
+value), and moving the tool's pid into a cgroup the attacker froze or limited (`cgroup.procs`).
+Same limits as the exec rules above:
 argv-based, hence bypassable (`echo` through a shell redirection has no argv at all, which is why
 the file rule exists) and blind when `argv` is empty (#1118). `systemctl freeze` and
 `set-property` reach the cgroup through pid 1, so the file rule skips pid 1 and the exec rule is

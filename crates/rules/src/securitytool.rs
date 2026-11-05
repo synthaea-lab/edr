@@ -78,15 +78,16 @@ pub(crate) fn check_security_tool_stop(event: &ExecEvent) -> Option<Alert> {
 /// out on purpose.
 const LIMIT_PROPERTIES: &[&str] = &["memorymax", "memoryhigh", "tasksmax"];
 
-/// What a `systemctl` exec does to a unit's cgroup besides stopping it, and the unit: `freeze`
-/// (the cgroup freezer, the effect of a `SIGSTOP` without the signal) or `set-property` of one
-/// of [`LIMIT_PROPERTIES`] (not `infinity` or empty, which lifts a limit). Lowercase unit name,
-/// without `.service`.
-fn cgroup_squeeze(args: &[String]) -> Option<(&'static str, String)> {
+/// What a `systemctl` exec does to the cgroups of units besides stopping them, and the units:
+/// `freeze` (the cgroup freezer, the effect of a `SIGSTOP` without the signal; it takes several
+/// units, `systemctl freeze nginx auditd`, so every positional one is returned) or
+/// `set-property` of one of [`LIMIT_PROPERTIES`] (not `infinity` or empty, which lifts a limit).
+/// Lowercase unit names, without `.service`.
+fn cgroup_squeeze(args: &[String]) -> Option<(&'static str, Vec<String>)> {
     let mut positional = args.iter().filter(|a| !a.starts_with('-'));
     let verb = positional.next()?;
     match verb.as_str() {
-        "freeze" => positional.next().map(|u| ("freeze", unit_base(u))),
+        "freeze" => Some(("freeze", positional.map(|u| unit_base(u)).collect())),
         "set-property" => {
             let rest: Vec<&String> = positional.collect();
             let limits = rest.iter().any(|a| {
@@ -95,7 +96,7 @@ fn cgroup_squeeze(args: &[String]) -> Option<(&'static str, String)> {
                 })
             });
             let unit = rest.iter().find(|a| !a.contains('='))?;
-            limits.then(|| ("set-property limit", unit_base(unit)))
+            limits.then(|| ("set-property limit", vec![unit_base(unit)]))
         }
         _ => None,
     }
@@ -109,8 +110,16 @@ fn unit_base(unit: &str) -> String {
 /// signal the probe can attribute (#1138): `systemctl freeze <tool>` (the cgroup freezer) and
 /// `systemctl set-property <tool> MemoryMax=...|MemoryHigh=...|TasksMax=...` (a limit the memcg
 /// OOM killer then enforces with a `SEND_SIG_PRIV` `SIGKILL`, which the `signal_generate` probe
-/// drops). Medium, like the stop verbs, and for the same reasons: it reads the command, an
-/// administrator can do the same, and an empty `argv` (#1118) blinds it.
+/// drops). Every unit of a `freeze` is checked, not the first only. Medium, like the stop
+/// verbs, and for the same reasons: it reads the command, an administrator can do the same,
+/// and an empty `argv` (#1118) blinds it.
+///
+/// Not covered, by choice (ADR-0046): the **ancestor slice** (`systemctl freeze system.slice`,
+/// `set-property system.slice MemoryMax=...`, a write to `system.slice/cgroup.freeze`), which
+/// acts on every service of the host and is ordinary administration far more often than an
+/// attack on a tool; `CPUQuota`, which has no threshold this rule can judge without reading the
+/// value; and moving the tool's pid into a cgroup the attacker froze or limited
+/// (`cgroup.procs`).
 ///
 /// `prlimit --pid <pid> --cpu=...` (or `--as=...`) is the third path. The target is a pid and
 /// the exec says nothing of what runs there, so the alert is Low and names no tool: a
@@ -121,7 +130,8 @@ pub(crate) fn check_security_tool_throttle(event: &ExecEvent) -> Option<Alert> {
     let args = args(event);
     match program(event).as_str() {
         "systemctl" => {
-            let (how, tool) = cgroup_squeeze(&args).filter(|(_, tool)| is_security_tool(tool))?;
+            let (how, units) = cgroup_squeeze(&args)?;
+            let tool = units.iter().find(|unit| is_security_tool(unit))?;
             Some(Alert {
                 technique: "T1562.001",
                 severity: Severity::Medium,
@@ -145,8 +155,10 @@ pub(crate) fn check_security_tool_throttle(event: &ExecEvent) -> Option<Alert> {
 
 /// `prlimit --pid N --cpu=1:1`: a pid is named and a CPU or address-space limit is **set**
 /// (`--cpu` alone only prints it). Long options may be abbreviated to a unique prefix
-/// (`--cp=`), the short forms attach their value (`-t1:1`). Not exhaustive: `--as` is matched
-/// whole, and an option clustered with another short one (`-tp`) is not read. That is the
+/// (`--cp=`, `--a=`: `a` is a unique prefix of `--as` among the long options of util-linux
+/// `prlimit`, from its manual page, not checked against a build), the short forms attach their
+/// value (`-t1:1`). Not exhaustive: an option clustered with another short one (`-tp`) is not
+/// read. That is the
 /// argv-reading limit of ADR-0006.
 fn prlimit_sets_cpu_or_as_on_a_pid(args: &[String]) -> bool {
     let names_pid = args.iter().any(|a| {
@@ -155,7 +167,9 @@ fn prlimit_sets_cpu_or_as_on_a_pid(args: &[String]) -> bool {
     let sets = args.iter().any(|a| {
         if let Some(long) = a.strip_prefix("--") {
             long.split_once('=').is_some_and(|(name, value)| {
-                !value.is_empty() && (name == "as" || (name.len() >= 2 && "cpu".starts_with(name)))
+                !value.is_empty()
+                    && (!name.is_empty() && "as".starts_with(name)
+                        || (name.len() >= 2 && "cpu".starts_with(name)))
             })
         } else {
             ["-t", "-v"].iter().any(|short| {
@@ -182,14 +196,41 @@ const THROTTLE_FILES: &[&str] = &[
 /// Open flags that make an open a write: `O_ACCMODE` (`O_WRONLY`, `O_RDWR`) or `O_TRUNC`.
 const OPEN_WRITE_INTENT: u32 = 0o3 | 0o1000;
 
+/// The unit and the control file a cgroup path names, read the way the kernel does for the
+/// forms that reach the rule: empty and `.` segments are dropped (`//sys/fs//cgroup/x/./y`),
+/// an absolute path must sit under `/sys/fs/cgroup`, and a **relative** path (the shell did a
+/// `cd` first, and `openat` with a directory fd gives one too) is read on its last two
+/// segments, `<unit>.service/<file>`. A relative path of one segment (`cgroup.freeze` after a
+/// `cd` into the unit's directory) names no unit and is not read: the event carries no working
+/// directory. `..` is not resolved. A relative `x.service/memory.max` from an unrelated
+/// directory is read as the cgroup of `x` (a false positive only for a listed tool's name).
+fn cgroup_unit_and_file(path: &str) -> Option<(&str, &str)> {
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    let rest = if path.starts_with('/') {
+        segments.strip_prefix(&["sys", "fs", "cgroup"][..])?
+    } else {
+        &segments[..]
+    };
+    let [.., unit, file] = rest else {
+        return None;
+    };
+    Some((unit.strip_suffix(".service")?, file))
+}
+
 /// T1562.001 — a write-intent open of `memory.max`, `memory.high`, `cgroup.freeze` or `pids.max`
 /// (or the cgroup v1 equivalents) in the cgroup of a listed unit: `echo 1M >
 /// /sys/fs/cgroup/system.slice/auditd.service/memory.max`. The kernel then OOM-kills or freezes
 /// the tool with no signal the probe reports (#1138).
 ///
-/// **The Linux probe does not deliver this event yet**: `is_filtered_path` drops `/sys/`
-/// unconditionally, so the rule is the contract of the probe change in ADR-0046 and fires for
-/// any source that reports such an open. Pid 1 is skipped: the manager writes these files when
+/// **The Linux probe does not deliver the canonical path yet**: `is_filtered_path` drops a path
+/// that *starts with* `/sys/`, so `/sys/fs/cgroup/...` never leaves the kernel, while a
+/// relative path or one written `//sys/...` passes the filter and is read here
+/// ([`cgroup_unit_and_file`]; not measured on a VM that these forms leave the probe). For the
+/// canonical path the rule is the contract of the probe change in ADR-0046 and fires for any
+/// source that reports such an open. Pid 1 is skipped: the manager writes these files when
 /// it starts a unit that has a configured limit, and when it carries out `systemctl
 /// set-property` and `freeze`, which `check_security_tool_throttle` reads from the exec.
 /// Medium.
@@ -198,10 +239,7 @@ pub(crate) fn check_security_tool_cgroup_write(event: &FileOpenEvent) -> Option<
     if event.flags & OPEN_WRITE_INTENT == 0 || event.meta.pid == 1 {
         return None;
     }
-    let rest = event.path.strip_prefix("/sys/fs/cgroup/")?;
-    let mut segments = rest.rsplit('/');
-    let file = segments.next()?;
-    let unit = segments.next()?.strip_suffix(".service")?;
+    let (unit, file) = cgroup_unit_and_file(&event.path)?;
     (THROTTLE_FILES.contains(&file) && SECURITY_SERVICES.contains(&unit)).then(|| Alert {
         technique: "T1562.001",
         severity: Severity::Medium,

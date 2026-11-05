@@ -36,15 +36,26 @@ in the rules.
    with a non-trivial new limit and the target tgid, matched against the watched pid map like
    `is_watched_signal_target`.
 5. **No schema change.** The rules reuse `ExecEvent` and `FileOpenEvent`. (b) would need a new
-   event or a field: it takes a schema version (60, 61 and 62 are claimed by #1114, #1116, #1127)
+   event or a field: it takes a schema version (the next free one when it lands: each schema PR takes the number after `main`'s at merge time)
    and is deferred.
 
 ## Consequences
 
 - Covered by command line: the two `systemctl` verbs and a `prlimit` that names a pid. Bypasses:
   `echo > memory.max`, `prlimit` called by a program (`setrlimit`/`prlimit64` from Python or C),
-  abbreviations and clustered short options, an empty `argv` (#1118).
-- The cgroup-file rule has no producer until 4a lands. Documented in
+  clustered short options, an empty `argv` (#1118), **an ancestor slice** (`systemctl freeze
+  system.slice`, `set-property system.slice MemoryMax=...`, a write to
+  `system.slice/cgroup.freeze`), **moving the tool's pid into a cgroup the attacker froze or
+  limited** (`cgroup.procs`; #1114's moved-out tracking keeps watching the pid, but no signal comes
+  from a freeze), a bare relative file name (`cd` into the unit's directory, then `echo 1 >
+  cgroup.freeze`: the event has no working directory), and `..` in a path. `CPUQuota` is left out
+  too: a quota low enough to blind a tool that must keep up with a ring buffer is a threshold
+  judgement this rule cannot make without parsing the value, and ordinary tuning looks the same.
+- The cgroup-file rule has no producer for the canonical `/sys/fs/cgroup/...` path until 4a
+  lands: `is_filtered_path` drops a path that *starts with* `/sys/`. A relative path, `//sys/...`
+  and `/./` or `//` inside the path pass the filter and the rule reads them (SoFrexs's review of
+  #1145; read in the filter and the normalizer, **not measured on a VM** that these opens leave the
+  probe). Documented in
   `docs/detection/security-tool-stop.md`; not claimed as detection.
 - Needs a VM to reproduce first, per the issue's "done when": the three kernel paths themselves, the
   exact open flags of `echo > memory.max` (the rule accepts `O_WRONLY`, `O_RDWR`, `O_TRUNC`), the
@@ -101,7 +112,9 @@ The owner left the open points to the session that built this change. What was d
 | Point | Decision | Why | Not verified |
 | --- | --- | --- | --- |
 | Probe change (let write-intent `/sys/fs/cgroup/` opens through `is_filtered_path`) | **Not made here.** | The filter is inlined in 14 BPF programs; the verifier on 5.15 and the ring volume cannot be judged without a run on each kernel, and the lab run of 2026-11-05 shows the rule would still miss the `systemctl set-property` path (pid 1 writes an `/etc` drop-in, not a visible `/sys` file). A probe change with no measured benefit is the wrong first step. | Verifier on 5.15, ring volume, the open flags of `echo > memory.max`. |
-| `prlimit64` tracepoint | **Not made.** | It needs a new event or field, so a schema version; 60, 61 and 62 are claimed by #1114, #1116 and #1127, so it would be 63 or later and would conflict with all three until they merge. Without a tracepoint the only visible `prlimit` path is argv, which the run showed is empty for 3 of 3 execs. | Whether a tracepoint sees the target pid reliably. |
+| `prlimit64` tracepoint | **Not made.** | It needs a new event or field, so a schema version, the next free one when it lands (the numbers move with every schema PR; main is at 62 and several open PRs have claimed the ones after it), so it would conflict with each until they merge. Without a tracepoint the only visible `prlimit` path is argv, which the run showed is empty for 3 of 3 execs. | Whether a tracepoint sees the target pid reliably. |
 | Low alert for `prlimit --pid`, no tool named | **Kept.** | It costs nothing, it is Low, and the doc states how it is bypassed (whole-match `--as`, clustered short options, direct `setrlimit`, empty argv). Removing it would remove the only trace of the attempt. | Its false-positive rate on a real fleet. |
 | Watching pid 1's write of `/etc/systemd/system.control/<unit>.d/*.conf` (seen in the run) | **Not built; recorded as the next step on #1138.** | It is a different detection shape (a write by the manager to a drop-in of a listed unit), and the run shows one file name pattern on one systemd version. It needs a second host (Rocky 9, systemd 252) before a rule keys on it. | Other systemd versions, `--runtime`, a unit with its own drop-in name. |
+| Ancestor slice (`system.slice`) of a freeze or a limit | **Left silent, listed as a bypass** (review of #1145: SoFrexs offered to keep it or to treat the slice as the tool's cgroup). | Freezing or limiting `system.slice` acts on every service of the host, sshd included, and is far more often administration than an attack on one tool; alerting would make the Medium rule noisy. The tests pin it silent. | A fleet's rate of `systemctl freeze/set-property` on a slice. |
+| Relative and `//` cgroup paths | **Read by the rule** (`cgroup_unit_and_file`). | They pass the probe filter today and reach the rule, unlike the canonical path. A relative path is read on `<unit>.service/<file>`, so a relative `auditd.service/memory.max` from an unrelated directory is a false positive for a listed tool's name only. | That these forms leave the probe on a VM; `openat` with a directory fd. |
 | ADR number | **0046 kept**, renumber at merge. | 0044 is claimed by #1051 and 0045 by #1141; both are unmerged. | |
