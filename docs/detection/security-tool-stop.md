@@ -101,7 +101,10 @@ and an init script only from `/etc/init.d/`: a copy of `true` named `/tmp/reboot
 `--host`/`-H` or `--machine`/`-M` acts on a user manager, another host or a container, so it
 neither starts a local unit nor opens the shutdown window. A start is a **claim** the rule does not
 see succeed: a `systemctl start` that fails (a masked unit, a unit that does not exist) still
-explains the stop.
+explains the stop, and so does one run with an option `systemctl` refuses (`--bogus`,
+`--dry-run=yes`); a `systemctl --bogus reboot` opens the shutdown window the same way. The
+rule does not parse the option set of `systemctl`; the `reboot`, `poweroff` and `halt` options are
+the only ones it checks against an allowlist.
 
 Stated gaps: **no shutdown signal exists in the stream** (the journal sensor reports unit stops of
 the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
