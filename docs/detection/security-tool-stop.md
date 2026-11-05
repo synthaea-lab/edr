@@ -72,7 +72,7 @@ minute is not maintenance.
   filtered at the sensor, system manager only, the record's writer checked as PID 1; an event of its
   own, not a flag on a `FileOpenEvent`, because a raw `openat` flag can carry any bit and an
   unprivileged open could have raised the finding, as `O_TMPFILE` did for the signal-loss bit, ADR-0008) but names no
-  actor, and no rule consumes it yet (stacked work); and the macOS unified-log tail emits TCC, `sudo` and Gatekeeper records.
+  actor; UNEXPLAINED-UNIT-STOP consumes it, below. The macOS unified-log tail emits TCC, `sudo` and Gatekeeper records.
 - A service-name list is a list: a tool not on it is not covered. Windows display names (`net stop
   "Windows Defender Antivirus Service"`) are not matched, only service names.
 - **Expected false positives, hence Medium**: an administrator stopping `auditd` or `clamav-daemon`
@@ -114,3 +114,76 @@ Measured on the VM (agent build without these rules, observe-only, synthetic `os
 
 Not measured: the new rules on a VM, a real OOM or CPU-limit kill of a tool's main process,
 `--runtime`, cgroup v1, the probe change, the `prlimit64` tracepoint.
+
+## UNEXPLAINED-UNIT-STOP (T1562.001, #1085, Linux)
+
+`crates/rules/src/unitstop.rs`. The journal sensor reports a stop of a unit of
+`schema::SECURITY_SERVICES` as an `Event::UnitStop` (#1127: an event of its own that only the journal sensor builds, from a record written by the system manager, so an `openat` flag cannot forge it; a `FileOpenEvent` naming a listed unit is not a stop, and a test pins that). The journal names no
+actor. The rule queues each stop and judges it once the stream clock is 120 s past it, so that a
+start that follows can be seen. It alerts, Medium, unless the stop is explained:
+
+| Explained by | Window | Read from |
+| --- | --- | --- |
+| an exec that stopped the same unit (the exec rule above already alerted: no second alert) | up to 120 s before the record (a stop job can last `DefaultTimeoutStopSec`, 90 s), 5 s after for clock skew | `systemctl stop`, `disable --now`, `mask --now`, `service X stop`, `/etc/init.d/X stop` |
+| a restart or a start of the same unit | a restart exec like the one above; a start up to 120 s after the stop (a package upgrade stops in its pre-remove script and starts in post-install) | `systemctl restart|try-restart|start|reload-or-restart|enable --now`, `service`, `invoke-rc.d`, `deb-systemd-invoke` |
+| the host shutting down | up to 300 s after the exec | an **immediate** `shutdown` (`now`, `+0`; not `-k`, not a `+N`/`HH:MM` schedule), `reboot`, `poweroff`, `halt` (only with argv captured and every option one of `-f -d -n -p`, `--force --no-wtmp --no-sync --no-wall --poweroff --reboot --halt`; `-w`, `--help`, a bad option or no argv gives no window), `systemctl reboot|poweroff|halt|kexec`, `init`/`telinit 0|6` |
+
+The windows are choices, not measurements (no fleet data), and are named constants in the module.
+
+A shutdown or a start is read from the **name** of the program, and each one silences an alert, so
+it counts only when the image path is a system path or unknown (`policy::name_exclusion_applies`),
+and an init script only from `/etc/init.d/`: a copy of `true` named `/tmp/reboot` or
+`/tmp/systemctl` explains nothing. A `systemctl` (or `deb-systemd-invoke`) call with `--help`, `--version` or `--dry-run` only prints, so it neither starts a unit nor opens the window. A `systemctl` (or `deb-systemd-invoke`) call with `--user`,
+`--host`/`-H` or `--machine`/`-M` acts on a user manager, another host or a container, so it
+neither starts a local unit nor opens the shutdown window. A start is a **claim** the rule does not
+see succeed: a `systemctl start` that fails (a masked unit, a unit that does not exist) still
+explains the stop, and so does one run with an option `systemctl` refuses (`--bogus`,
+`--dry-run=yes`); a `systemctl --bogus reboot` opens the shutdown window the same way. The
+rule does not parse the option set of `systemctl`; the `reboot`, `poweroff` and `halt` options are
+the only ones it checks against an allowlist.
+
+Stated gaps: **no shutdown signal exists in the stream** (the journal sensor reports unit stops of
+the listed services only, and SERVICE-STOP-BURST counts execs), so a shutdown is read from the
+exec that asks for it; one asked another way (power button, logind from a desktop session, an ACPI
+request) has its stops alert.
+A `reboot`, `poweroff` or `halt` whose argv was not captured (the usual case, #1118) opens no window: its options are unknown and `reboot -w` cannot be told from a real reboot, so a real reboot whose argv was missed has its stops alert, the same cost as a scheduled shutdown, until the pid-1 target record below replaces this parsing.
+A **scheduled** shutdown (`shutdown +60`, `shutdown 23:00`, a bare `shutdown` which is `+1`, `systemctl reboot --when=…`) stops nothing yet and does not open the window, so it cannot cloak a stop; `shutdown -c`/`--cancel` (and `--when=cancel`) closes a window already open. The cloak `shutdown +99`, stop the tool, `shutdown -c` is therefore handled, and a scheduled shutdown that does fire has the stops of its own run alert (the cost of not trusting a command that only promises one). A start that no exec
+shows (systemd's own `Restart=` after a crash, a socket activation) is not seen as one, so the
+stop that preceded it alerts. A judged stop waits for a later exec, file-open or unit-stop event to move the
+clock, so on a host with none the alert is late. A stop over D-Bus by an administrator is
+indistinguishable from an intruder's, hence Medium. `systemctl stop` run by pid 1 on behalf of
+another process is likewise a record with no actor.
+
+### Known limits
+
+**The explanations that read an exec depend on its `argv`, which is empty for most short-lived
+commands (#1118).** The Linux sensor reads `argv` from `/proc/<pid>/cmdline` when the exec event is
+drained, and a process that has already exited has no entry. This affects condition 1 ("an exec
+stopped the same unit just before") and the shutdown and start joins in the table above, because they
+all match on the command line. Measured on Fedora 43 (kernel 7.2.9) and Rocky 9.8 (kernel 5.14), with
+the agent of `main` at `81cc6c52` for the empty-`argv` rate: `systemctl` has an empty `argv` in
+97 to 100 % of its execs, idle or loaded, and `sudo` in 86 to 98 %. A `/usr/bin/true` or a
+`sleep 0.3` is read fine when idle and mostly missed with one `yes` per vCPU running. With the PR
+#1102 agent, 12 `systemctl stop` of synthetic units named like listed tools (two rounds of six) gave
+the same result on both systems: 11 of the 12 reached UNEXPLAINED-UNIT-STOP, and 1 was explained by
+the exec (the one whose `argv` was captured). **Each stop still alerted exactly once, but 11 times
+with a reason that is wrong**: the message says no `systemctl stop` of the unit was seen, although
+one ran. The rule does not miss the stop; its explanations rarely hold. Not measured: a process that
+exits more slowly than a few ms under a load other than `yes` (one per vCPU), and the effect of #1116
+(which bounds `argv` at capture) on this rate. Captures: `lab/captures/test-1118-20261103/` and
+`lab/captures/test-1085b-20261103/`; notes in `issues/issue-1085.md` and `issues/issue-1118.md`.
+
+**Decision of the owner (delegated, 2026-11-03): the long-term source for "the host is shutting
+down" is the manager's own journal record, not the exec.** That record is a pid-1 entry
+(`_PID=1`, `JOB_TYPE=start`, `JOB_RESULT=done`) for `reboot.target`, `poweroff.target`,
+`halt.target`, `kexec.target` or `shutdown.target`. Measured on Fedora 43 (systemd 258,
+`lab/captures/test-1109-20261103/`): a real `systemctl reboot` writes such records (`reboot.target`,
+`systemd-reboot.service`, `shutdown.target`, `final.target`) and a hypervisor power-off writes
+`poweroff.target` the same way, while `reboot -w`, `halt -w`, `shutdown +99` then `shutdown -c`,
+`systemctl reboot --dry-run` and `reboot --help` write none. Reading the shutdown from the exec's
+command line is therefore a **stopgap**: it has an open-ended list of tool spellings (systemd,
+sysvinit, busybox) and, per #1118, an empty `argv` for most of these commands anyway. The reasoning
+and the other options are in `issues/decisions-delegated-2026-11-03b.md`. Not built: the journal
+sensor change for the target records. Not measured: whether the target record comes after the listed
+unit's own stop in a real shutdown, and whether a shutdown on a loaded host is slow enough for the
+agent to judge the queued stops.
