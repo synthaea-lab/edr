@@ -1,0 +1,30 @@
+schema_version = 1
+
+[server]
+control_plane_url = "https://192.168.100.1:8443"
+mtls_cert       = "/home/edr-lab/lab1090/agent-83.crt"
+mtls_key        = "/home/edr-lab/lab1090/agent-83.key"
+ca_cert         = "/home/edr-lab/lab1090/ca.crt"
+mtls_passphrase = "envvar:SYNTHAEA_MTLS_PASSPHRASE"
+offline_fallback = true
+
+[log]
+dir     = "/home/edr-lab/lab1090/run-A-offset0-inwindow"
+level   = "info"
+max_mb  = 64
+
+[storage]
+state_dir     = "/home/edr-lab/lab1090/state-A-offset0-inwindow"
+spool_max_mb  = 1
+
+[ipc]
+endpoint = "/home/edr-lab/lab1090/run-A-offset0-inwindow/agent.sock"
+
+[resources]
+worker_threads = 0
+max_reconnect_backoff_ms = 5000
+
+[updates]
+
+[detection]
+utc_offset_minutes = 0
