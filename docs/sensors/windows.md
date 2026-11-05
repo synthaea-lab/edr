@@ -71,3 +71,37 @@ checked by the author's WDK build and a lab run.
 direct `ExAllocatePool2` import on Windows 10 before version 2004 and on Windows Server 2016/2019.
 The WDK build checks the binary; actual loading and event delivery on those older systems still
 need a VM run.
+
+## Listening sockets (`sockets` snapshot)
+
+Every 10 s the agent reads the TCP listener table (`GetExtendedTcpTable`) and the UDP
+table (`GetExtendedUdpTable`), IPv4 and IPv6, and sends each entry as a `ListenPort` event
+with its `protocol` (6 or 17). The first snapshot at startup is the LISTENER-DRIFT
+baseline. A later entry whose address, port and protocol are not in it raises T1571
+Medium, so `udp/53` and `tcp/53` are separate entries.
+
+**UDP filter (#676).** The UDP table has no "listener" view: it lists every bound socket,
+client sockets included. The agent keeps a UDP socket only when its port is below the
+default dynamic range, 49152-65535; TCP listeners are kept on any port. Measured on a
+Windows 11 dev host (build 26300, default range, desktop apps running), 36 snapshots
+10 s apart:
+
+| | fixed port (< 49152) | ephemeral port (≥ 49152) |
+|---|---|---|
+| UDP sockets per snapshot | 23, every snapshot | 17 to 22 |
+| new (address, port) after the first snapshot | 0 | 28 (Discord, Spotify, NVIDIA Overlay) |
+| of those, bound for two polls or more | — | 26 |
+
+Without the filter, LISTENER-DRIFT would have raised 28 alerts in six minutes on an idle
+desktop. Waiting for a socket to stay bound for two polls would still have let 26 through,
+and 16 of the 18 ephemeral sockets present at startup stayed bound for the whole run. On
+this host the port range separates clients from services, and how long a socket lives does
+not. With the filter, the same capture raises nothing.
+
+**Gaps.** A UDP listener that binds a port at 49152 or above on purpose is invisible to
+LISTENER-DRIFT. Its datagrams still reach the ETW network stream. The range is the
+default, not the host's: no documented API returns it. A range moved down with `netsh int
+ipv4 set dynamicport udp` puts client sockets below 49152, which adds noise and hides
+nothing. One host was measured; a server workload, or a desktop with other apps, may need
+another capture. Linux (`sensor-linux-netlink` can already read UDP) and macOS still
+report TCP listeners only, until their own filter is measured (#676).
