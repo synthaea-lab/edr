@@ -70,7 +70,7 @@ describe("parseSearchRequest", () => {
   it("refuses unknown fields, an unknown source and a cursor it did not make", () => {
     expect(() => parseSearchRequest(null)).toThrow(/body must be an object/);
     expect(() => parseSearchRequest({ query: huntQuery, tenantId: "x" })).toThrow(/unknown field "tenantId"/);
-    expect(() => parseSearchRequest({ source: "events", query: huntQuery })).toThrow(/source must be/);
+    expect(() => parseSearchRequest({ source: "files", query: huntQuery })).toThrow(/source must be/);
     expect(() => parseSearchRequest({ query: huntQuery, cursor: "not a cursor" })).toThrow(/cursor is not valid/);
     expect(() => parseSearchRequest({ query: huntQuery, cursor: 5 })).toThrow(/cursor must be a string/);
   });
@@ -123,7 +123,36 @@ describe("caseConditions", () => {
   });
 });
 
+describe("parseSearchRequest, the events source", () => {
+  const eventQuery = { kind: "events", version: 1, lastDays: 3, types: ["exec"] };
+
+  it("takes an event query only for the events source, and returns it without a cursor", () => {
+    expect(parseSearchRequest({ source: "events", query: eventQuery })).toEqual({ source: "events", query: eventQuery });
+    expect(() => parseSearchRequest({ source: "events", query: huntQuery })).toThrow(/unknown query field "lastHours"/);
+    expect(() => parseSearchRequest({ source: "events", query: caseQuery })).toThrow(/unknown query field/);
+    expect(() => parseSearchRequest({ source: "detections", query: eventQuery })).toThrow(/unknown query field "kind"/);
+    expect(() => parseSearchRequest({ source: "cases", query: eventQuery })).toThrow(/unknown query field "lastDays"/);
+  });
+
+  it("refuses a cursor, which the archive has none of, instead of ignoring it", () => {
+    expect(() => parseSearchRequest({ source: "events", query: eventQuery, cursor: encodeCursor(new Date(0), "00000000-0000-0000-0000-000000000000") })).toThrow(/no cursor/);
+    expect(parseSearchRequest({ source: "events", query: eventQuery, cursor: null }).source).toBe("events");
+  });
+
+  it("has no way to name a tenant, in the body or in the query", () => {
+    expect(() => parseSearchRequest({ source: "events", query: eventQuery, tenantId: "other" })).toThrow(/unknown field "tenantId"/);
+    expect(() => parseSearchRequest({ source: "events", query: { ...eventQuery, tenantId: "other" } })).toThrow(/unknown query field "tenantId"/);
+    expect(() => parseSearchRequest({ source: "events", query: { ...eventQuery, where: { tenantId: "other" } } })).toThrow(/unknown filter "tenantId"/);
+  });
+});
+
 describe("searchFailure", () => {
+  it("maps the archive search's deadline, a TimeoutError, to 504 and does not echo its message", () => {
+    const deadline = new DOMException("hunt secret path /var/lib/lake", "TimeoutError");
+    expect(searchFailure(deadline)).toEqual({ status: 504, message: "the search exceeded its time limit and was cancelled" });
+    expect(searchFailure(new DOMException("aborted", "AbortError")).status).toBe(500);
+  });
+
   it("maps a validation error to 400, a statement timeout to 504 and anything else to a generic 500", () => {
     expect(searchFailure(new HuntValidationError("bad"))).toEqual({ status: 400, message: "bad" });
     expect(searchFailure(new Error("canceling statement due to statement timeout")).status).toBe(504);
