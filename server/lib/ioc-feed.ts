@@ -13,8 +13,8 @@
  * whole country. The suffix list is a dependency this module does not carry: the caller passes
  * `isPublicSuffix`, and without one every domain is refused rather than published unchecked.
  *
- * Pure: no I/O, no clock. Sources (STIX/TAXII, MISP, CSV), expiry and per-tenant enablement are
- * not built here.
+ * Pure: no I/O, no clock. Sources live in their own modules (`ioc-csv.ts`, `ioc-stix.ts`, `ioc-misp.ts`); fetching,
+ * MISP and per-tenant enablement are not built.
  */
 
 import { createHash } from "crypto";
@@ -34,7 +34,15 @@ export type RejectReason =
   | "domain_too_deep"
   | "public_suffix"
   | "public_suffix_unchecked"
-  | "bad_csv";
+  | "bad_csv"
+  | "bad_stix"
+  | "unsupported_pattern"
+  | "revoked"
+  | "expired"
+  | "not_yet_valid"
+  | "bad_misp"
+  | "not_for_detection"
+  | "deleted";
 
 export interface Rejection {
   /** 1-based line number in the source text. */

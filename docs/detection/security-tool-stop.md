@@ -67,11 +67,12 @@ minute is not maintenance.
 
 - It reads the **command**, not the outcome: a stop that is refused (`sc stop WinDefend` is denied on
   a current Windows), or any stop that does not go through these commands (`kill`, `pkill`,
-  `taskkill`, D-Bus, an API call, `setenforce 0`, `aa-teardown`), is not seen by this rule. On
-  Linux, the journal sensor reports the **stop of a listed unit** (`FileOpenEvent` with
-  `FLAG_UNIT_STOPPED`, #1085, filtered at the sensor, system manager only, the record's writer
-  checked as PID 1) but names no actor; UNEXPLAINED-UNIT-STOP covers it, below. The macOS
-  unified-log tail emits TCC, `sudo` and Gatekeeper records, no unit lifecycle.
+  `taskkill`, D-Bus, an API call, `setenforce 0`, `aa-teardown`), is not seen. The journal
+  sensor now reports the **stop of a listed unit** (`schema::UnitStopEvent`, #1085,
+  filtered at the sensor, system manager only, the record's writer checked as PID 1; an event of its
+  own, not a flag on a `FileOpenEvent`, because a raw `openat` flag can carry any bit and an
+  unprivileged open could have raised the finding, as `O_TMPFILE` did for the signal-loss bit, ADR-0008) but names no
+  actor; UNEXPLAINED-UNIT-STOP consumes it, below. The macOS unified-log tail emits TCC, `sudo` and Gatekeeper records.
 - A service-name list is a list: a tool not on it is not covered. Windows display names (`net stop
   "Windows Defender Antivirus Service"`) are not matched, only service names.
 - **Expected false positives, hence Medium**: an administrator stopping `auditd` or `clamav-daemon`
@@ -81,7 +82,7 @@ minute is not maintenance.
 ## UNEXPLAINED-UNIT-STOP (T1562.001, #1085, Linux)
 
 `crates/rules/src/unitstop.rs`. The journal sensor reports a stop of a unit of
-`schema::SECURITY_SERVICES` as a `FileOpenEvent` with `FLAG_UNIT_STOPPED`, and only one from **pid 1** counts: the flag is also a bit of `openat`'s `flags` that any process can set on a file it names, so a flagged open from another pid is a forgery and is ignored (a stopgap; #1127 replaces the flag with `Event::UnitStop`, and this rule moves to it after that merges). The journal names no
+`schema::SECURITY_SERVICES` as an `Event::UnitStop` (#1127: an event of its own that only the journal sensor builds, from a record written by the system manager, so an `openat` flag cannot forge it; a `FileOpenEvent` naming a listed unit is not a stop, and a test pins that). The journal names no
 actor. The rule queues each stop and judges it once the stream clock is 120 s past it, so that a
 start that follows can be seen. It alerts, Medium, unless the stop is explained:
 
@@ -109,7 +110,7 @@ request) has its stops alert.
 A `reboot`, `poweroff` or `halt` whose argv was not captured (the usual case, #1118) opens no window: its options are unknown and `reboot -w` cannot be told from a real reboot, so a real reboot whose argv was missed has its stops alert, the same cost as a scheduled shutdown, until the pid-1 target record below replaces this parsing.
 A **scheduled** shutdown (`shutdown +60`, `shutdown 23:00`, a bare `shutdown` which is `+1`, `systemctl reboot --when=…`) stops nothing yet and does not open the window, so it cannot cloak a stop; `shutdown -c`/`--cancel` (and `--when=cancel`) closes a window already open. The cloak `shutdown +99`, stop the tool, `shutdown -c` is therefore handled, and a scheduled shutdown that does fire has the stops of its own run alert (the cost of not trusting a command that only promises one). A start that no exec
 shows (systemd's own `Restart=` after a crash, a socket activation) is not seen as one, so the
-stop that preceded it alerts. A judged stop waits for a later exec or file-open event to move the
+stop that preceded it alerts. A judged stop waits for a later exec, file-open or unit-stop event to move the
 clock, so on a host with none the alert is late. A stop over D-Bus by an administrator is
 indistinguishable from an intruder's, hence Medium. `systemctl stop` run by pid 1 on behalf of
 another process is likewise a record with no actor.
