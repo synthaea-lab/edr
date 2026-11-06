@@ -57,7 +57,7 @@ pending (the coverage packs #376–#381 — see
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | ✅ WEL log clears 1102/104 · 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
 | **Download provenance**<br><sub>TA0001 Initial Access</sub> | 📋 #87 (no OS mark) | ✅ ETW MotW | ✅ ES |
 | **Devices**<br><sub>TA0001 Initial Access · TA0010 Exfil</sub> | 📋 #84 | 📋 #84 | 📋 device-control |
-| **Containers**<br><sub>TA0004 Escape context</sub> | ✅ /proc | 📋 #371 silos | 📋 #372 host-side |
+| **Containers**<br><sub>TA0004 Escape context</sub> | ✅ /proc | 🔨 #371 silos | 📋 #372 host-side |
 | **Host state & inventory**<br><sub>TA0003 pre-existing persistence</sub> | 📋 #87 | ✅ WMI · 📋 #286 | 📋 #359 |
 
 ## Linux
@@ -83,7 +83,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
+| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage; argv cut to 32 KiB at capture and flagged (`cmdline_truncated`, v65, #1112: a padded argv once made a detection the server refused for good, dropping its whole spool segment) | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
 | **Process execution** | netlink · audit | fallback exec + connect where eBPF is unavailable (lockdown, old kernel) | ✅ used | T1059 degraded | #34/#247 |
 | **Process execution** | procfs · `/proc/<pid>/environ` at exec-time drain | security-relevant exec environment (`LD_PRELOAD` family), present-only allowlist — never the whole env | ✅ used | T1574.006 | #363 |
 | **File activity** | eBPF · tracepoints | open/write/delete/rename/chmod/chown with paths + attribution; noisy /dev,/proc,/sys,/tmp filtered | ✅ used | T1105, T1485/T1486, T1070.004, T1222 | #262 |
@@ -170,7 +170,7 @@ gap.
 | **Tamper & anti-forensics** | driver · minifilter | explicit timestamp requests (FileBasicInformation) | ✅ implemented | T1070.006 | #136 |
 | **Tamper & anti-forensics** | driver · minifilter | mounted logical-volume opens with requested access mask | ✅ implemented | T1006 | #136 |
 | **Download provenance** | ETW · Kernel-File | `Zone.Identifier` ADS write (mark-of-the-web) → v21 `FileQuarantine` (`HostUrl`/`ReferrerUrl` read-back, writer as `agent`; zones 0–2 dropped; a raced read reports the mark alone; credentials in the URLs redacted by the agent, ADR-0018); consumed by the T1204.002 download→exec join (10 min), which stays silent when the image's Authenticode signature verifies (#441: resolved on the enrichment worker after the exec; an unverifiable image still alerts), and only when the file verified is the image that ran: the ETW sensor records the image file's identity (volume serial + file id) at exec (v59 `image_file_id`), the worker compares it with the file it verified, and a mismatch or a missing identity alerts as "not verified" (#688: a running image can be renamed and a signed copy put at its path; the residual window is exec → ETW delivery, closed only by a kernel process-creation callback). A mark deleted through the API (`Unblock-File`, `Remove-Item -Stream`) → `FileDelete` of the stream (Kernel-File 26), T1553.005 when the file then runs (#442); a stream renamed away is the same fact when the minifilter reports it (#977); any other strip/tamper needs the minifilter (#136). Coverage map: `docs/detection/download-provenance.md` | ✅ used | T1204.002, T1553.005 | #365, #442 |
-| **Containers** | Win32 · silo query | server-silo attribution on process-isolated Windows containers → `EventMeta::container` (Hyper-V/WSL2 = agent-inside, documented) | 📋 planned | container context for rules | #371 |
+| **Containers** | NT · `ProcessMembershipInformation` + Host Compute Service | server-silo attribution on process-isolated Windows containers → `EventMeta::container` on ETW events: the silo read at `ProcessStart` (a child already gone takes its parent's), named by the HCS container id on a background thread, `silo:<n>` until then. Windows 11 22H2 / Server 2025 and later; older builds stay `None`. Hyper-V/WSL2 = agent inside, see `docs/sensors/windows.md` | 🔨 lab pending | container context for rules | #371 |
 | **Devices** | device-control | Windows collectors land with the cross-platform crate | 📋 planned | T1091 | #84 |
 | **Host state** | Win32 · WMI/CIM | point-in-time inventory; Sysmon-channel opt-in is an ADR-first decision | ✅ / 📋 | pre-existing persistence | collectors; #286 |
 
@@ -202,7 +202,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | ES · exec | argv + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran, T1057/T1082/T1016/T1087 discovery burst | #32/#378 |
+| **Process execution** | ES · exec | argv (128 entries and 32 KiB at capture, either cut flagged as `cmdline_truncated`, #1112) + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran, T1057/T1082/T1016/T1087 discovery burst | #32/#378 |
 | **File activity** | ES · file events | open/create/rename/unlink; mmap **filtered to writable+shared** (dyld torrent dropped in-shim); POSIX `O_*` flags so cross-platform write rules apply unchanged | ✅ used | T1105, T1485/T1486, T1070.004 | #32 |
 | **File activity** | ES · widening | quarantine **strip**, timestomp, hidden flags, APFS clone/exchangedata staging, remount | 📋 planned | T1070.006, T1564.001 | #357 |
 | **Network** | NE · filter-data | flows with audit-token attribution (inbound + outbound) → `Connect`, close-time byte counts → `NetworkFlow` — BEACON consumes macOS flows unchanged | 🔨 built | T1071/T1041 | #33/#351 |
