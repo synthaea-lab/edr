@@ -204,18 +204,42 @@ than ADR-0027's, not a weaker version of the same one.
    suffix, same ownership and mode) *before* the first request. It never sends the public key
    of a live `server.mtls_key`: a cloned golden image already holds one, and re-signing it
    would hand two machines the same `enrollmentId`, the shared identity the per-host key
-   exists to prevent. The pending key is reused only for retries of that enrollment, only
-   until the token's expiry, and is moved into place (and so no longer pending) once the
-   certificate is written. The server records, on the `Agent` row it redeems onto, the token id
-   and the SHA-256 of the CSR's public key, overwriting both at every redemption (a reissue
-   redeems onto an existing row and replaces them). A retry is looked up by the pair (token
-   id, key hash), never by the key hash alone. It consumes no further use, so it skips the
-   conditional `UPDATE`, but it still verifies the token's secret, and it is refused when the
-   `Agent` is `revoked` or when the pair no longer matches the row because a later reissue
-   replaced it (with a new `enrollmentId`); otherwise it re-signs a certificate for the same
-   `enrollmentId` instead of failing as exhausted or minting a second identity. A different
-   public key presented with an already-consumed token is an ordinary exhausted-token refusal.
-   The retry window is the token's own expiry.
+   exists to prevent. The pending file is bound to the enrollment it was made for: next to the
+   key it records the token id and the host's machine identity (`/etc/machine-id` on Linux,
+   `MachineGuid` on Windows, `IOPlatformUUID` on macOS). `agent enroll` reuses it only when
+   both match the token it was given and the host it runs on; otherwise it deletes it and
+   generates a fresh key. It also deletes it on a definitive refusal (`401`, or the
+   exhausted, expired, disabled or revoked refusals, which the server distinguishes from a
+   `5xx` by status and body), and moves it into place (no longer pending) once the
+   certificate is written. The agent never needs to know the token's expiry: the server
+   bounds the retry window (below). Installers and image-preparation steps (a Windows
+   sysprep, a golden-image build script) delete `*.pending` next to the identity paths as
+   well; that is defence in depth, not what the design relies on.
+
+   The server records, on the `Agent` row it redeems onto, the token id and the SHA-256 of
+   the CSR's public key, overwriting both at every redemption (a reissue redeems onto an
+   existing row and replaces them). A retry is looked up by the pair (token id, key hash),
+   never by the key hash alone, and the lookup runs **before** the conditional `UPDATE` of
+   step 1, so a retry never consumes a use and never inserts a second `Agent` row. It still
+   verifies the token's secret and `disabled`, and it is refused when the `Agent` is
+   `revoked`, when the pair no longer matches the row because a later reissue replaced it
+   (with a new `enrollmentId`), or **once that identity has been used**: `Agent.lastSeen`,
+   which every authenticated ingest request already updates (events, detections, decoy hits),
+   is later than the recorded redemption time. That last rule is what keeps a retry from
+   becoming a way to share an identity: a retry exists for a host that never received its
+   certificate, and such a host has never authenticated with it. A cloned image that still
+   carries a pending file, even one whose machine identity was cloned with it, gets the
+   identity re-signed only until the first clone to come online uses it; every later clone
+   is refused and must enroll afresh. Clones that redeem in the same window before any of
+   them has made an authenticated request would still share one identity. That residue is accepted: it
+   needs a stale pending file, a cloned machine identity and near-simultaneous first boots
+   all at once, and the machine binding and the installer cleanup above close it in
+   practice. Otherwise a retry re-signs a certificate for the same
+   `enrollmentId` instead of failing as exhausted or minting a second identity, writes an
+   `AuditLog` row marked as a retry, and leaves the chain end (Decision 4) as the original
+   redemption set it. A different public key presented with an already-consumed token is an
+   ordinary exhausted-token refusal. The retry window also closes 24 hours after the
+   redemption, whatever the token's own expiry.
 
    Abuse is bounded per token, not per address. A presented token whose id exists but whose
    secret does not match increments that token's failure count, outside the rolled-back
@@ -245,13 +269,23 @@ than ADR-0027's, not a weaker version of the same one.
    The server returns the signed certificate; `agent enroll` writes it, and the private key
    it already generated, to the paths `server.mtls_cert`/`server.mtls_key` already name —
    `agent run` needs no change at all; it already loads whatever is at those paths.
-   It loads them once, at start: a running `agent run` keeps its old in-memory identity,
-   and after a reissue (which rotates `enrollmentId`) that identity is refused with
-   `403` "Agent not enrolled" as non-retryable. **Required:** on that `403`, a running agent
-   reloads its identity files once, if they changed on disk since it loaded them, and retries
-   with the new pair before treating the refusal as final. A reissue then takes effect
-   without restarting the service; `agent enroll` still tells the operator that a restart
-   also works, for an agent too old to reload.
+   It loads them once, at start, so a running `agent run` keeps its old in-memory identity.
+   Three situations leave it holding an identity that no longer works, and they fail in
+   different places:
+   - after a reissue (which rotates `enrollmentId`), the old identity is refused at the
+     application layer with `403` "Agent not enrolled";
+   - with an expired certificate, nginx refuses the handshake before any route runs, so no
+     `403` ever arrives;
+   - after a first start with no certificate at all (`server.offline_fallback`), no request is
+     made.
+   **Required:** a running agent reloads its identity files when they change on disk. It
+   compares their modification time and size on its existing daily tick, and every 60
+   seconds while it has no working identity (no identity loaded, or the last request failed
+   at the TLS handshake or with that `403`). On a change it loads the new pair, and on a `403`
+   it also re-checks the files once before treating the refusal as final. A reissue,
+   including one after expiry, and a first enrollment after an `offline_fallback` start then
+   take effect within a minute, without restarting the service. `agent enroll` still tells
+   the operator that a restart also works, for an agent too old to reload.
 
 4. **Concrete lifetime, renewal window, and a cheap revocation check on both.** A signed
    certificate is valid 30 days, and renewal starts with at least a 10-day lead — generous
@@ -300,15 +334,24 @@ than ADR-0027's, not a weaker version of the same one.
    - **Jitter.** The chain end is the chain start plus the maximum (a server setting, default
      90 days) plus a random 0 to 14 days, drawn once per chain, so a cohort does not end the
      same day.
-   - **A warning before the cliff.** The renewal response carries the chain end; the agent
-     logs a warning and puts "chain ends in N days" in its heartbeat once fewer than 14 days
-     remain, and the console lists the chains ending within 14 days.
+   - **A warning before the cliff.** The console lists the chains ending within 14 days; the
+     server knows every chain end, so nothing new goes into the heartbeat. The renewal
+     response carries the chain end, and the agent logs a warning once fewer than 14 days
+     remain, for an operator reading the host's own journal.
    - **Extension without a token.** An admin action extends a chain, for one agent or for a
-     tenant, by moving its end forward (by at most the maximum again). It is audited like
-     every console action and issues nothing: the host keeps renewing on its own certificate.
+     tenant, by setting its end to at most now plus the maximum, so repeated extensions never
+     accumulate beyond one maximum ahead. A tenant-wide extension skips `revoked` agents and
+     agents with no heartbeat in the last 14 days (likely decommissioned); those are extended
+     only one at a time, by name. It is audited like every console action (one row for a
+     tenant-wide extension, listing how many agents it moved) and issues nothing: the host
+     keeps renewing on its own certificate.
 
-   The ceiling still answers the stolen-certificate case: a decommissioned host's chain is not
-   extended, so a copy of its key stops renewing at the chain end. The maximum is a
+   A certificate's `notAfter` is capped at its chain end, so the last certificate of a chain
+   does not outlive it by up to 30 days.
+
+   The ceiling still answers the stolen-certificate case: a decommissioned host's chain stops
+   at its end unless an admin extends that host by name, so a copy of its key stops renewing.
+   The maximum is a
    control-plane setting, not per tenant, like the lifetime and renewal window above. Every
    renewal writes an `AuditLog` row (`userId` `"system"`, the same precedent as
    `check-ring-health`, with the source address), and a renewal from an address other than
@@ -430,11 +473,26 @@ than ADR-0027's, not a weaker version of the same one.
   console "revoke" and "un-revoke" actions, each audited.
 - On `Agent`, for the idempotent retry and the renewal ceiling (Decisions 3 and 4): the id of
   the token it was last redeemed with and the SHA-256 of that redemption's public key (both
-  overwritten at every redemption), and the chain end. The console lists chains ending within
-  14 days and has an audited "extend chain" action, per agent and per tenant; the agent's
-  heartbeat gains the days left on its chain once under 14.
-- On the agent: a pending key file next to `server.mtls_key` during an enrollment, and the
-  one-time reload of the identity files on a `403` "Agent not enrolled" (Decision 3).
+  overwritten at every redemption, with an index on the pair, which the retry lookup uses),
+  the redemption time, and the chain end. The console lists chains ending within 14 days and
+  has an audited "extend chain" action, per agent and per tenant. The heartbeat contract does
+  not change.
+- On the agent: a pending key file next to `server.mtls_key` during an enrollment, holding
+  the token id and the machine identity it is bound to, and the reload of the identity files
+  when they change on disk (Decision 3).
+- **Audit chain (ADR-0043, proposed).** If ADR-0043 is accepted, every `AuditLog` row goes
+  through the tenant's hash chain (`AuditChainHead ... FOR UPDATE`), so a tenant's
+  enrollments and renewals serialize on that lock. The redemption transaction therefore
+  takes it last: the token `UPDATE`, the `Agent` row and the CA signature come first, and
+  only the audit insert and the commit run under the chain lock, so the signature is never
+  made with the lock held. A failure audit row is written outside the rolled-back
+  redemption, in its own short transaction, under the same lock.
+- **Wrong-secret cost.** Each wrong secret is one single-row `UPDATE` of the token's failure
+  count and time, outside the redemption transaction. Under an attack that targets a token id
+  during a fleet rollout, those updates contend with the legitimate redemptions' conditional
+  `UPDATE` on the same row. The nginx flood guard bounds the rate from one address. If
+  contention shows up in practice, the count can move to memory with a periodic flush; until
+  then the cost is accepted, not hidden.
 - `agent enroll` (token, never presents a client certificate) and `agent enroll --renew`
   (current certificate), plus the renewal check inside `agent run` (Decision 4) —
   `updater`-adjacent in style but not in that crate (no manifest, no signature, no rollback
