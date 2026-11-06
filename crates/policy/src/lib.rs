@@ -200,6 +200,41 @@ pub fn service_main_path_is_trusted(path: &str) -> bool {
     !(EXACT.contains(&name) || is_family_interpreter)
 }
 
+/// Whether an exec of `image_path` under a parent running `parent_image_path` is the
+/// process that holds one interactive login session: the per-connection
+/// `sshd-session` OpenSSH 9.8+ execs from its `sshd` listener for each SSH login
+/// (#1142). Killing it cuts the operator's session; what an attacker runs lives in
+/// its children, which stay killable.
+///
+/// Name-keyed on both sides, so both images must pass [`service_main_path_is_trusted`]:
+/// a `/tmp/sshd-session`, or the real binary exec'd from a shell, is not one. The
+/// parent is identified by its image, not by having been seen started by init: the
+/// listener usually starts at boot, before the agent, so its exec is never seen,
+/// while the sensor still resolves its image (from `/proc` for a process that
+/// predates it). A user running their own copy of the real `sshd` gets its
+/// `sshd-session`s shielded too; those run no code the user chose, and everything
+/// under them stays killable.
+///
+/// `login` is not listed: getty execs it in place, so it is a service main itself
+/// (`ppid == 1`) where its image passes the path check.
+#[must_use]
+pub fn is_login_session(image_path: &str, parent_image_path: Option<&str>) -> bool {
+    /// (session image, the image that execs it).
+    const LOGIN_SESSIONS: &[(&str, &str)] = &[("sshd-session", "sshd")];
+    fn name(path: &str) -> &str {
+        path.rsplit(['/', '\\']).next().unwrap_or(path)
+    }
+    let Some(parent_image_path) = parent_image_path else {
+        return false;
+    };
+    let (image, parent) = (name(image_path), name(parent_image_path));
+    LOGIN_SESSIONS
+        .iter()
+        .any(|&(i, p)| image == i && parent == p)
+        && service_main_path_is_trusted(image_path)
+        && service_main_path_is_trusted(parent_image_path)
+}
+
 /// The port of the address-selection probe `sshd-session`/`sshd-auth` run on every
 /// login: a `connect()` to the unspecified address (`0.0.0.0`, `::`) on this port
 /// reaches no remote peer (#525).
