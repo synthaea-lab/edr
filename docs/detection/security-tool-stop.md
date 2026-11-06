@@ -88,7 +88,7 @@ gone by the time its event is drained.
   refused `kill` (`EPERM`) from a delivered one. Permission is checked **before** the tracepoint
   fires, so a refused signal never reaches it, and `result` only says "delivered, ignored or
   already pending". The probe reads it only to drop ignored and already-pending signals (see
-  below). `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 63).
+  below). `WIRE_VERSION` stays 27; the unit is added in userspace (`target_unit`, schema 66).
 - *Reload signals depend on the tool's handler.* `SIGHUP`, `SIGUSR1`, `SIGUSR2` and the real-time
   signals are what daemons catch to reload (logrotate, Suricata's `SIGUSR2`), but their default
   action ends a process, so hiding them for every tool was an evasion path (review of #1114).
@@ -104,7 +104,7 @@ gone by the time its event is drained.
   `si_code = -2` was invisible (review of #1114, reproduced in the lab: the event now alerts High).
   The probe sets a bit in the wire `signal` (`SIGNAL_SENDER_UNRELIABLE`, no layout or
   `WIRE_VERSION` change), userspace strips it and sets `SignalEvent::sender_unreliable` (inside
-  schema 63, which this PR introduces: absent means false), and the alert adds that the sender is not
+  schema 66, which this PR introduces: absent means false), and the alert adds that the sender is not
   reliable. For the three codes `current` really is a bystander when the kernel raised them.
 - *Ignored and already-pending signals are dropped in the kernel.* The tracepoint also fires for a
   signal the target ignores or that is already queued; the probe reads its fifth argument
@@ -127,7 +127,7 @@ gone by the time its event is drained.
   `FileOpenEvent` with `0x0040_0000`, which is `O_TMPFILE`'s bit: every `tmpfile()` open alerted
   (measured on Fedora 43, uid 1000 and root, `flags 0x490002`). `openat` ignores unknown flag bits
   and the probe reads the flags raw, so any bit of that field can be set by an unprivileged open:
-  the loss moved to `SignalEvent::signals_lost` (inside schema 63), which only the sensor's report
+  the loss moved to `SignalEvent::signals_lost` (inside schema 66), which only the sensor's report
   sets. Regression test: an `O_TMPFILE | O_RDWR` open gives no alert. Verified live (see the
   Verification status list). `FLAG_UNIT_STOPPED` (`0x8000_0000`, #1085) has
   the same exposure to a raw `open` flag and is not changed here.
