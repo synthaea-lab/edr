@@ -96,8 +96,10 @@ artifacts is also out: v1 *disables* them, reversibly.
        (`schtasks /Query /TN <name> /XML`) into the remediation archive, then
        `schtasks /Change /TN <name> /DISABLE`.
      - `service <name>` (Windows, T1543.003): record the start type, stop the service and
-       **wait** for `SERVICE_STOPPED` and the process's exit (bounded, the same
-       stop-and-wait ADR-0039 defines), then `sc config <name> start= disabled`. A stop
+       **wait** for `SERVICE_STOPPED` and the process's exit (bounded: the stop-and-wait
+       contract ADR-0039 defines, implemented in `agent`, since ADR-0039's routine lives in
+       the `watchdog` binary and a binary cannot depend on another), then
+       `sc config <name> start= disabled`. A stop
        that times out leaves the start type unchanged and reports failure.
      - `systemd-unit <name>` (Linux): `systemctl disable --now <name>`, then `systemctl
        daemon-reload`. The unit file stays where it is; the enablement symlinks are what
@@ -137,7 +139,7 @@ artifacts is also out: v1 *disables* them, reversibly.
 `ResponsePolicy.persistence_remediation_enabled`; `agent remediate {scheduled-task,
 service, systemd-unit, cron} <artifact> --alert <timestamp_ns>` and `agent remediate
 undo <id>`; the remediation archive; `RESPONSE-REMEDIATE`/`RESPONSE-REMEDIATE-UNDO`;
-`agent/src/remediate/`. ADR-0039's stop-and-wait routine gains a second caller.
+`agent/src/remediate/`, including its own stop-and-wait under ADR-0039's contract.
 
 **Unchanged**: `agent quarantine restore`, ungated as today.
 
@@ -151,7 +153,7 @@ launch-item remediation; remediation triggered from a console case decision; res
 files a ransomware case's damage manifest lists; VSS rollback; automatic remediation.
 
 **Depends on**: ADR-0037 (proposed) for isolation lift; ADR-0039 (proposed) for the
-shared stop-and-wait, or the routine lands with whichever of the two ships first.
+stop-and-wait contract (not its code, see above).
 
 ## Deferred
 
@@ -174,8 +176,8 @@ shared stop-and-wait, or the routine lands with whichever of the two ships first
   (verdict fusion, merged), #135 (console triage)
 - ADR-0021 (quarantine permissions, accepted) — the archive reuses its directory posture
 - ADR-0037 (host isolation, proposed) — `lift_isolation` and the `HOST-*` audit family
-- ADR-0039 (Windows self-update, proposed) — the stop-and-wait routine the `service` verb
-  reuses
+- ADR-0039 (Windows self-update, proposed) — the stop-and-wait contract the `service` verb
+  implements
 - ADR-0040 (agent enrollment and mTLS, proposed) — the identity work a future command
   channel would likely need
 - `docs/detection/ransomware.md`, `crates/rules/src/stateless.rs`,
