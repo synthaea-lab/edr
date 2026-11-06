@@ -107,6 +107,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "accepted" });
     }
 
+    // A cut is otherwise visible only on the stored row: say which agent sends padded or
+    // oversized evidence, with the counts and never the payload (#1060).
+    if (detection.meta.events_cut) {
+      console.warn("Detection evidence cut:", JSON.stringify({
+        agentId: agent.id,
+        tenantId: agent.tenantId,
+        ...detection.meta.events_cut,
+      }));
+    }
+
     // Fleet prevalence (issue #76). Best effort: the detection is already
     // stored, and a counter failure must not make the agent retry and
     // duplicate it.
