@@ -83,7 +83,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
+| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage; argv cut to 32 KiB at capture and flagged (`cmdline_truncated`, v65, #1112: a padded argv once made a detection the server refused for good, dropping its whole spool segment) | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
 | **Process execution** | netlink · audit | fallback exec + connect where eBPF is unavailable (lockdown, old kernel) | ✅ used | T1059 degraded | #34/#247 |
 | **Process execution** | procfs · `/proc/<pid>/environ` at exec-time drain | security-relevant exec environment (`LD_PRELOAD` family), present-only allowlist — never the whole env | ✅ used | T1574.006 | #363 |
 | **File activity** | eBPF · tracepoints | open/write/delete/rename/chmod/chown with paths + attribution; noisy /dev,/proc,/sys,/tmp filtered | ✅ used | T1105, T1485/T1486, T1070.004, T1222 | #262 |
@@ -202,7 +202,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | ES · exec | argv + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran, T1057/T1082/T1016/T1087 discovery burst | #32/#378 |
+| **Process execution** | ES · exec | argv (128 entries and 32 KiB at capture, either cut flagged as `cmdline_truncated`, #1112) + the kernel's code-signing state at the source (`CS_VALID`, signing/team id, platform-binary bit), lineage | ✅ used | T1059, unsigned-binary-ran, T1057/T1082/T1016/T1087 discovery burst | #32/#378 |
 | **File activity** | ES · file events | open/create/rename/unlink; mmap **filtered to writable+shared** (dyld torrent dropped in-shim); POSIX `O_*` flags so cross-platform write rules apply unchanged | ✅ used | T1105, T1485/T1486, T1070.004 | #32 |
 | **File activity** | ES · widening | quarantine **strip**, timestomp, hidden flags, APFS clone/exchangedata staging, remount | 📋 planned | T1070.006, T1564.001 | #357 |
 | **Network** | NE · filter-data | flows with audit-token attribution (inbound + outbound) → `Connect`, close-time byte counts → `NetworkFlow` — BEACON consumes macOS flows unchanged | 🔨 built | T1071/T1041 | #33/#351 |

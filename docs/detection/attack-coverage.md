@@ -143,6 +143,7 @@ Generated from ATT&CK technique identifiers tagged in source (`crates/rules`, `c
 | Technique | Layer(s) | Source(s) |
 | --- | --- | --- |
 | T1021.001 | 3 | `rules:crates/rules/src/rdp.rs` |
+| T1027.010 | 3 | `rules:crates/rules/src/stateless.rs` |
 | T1046 | 3 | `rules:crates/rules/src/state.rs` |
 | T1048 | 3 | `rules:crates/rules/src/state.rs` |
 | T1059.005 | 3 | `rules:crates/rules/src/amsi.rs` |
