@@ -52,7 +52,9 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
     "parent_image_evicted_dead": 209000,
     "ioc_indicators": 12000,
     "ioc_findings": 4,
-    "ioc_cooled_down": 31
+    "ioc_cooled_down": 31,
+    "ioc_own_skipped": 0,
+    "ioc_sibling_skipped": 0
   }
 }
 ```
@@ -75,8 +77,10 @@ Body (`HeartbeatPayload` wrapping `schema::HealthBeacon`):
 | `ioc_indicators` | indicators in force in the on-device IOC set (#60): a gauge, `0` while no feed is loaded. Zero if the agent predates the field. |
 | `ioc_findings` | cumulative IOC matches that raised a finding since the agent started. Zero if the agent predates the field. |
 | `ioc_cooled_down` | cumulative IOC matches the per-indicator cooldown absorbed: a high count against few findings is one indicator seen again and again. Zero if the agent predates the field. |
+| `ioc_own_skipped` | cumulative IOC matches skipped as the agent process's own traffic to its control plane (#1061): non-zero means a feed lists the control plane. Zero if the agent predates the field. |
+| `ioc_sibling_skipped` | the same, by a second process on the agent's executable (`apply-content-manifest`) to the control plane. Zero if the agent predates the field. |
 
-The three `rarity_*` fields, the four fields after them (#863) and the three `ioc_*` fields (#60) are additive: the server stores a
+The three `rarity_*` fields, the four fields after them (#863) and the `ioc_*` fields (#60, #1061) are additive: the server stores a
 beacon without them (an older agent) as zeros, and an older server ignores them. The ops fleet
 table shows the rarity ones in one "Rarity evidence" column ("N applied, N withheld, N lost") and
 the others in "Watchdog restarts", "Tamper events" and "Parent images evicted" ("N live, N

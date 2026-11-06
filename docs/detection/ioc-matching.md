@@ -82,7 +82,7 @@ was the control plane's, the finding came from the `apply-content-manifest` proc
 test loop's connections then fell inside the cooldown. So the run shows that a delivered address indicator
 is loaded and matches, not that a listed address a test process connects to raises a finding; that needs
 another run with a listed address that is not the control plane. The same run showed the agent alerting on its
-own control-plane connection (#1061). The publish step refused, with 422, a `rule` entry under `ioc/`, an
+own control-plane connection (#1061), which it no longer does (see "The agent's own traffic" below). The publish step refused, with 422, a `rule` entry under `ioc/`, an
 `ioc` entry outside `ioc/` and a feed with an invalid line. Not covered: a delivery to an agent that is not
 running, the production key path, and the file-write hash (above, still not wired).
 
@@ -110,11 +110,56 @@ window is counted (`IocStats::cooled_down`) and dropped, so a hash run in a loop
 polled every second is one finding. The cooldown remembers 4,096 indicators, least recently seen
 forgotten first.
 
+### The agent's own traffic (#1061)
+
+An address or domain match made by the agent itself is not raised. Decided on #1061 after the lab run
+above: a feed that lists the control plane's address (an artifact there, but a shared-hosting or CDN
+address the control plane sits behind would do the same) made every agent alert on itself at each fetch
+and upload. Worse, that finding started the indicator's 10-minute cooldown, so a real process reaching the
+same address inside it was absorbed without a trace. The skip is therefore made before the cooldown.
+
+The skip needs two things at once:
+
+- **The destination is the control plane** the agent is configured with (`server.control_plane_url`).
+  A DNS query must name its host exactly (a subdomain is not it, so `<data>.cp.example` as a DNS
+  channel still raises). A connect or flow address must be the URL's literal address, or one of the
+  addresses its host resolved to: the agent resolves the host itself every 60 s on its own thread
+  and keeps at most 32 addresses.
+- **The process is the agent.** That is the agent process itself (its pid), or a *sibling*: a second
+  process on the agent's own executable (`agent apply-content-manifest`). A sibling counts only if
+  the agent saw its `Exec` (the image path canonicalizes to the agent's executable), the event
+  carries the same incarnation (`process_generation`) as that exec and comes after it, and it runs
+  as the agent's own uid. All of this is read from what the sensor captured with the event, never
+  from `/proc` when the event is judged, so a pid recycled behind the enrich queue is another
+  incarnation and raises. Never `comm`, which any process sets.
+
+Because of the first condition the skip is not a channel. `agent apply-content-manifest --server
+https://<listed host>` runs the agent's binary but reaches another host, and that raises, as does code
+running inside the agent that reaches a listed address other than the control plane. Every other
+process reaching the control plane's address still raises, so malware behind the same CDN address is
+not hidden. Hash matches are not affected.
+
+Each skip is counted, apart for the agent itself and for a sibling (`IocStats::own_skipped` and
+`sibling_skipped`), and both counters ride the health beacon (`ioc_own_skipped`,
+`ioc_sibling_skipped`). Each distinct (origin, indicator) pair is logged once as a warning with the
+pid, because a feed that lists the control plane is a feed problem the operator should see, and a
+sibling among the skips is worth a look.
+
+Residue, each failing toward raising: no control plane configured; its host not resolved yet, or
+resolved to other addresses than the ones the transport connected to (a CDN that answers differently
+from one query to the next); a sibling whose `Exec` the agent did not see (it started before the
+agent, or the 64-entry table forgot it); a sensor without incarnation stamps (macOS); a platform
+without a uid to compare (Windows: only the agent process itself is skipped); and a sibling started
+after the updater swapped the binary, whose image no longer canonicalizes to the running agent's.
+Still trusted: the agent process itself and a sibling run by the agent's own uid, toward its own
+control plane. Code that runs inside the agent, or as its uid, can reach the control plane's address
+unreported; that address is the one destination it reaches anyway.
+
 A `NetworkFlow` peer address is checked like a connect destination: conntrack reports every live
 flow on each poll, and the cooldown makes that one finding.
 
-The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_findings` and
-`ioc_cooled_down`, so the server can tell a host with no feed from one with a feed and no match. The
+The health beacon reports `ioc_indicators` (indicators in force, a gauge), `ioc_findings`,
+`ioc_cooled_down` and the two own-traffic skips above, so the server can tell a host with no feed from one with a feed and no match. The
 console's fleet health page shows them in an "IOC feed" column (`docs/architecture/control-plane.md`).
 
 Not wired: file writes (`FileWriteEvent` carries a descriptor and a byte count, no path and no

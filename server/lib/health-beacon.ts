@@ -42,6 +42,10 @@ export const HealthBeacon = z.object({
   ioc_indicators: counter.default(0),
   ioc_findings: counter.default(0),
   ioc_cooled_down: counter.default(0),
+  // #1061: IOC matches skipped as the agent's own control-plane traffic, by the agent itself and
+  // by a second process on its executable. Absent from an older agent: zero.
+  ioc_own_skipped: counter.default(0),
+  ioc_sibling_skipped: counter.default(0),
 });
 export type HealthBeacon = z.infer<typeof HealthBeacon>;
 
