@@ -104,7 +104,11 @@ What Windows actually has today, from `packaging/windows/` and `watchdog/src/ser
 
 This ADR scopes a second, Windows-only slice of ADR-0015's self-update mechanism,
 reusing its manifest format, signature scheme, and rollback/health-check model
-without change. It does not revisit any Linux decision.
+without change. It revisits one Linux-visible rule, on purpose: the stricter path
+checks of Decision 2 apply to every release manifest at verify time, Linux
+included, which amends ADR-0015 Decision 2 for release manifests (content
+manifests are unaffected, see Decision 2). Nothing else about the Linux slice
+changes.
 
 ## Decision
 
@@ -136,10 +140,17 @@ without change. It does not revisit any Linux decision.
    one, a build flag or a `cfg(windows)` branch at verify time would each be
    a second path that can disagree with the first. The cost of one rule set
    is nil in practice: every entry of a release is a file this project names
-   itself (`agent`, `watchdog`, `cli`, their libraries and content), so a
+   itself (`agent`, `watchdog`, `cli` and their libraries), so a
    Linux release that needed a name these rules refuse would be a naming
-   choice to change, not a legitimate file to accept. `release-tool` calls
-   the validator rather than keeping a second copy. Normalization of the key
+   choice to change, not a legitimate file to accept. The new rules live in
+   `ReleaseManifest::validate_entry_paths`, after its existing per-segment
+   call, and **not** in `content::is_safe_path_segment`: that function is
+   shared with `is_safe_content_path` (`crates/updater/src/content.rs`), and
+   the sibling 8.3 rule there would refuse ordinary content layouts
+   (`classifier-v1.onnx` and `classifier-v2.onnx` in one directory share
+   `CLASSI~?.ONN`). Content manifests are not staged into a Windows
+   `versions\` tree and keep today's rules. `release-tool` calls the
+   validator rather than keeping a second copy. Normalization of the key
    itself still happens once, at **build time**, never at verify time. A manifest key is always relative (ADR-0015 Decision 2), so
    `release-tool` rejects a candidate entry outright (refuses to build the
    manifest, not a warning) if its path contains a `..` segment, a backslash
@@ -236,9 +247,10 @@ without change. It does not revisit any Linux decision.
 3. **Layout**: `updater::layout` grows a Windows-native sibling, not a
    `cfg`-abstracted trait with two bodies — Linux's primitive is a symlink
    swapped by `rename(2)`; Windows's is a plain marker **file** swapped by
-   `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` (see Context), plus the
-   `sc config`/`sc stop`/`sc start` calls Decision 4 below adds, which Linux
-   has no equivalent of at all — different enough primitives that one shared
+   `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` (see Context). The
+   `sc config`/`sc stop`/`sc start` orchestration is **not** in `updater`: it
+   lives in the `watchdog` binary (Decision 4), and `updater` keeps only the
+   layout, the marker swap and the DACL. These are different enough primitives that one shared
    abstraction would hide more than it clarifies, matching this crate's existing
    `#[cfg(target_os = "linux")]`-gated-module convention (ADR-0015 Consequences)
    rather than inventing a cross-platform API surface that would misleadingly
@@ -423,15 +435,41 @@ without change. It does not revisit any Linux decision.
       is down cannot be reached through the permissive SDDL it was left
       under, so this trades "promotion also failed" for "stayed exploitable"
       — the fail-safe direction. It must not leave the sensor off until a
-      reboot, so the stop is a *failure* stop: the watchdog's stop handler
-      reports a non-zero service-specific exit code whenever the marker is
-      present (unlike step 5's deliberate stop, which reports
-      `ERROR_SUCCESS`), and `failureflag= 1` (Decision 6) then queues the
-      restart ladder. The watchdog's startup rehardens the service
-      descriptor before anything else, next to Decision 3's startup
-      reconciliation of `current`, and removes the marker only once that
-      succeeded, so the restarted service comes back hardened (it runs as
-      `SY`, which the hardened SDDL keeps at full control). Every outcome is
+      reboot, so the stop is a *failure* stop, and **exactly one stop** is:
+      - The marker has two states, *armed* (written by the fail-safe) and
+        *consumed*. The stop handler reports a non-zero service-specific exit
+        code only when it finds the marker armed, and marks it consumed in
+        the same step. `failureflag= 1` (Decision 6) then queues the restart
+        ladder once. Every later stop reports `ERROR_SUCCESS`, as step 5's
+        deliberate stop does.
+      - `stop_and_wait` (step 5, `cmd_uninstall`, the MSI upgrade path)
+        consumes an armed marker *before* it sends its own stop. A deliberate
+        stop therefore never reports non-zero, never queues a restart that
+        races the `sc start` or the `sc delete` that follows, and never
+        counts as an SCM failure.
+      - At startup the watchdog rehardens the service descriptor before
+        anything else, next to Decision 3's startup reconciliation of
+        `current`, with the same bounded retry, and deletes the marker once
+        that succeeds. The restarted service then comes back hardened (it
+        runs as `SY`, which the hardened SDDL keeps at full control).
+      - **If the startup reharden also fails** (a policy or an antivirus that
+        keeps blocking `sdset`), the watchdog **runs anyway**, unhardened, and
+        does not stop itself again: another stop would only loop through the
+        ladder and keep the sensor off for a cause that a restart cannot fix.
+        It logs at the highest severity, reports the condition through the
+        health beacon as a degraded status, so the control plane shows the
+        host as degraded rather than healthy,
+        and retries the reharden on its daily tick. The marker stays, consumed.
+        Unhardened here means the SCM's default descriptor, under which an
+        administrator can stop the service: the state of any service that was
+        never hardened, not a new exposure.
+      - `recover` (Decision 6) reads the marker first. If it exists, the
+        failure that brought `recover` in is the ACL fail-safe, not the
+        release: `recover` neither bans nor rolls back, starts the service on
+        the current `binPath`, and logs why. An ACL problem never bans a
+        healthy version.
+
+      Every outcome is
       logged at error level: each failed reharden attempt, and separately
       whether the fail-safe `sc stop` succeeded. If `sc stop` *also* fails — the
       genuinely worst case, a service both unhardened and unstoppable by
@@ -466,9 +504,12 @@ without change. It does not revisit any Linux decision.
       name. `apply-release` on Windows is therefore a `watchdog` subcommand
       that calls `updater` for the layout and drives the service itself, and
       `reset_service_acl_best_effort`/`harden_service_acl` stay in
-      `watchdog/src/service/windows.rs`, keeping their `anyhow::Result`
-      (binary convention). `updater`'s Windows module needs no `sc` invocation
-      and no new `UpdaterError` variant for one.
+      `watchdog/src/service/windows.rs`. On `main` both return `()`
+      (`:163`, `:178`). `harden_service_acl` changes to `anyhow::Result<()>`
+      (binary convention), since the normal path now hard-fails on it;
+      `reset_service_acl_best_effort` keeps `()`, as its name says.
+      `updater`'s Windows module needs no `sc` invocation and no new
+      `UpdaterError` variant for one.
    4. Only now flips `current` to the new target: writes the active path
       into a fresh `current.tmp` file, then `MoveFileExW(current.tmp,
       current, MOVEFILE_REPLACE_EXISTING)` — an ordinary file-over-file
@@ -518,7 +559,15 @@ without change. It does not revisit any Linux decision.
       fails (`ERROR_SERVICE_ALREADY_RUNNING`), which would otherwise be read
       as "vN cannot start" and ban a healthy release. So the restart is a
       shared `stop_and_wait` routine, also used by `cmd_uninstall` and
-      `cmd_install` below. It reads the service's process id from
+      `cmd_install` below. It lives in the `watchdog` binary, so `agent`
+      cannot call it (`tools/check-deps.py`: a binary depends on no other
+      binary). ADR-0042's `agent remediate service` needs the same behaviour
+      for a third-party service, and implements this **contract** in
+      `agent/src/remediate/` rather than sharing the code. The contract:
+      record the process id, stop, wait bounded for `SERVICE_STOPPED` and the
+      process's exit, and report a timeout as its own outcome. The routine is
+      short and has no ACL or layout logic, so a shared crate would cost a
+      new platform exception in `CLAUDE.md` for little code. It reads the service's process id from
       `QueryServiceStatusEx` *before* sending the stop, then waits, bounded
       (30 s, above the stop handler's own `wait_hint`), for **both**
       `SERVICE_STOPPED` and that process's exit. `SERVICE_STOPPED` is reported
@@ -620,6 +669,23 @@ without change. It does not revisit any Linux decision.
    release, never a re-release of an older number. `cmd_install` never
    removes the floor, same as the ban list; absent means no release was ever
    promoted.
+   Writing the floor after the start leaves two holes: a crash between "vN
+   running" and the write, or a write that fails. vN then runs with a floor
+   below N, and a signed release M with floor < M < N would be accepted. Two
+   rules close them:
+   - The watchdog's startup reconciliation (Decision 3) raises the floor to
+     at least the version `binPath` runs (the `vN` of `versions\vN\`), so the
+     next start repairs a missed write. A failed write is logged at error
+     level and does not undo the promotion.
+   - `apply-release` passes `max(floor, active version)` to
+     `check_release_version`, never the floor alone, so a missed write cannot
+     be exploited even before the next start.
+
+   This is deliberately not what Linux does. Linux passes
+   `layout.current_release_version()` (`crates/updater/src/lib.rs`), which
+   goes down after a rollback (ADR-0015, unchanged). Windows uses a
+   high-water mark because `cmd_install` wipes `versions\` (above), which
+   would otherwise leave no record of the highest promoted release.
    **Sequencing, so this wipe never races a running image inside
    `versions\`:** a major upgrade's old service, if it is currently running
    from a staged `versions\vN\watchdog.exe` rather than from `Program
@@ -871,7 +937,7 @@ without change. It does not revisit any Linux decision.
   general invitation for `updater` to grow unrelated platform branches.
 - `agent/src/integrity.rs` (issue #71) can finally gain a Windows call site once
   this layout exists: `commands/windows.rs` wires `integrity::spawn_monitor` the
-  same way `commands/linux.rs:391` already does, closing that half of #71's
+  same way `commands/linux.rs:404` already does, closing that half of #71's
   remaining Windows gap. The other named gap — `agent::protected`'s Windows
   wiring — is unaffected by this ADR; it depends on the eventlog/ETW event
   stream already existing on Windows (it does) and the updater-allowlist problem
@@ -908,7 +974,16 @@ without change. It does not revisit any Linux decision.
   service process's exit, 30 s bound) replaces the bare `sc stop` in three
   places: `apply-release`'s restart (Decision 4 step 5, where a timeout reverts
   without banning), `cmd_uninstall` (which today ignores `sc stop`'s result),
-  and `cmd_install`'s pre-wipe check.
+  and `cmd_install`'s pre-wipe check. It lives in the `watchdog` binary;
+  ADR-0042's `agent remediate service` implements the same contract in `agent`
+  (Decision 4 step 5), and ADR-0042 is amended in this change to say so.
+- The `reharden_pending` marker (Decision 4 step 3): armed by the ACL
+  fail-safe, consumed by exactly one stop, never banning a version through
+  `recover`, and a degraded health status when the startup reharden keeps
+  failing.
+- The release-version floor is raised by the startup reconciliation and
+  checked as `max(floor, active version)` (Decision 4, "Release-version
+  floor").
 - First cross-platform exercise of the ADR-0015 manifest format: the build-time
   path normalization in Decision 2 is a small, real change to `release-tool`,
   and needs a fixture proving a manifest built with it still verifies
