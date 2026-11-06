@@ -53,7 +53,7 @@ pending (the coverage packs #376–#381 — see
 | **Scheduled execution**<br><sub>TA0002/TA0003 T1053</sub> | ✅ cron/systemd paths | ✅ WEL 4698 · 4702 | ✅ cron/launchd paths |
 | **OS security verdicts**<br><sub>TA0005 Evasion context</sub> | ✅ SELinux AVC | ✅ AppLocker · WDAC · Defender | ✅ log · 📋 #356 |
 | **Kernel modules & drivers**<br><sub>TA0003/TA0005 rootkits</sub> | 📋 #264 module+bpf | 🟡* image loads · 📋 #39 | 📋 #357 kexts |
-| **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | 📋 #362 kill-trace | 📋 #39 driver vantage | ✅ ES signals |
+| **Tamper on security tooling**<br><sub>TA0005 T1562</sub> | ✅ eBPF signals (#362, #1103) | 📋 #39 driver vantage | ✅ ES signals |
 | **Anti-forensics**<br><sub>TA0005 T1070</sub> | 🟡* deletions · LSM timestomp row | ✅ WEL log clears 1102/104 · 📋 #136 timestomp/ADS | ✅ deletions · 📋 #357 strip/stomp |
 | **Download provenance**<br><sub>TA0001 Initial Access</sub> | 📋 #87 (no OS mark) | ✅ ETW MotW | ✅ ES |
 | **Devices**<br><sub>TA0001 Initial Access · TA0010 Exfil</sub> | 📋 #84 | 📋 #84 | 📋 device-control |
@@ -104,7 +104,7 @@ gap.
 | **Persistence & autostart** | journald + rules | systemd unit first-start (flagged approximation, documented); rc/cron/systemd path writes via the file stream | ✅ used | T1543.002, T1053.003 | #93 |
 | **OS security verdicts** | netlink · audit | SELinux AVC denials → `Event::PolicyDenial` (`mechanism: "selinux"`), live-confirmed on a real Enforcing kernel | ✅ used (telemetry only — not yet consumed by a rule/correlator) | T1562-adjacent | #297 |
 | **Tamper & anti-forensics** | eBPF · tracepoints | module loads/unloads, `bpf(2)` loads (eBPF-rootkit visibility) | 📋 planned | T1547.006, T1562 | #264 |
-| **Tamper & anti-forensics** | eBPF · tracepoints | kernel-side kill tracing filtered to agent/security targets — SIGKILL **sender** attribution userspace cannot see → v21 `Signal` | 📋 planned | T1562 | #362 |
+| **Tamper & anti-forensics** | eBPF · tracepoints | signals to the agent's own pid (`kill`/`tgkill`, SIGKILL **sender** attribution userspace cannot see, #362) and to the processes of the listed security units (`signal:signal_generate`, resolved from each unit's cgroup, #1103) → v21 `Signal` (v60 `target_unit`) | ✅ used | T1562.001 | #362, #1103 |
 | **Download provenance** | inventory | no OS-level mark on Linux — browser artifacts only | 📋 planned | provenance context | #87 |
 | **Devices** | device-control | USB attach/detach + policy | 📋 planned | T1091, T1052 | #84 |
 | **Containers** | /proc | cgroup → container-id attribution on every event | ✅ used | container context for all rules | #80 |
