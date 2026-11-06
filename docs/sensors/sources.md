@@ -83,7 +83,7 @@ gap.
 
 | Focus | Source | What we get | Status | MITRE | Issue |
 | --- | --- | --- | --- | --- | --- |
-| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage; argv cut to 32 KiB at capture and flagged (`cmdline_truncated`, v65, #1112: a padded argv once made a detection the server refused for good, dropping its whole spool segment) | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
+| **Process execution** | eBPF · tracepoints | exec/fork/exit with argv, comm, uid/gid, lineage; argv read in the exec probe as a 1 KiB head and tail window with the bytes between them counted (`argv_omitted_bytes`, v67, #1118, ADR-0045; `/proc` only as a fallback), cut to 32 KiB at capture and flagged (`cmdline_truncated`, v65, #1112) | ✅ used | T1059, T1057/T1082/T1016/T1087 discovery burst | #262/#378 |
 | **Process execution** | netlink · audit | fallback exec + connect where eBPF is unavailable (lockdown, old kernel) | ✅ used | T1059 degraded | #34/#247 |
 | **Process execution** | procfs · `/proc/<pid>/environ` at exec-time drain | security-relevant exec environment (`LD_PRELOAD` family), present-only allowlist — never the whole env | ✅ used | T1574.006 | #363 |
 | **File activity** | eBPF · tracepoints | open/write/delete/rename/chmod/chown with paths + attribution; noisy /dev,/proc,/sys,/tmp filtered | ✅ used | T1105, T1485/T1486, T1070.004, T1222 | #262 |
